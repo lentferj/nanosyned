@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nanosyned"
+version = "0.1.0"
+description = "A terminal browser for the Alesis NanoSynth"
+requires-python = ">=3.11"
+license = { text = "GPL-2.0-or-later" }
+dependencies = ["textual>=0.40", "python-rtmidi>=1.4"]
+
+[project.scripts]
+nanosyned = "nanosyned.app:main"
+nanocli = "nanosyned.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["nano*", "nanosyned*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
