@@ -1,0 +1,26 @@
+# Development and CI tooling for nanosyned. Pinned exactly so that `make check`
+# is reproducible; the runtime dependencies stay in pyproject.toml, which is
+# the project's single source of truth (see the README's Development checks).
+#
+#   python3 -m venv --system-site-packages .venv
+#   .venv/bin/pip install -e . -r requirements-dev.txt
+#
+# Regenerate with `make audit` after any upgrade -- pip-audit reads this file.
+
+# Testing
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+
+# Linting, formatting, type checking
+ruff==0.16.10
+mypy==2.4.0
+
+# Audit
+pip-audit==2.10.1
+vulture==2.16
+deptry==0.25.1
+detect-secrets==1.5.0
+
+# Git hooks
+pre-commit==4.6.2

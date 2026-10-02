@@ -1,7 +1,16 @@
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
 .venv/
 .pytest_cache/
+
+# Caches and reports the development checks leave behind.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 
 # The generated name catalog. Alesis's program names are not ours to
 # redistribute: regenerate it locally with tools/extract_catalog.py.
@@ -9,3 +18,8 @@ nano/data/catalog.json
 
 # A disposable cache of which port answered last.
 config.toml
+
+# Written by `make audit-vulns` while it renders pyproject.toml's
+# dependencies into something pip-audit can read. Removed again in the same
+# recipe; ignored so an interrupted run cannot leave it to be committed.
+.audit-runtime-req.txt

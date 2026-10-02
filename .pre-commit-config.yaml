@@ -1,0 +1,42 @@
+# Hook revisions are pinned: a commit that passes here must not start failing
+# because an upstream hook published a new release overnight. `pre-commit
+# autoupdate` is a deliberate act, reviewed like any other dependency bump.
+#
+# shellcheck and shfmt are deliberately absent: this repository contains no
+# shell scripts (no *.sh, no file with a bash/sh shebang), so the hooks would
+# never fire. Add them here alongside a .sh file rather than leaving them idle.
+
+default_language_version:
+  python: python3.11
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.4.0
+    hooks:
+      - id: mypy
+        files: ^(nano|nanosyned|tools)/
+        # mypy needs the project's own config; without this it re-discovers
+        # targets per-file and the per-module overrides in pyproject.toml are
+        # not applied the same way.
+        args: [--config-file=pyproject.toml]
+        additional_dependencies:
+          # The hook runs in its own isolated environment, so the project's
+          # runtime dependencies have to be named here or every third-party
+          # import becomes import-not-found. python-rtmidi ships no stubs,
+          # which is why pyproject.toml carries an override for it; textual
+          # ships py.typed and needs no such thing.
+          - textual==8.2.8
+          - python-rtmidi==1.5.8
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
