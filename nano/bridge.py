@@ -36,6 +36,8 @@ data under another's number. Every read here checks the number too.
 
 from __future__ import annotations
 
+import signal
+import sys
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -45,7 +47,8 @@ from nano import records as rec
 
 __all__ = [
     "NanoBridge", "DeviceError", "list_ports", "likely_ports",
-    "DEFAULT_TIMEOUT", "PROBE_TIMEOUT", "SEND_GAP", "SELECT_GAP",
+    "install_clean_exit", "DEFAULT_TIMEOUT", "PROBE_TIMEOUT", "SEND_GAP",
+    "SELECT_GAP",
 ]
 
 
@@ -105,6 +108,31 @@ def likely_ports() -> List[str]:
     _, outs = list_ports()
     wanted = ("nano", "alesis", "qs")
     return [p for p in outs if any(w in p.lower() for w in wanted)]
+
+
+def install_clean_exit(on_exit: Optional[Callable[[], None]] = None) -> None:
+    """Close ports on SIGINT/SIGTERM rather than leaving them open.
+
+    Ctrl-C already unwinds -- it raises ``KeyboardInterrupt`` and every
+    ``finally`` that closes the bridge runs. **SIGTERM does not**: its
+    default action ends the process where it stands, leaving the MIDI port
+    open. Installing a handler that raises ``SystemExit`` lets the same
+    teardown run. The optional ``on_exit`` is called first, for a caller
+    that has something the ``finally`` blocks cannot reach.
+    """
+    def handler(signum, _frame):  # pragma: no cover - signal path
+        if on_exit is not None:
+            try:
+                on_exit()
+            except Exception:
+                pass
+        sys.exit(128 + signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError):  # pragma: no cover - not main thread
+            pass
 
 
 class NanoBridge:

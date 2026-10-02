@@ -231,3 +231,23 @@ class TestTheLegendIsComplete:
                         and getattr(inner.value, "value", None) is True):
                     offenders.append(node.name)
         assert not offenders, f"worker(s) {offenders} set _busy themselves"
+
+
+class TestSearch:
+    """The search callback takes the four-tuples Catalog.search returns.
+
+    It used to unpack three, so any search that found a match raised
+    ValueError instead of showing the match -- the bug was invisible
+    because nothing exercised the callback.
+    """
+
+    async def test_a_match_is_shown(self):
+        catalog = cat.Catalog([cat.Entry("GM", 0, "Invented Name")])
+        app = NanosynedApp(DemoDevice(), catalog=catalog)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_search()
+            await pilot.pause()
+            app.screen.dismiss("Invented")
+            await pilot.pause()
+            assert "Invented Name" in app.screen._body
