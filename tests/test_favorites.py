@@ -15,11 +15,17 @@
 
 """Favourites. Names here are invented."""
 
-import pytest
+from typing import ClassVar
 
 from nano.favorites import Favorites
-from nanosyned.app import (NanosynedApp, VIEW_ALL, VIEW_ALL_FAVOURITES, VIEW_BANK_FAVOURITES,
-                      VIEW_CYCLE, KEY_HINTS)
+from nanosyned.app import (
+    KEY_HINTS,
+    VIEW_ALL,
+    VIEW_ALL_FAVOURITES,
+    VIEW_BANK_FAVOURITES,
+    VIEW_CYCLE,
+    NanosynedApp,
+)
 
 
 class TestStore:
@@ -42,15 +48,14 @@ class TestTheCycle:
     def test_three_steps_starting_at_all(self):
         assert len(VIEW_CYCLE) == 3
         assert VIEW_CYCLE[0] == VIEW_ALL
-        assert set(VIEW_CYCLE) == {VIEW_ALL, VIEW_BANK_FAVOURITES,
-                                   VIEW_ALL_FAVOURITES}
+        assert set(VIEW_CYCLE) == {VIEW_ALL, VIEW_BANK_FAVOURITES, VIEW_ALL_FAVOURITES}
 
     def test_it_wraps(self):
         seen, mode = [], VIEW_ALL
         for _ in range(4):
             seen.append(mode)
             mode = VIEW_CYCLE[(VIEW_CYCLE.index(mode) + 1) % len(VIEW_CYCLE)]
-        assert seen == list(VIEW_CYCLE) + [VIEW_ALL]
+        assert seen == [*VIEW_CYCLE, VIEW_ALL]
 
     def test_the_keys_are_in_the_legend(self):
         legend = " ".join(KEY_HINTS)
@@ -68,12 +73,14 @@ class TestTheChannelIsRemembered:
 
     def test_saving_then_loading_round_trips(self, tmp_path):
         from nano import config
+
         path = str(tmp_path / "config.toml")
         config.save_channel(9, path)
         assert config.load_channel(path) == 9
 
     def test_another_setting_does_not_drop_it(self, tmp_path):
         from nano import config
+
         path = str(tmp_path / "config.toml")
         config.save_channel(5, path)
         config.save_last_port("some port", path)
@@ -82,11 +89,13 @@ class TestTheChannelIsRemembered:
 
     def test_a_missing_file_is_not_an_error(self, tmp_path):
         from nano import config
+
         assert config.load_channel(str(tmp_path / "nope.toml")) is None
 
     def test_an_out_of_range_channel_is_ignored(self, tmp_path):
         """A hand-edited file must not put the app on channel 99."""
         from nano import config
+
         path = str(tmp_path / "config.toml")
         path_obj = tmp_path / "config.toml"
         path_obj.write_text("channel = 99\n", encoding="utf-8")
@@ -94,6 +103,7 @@ class TestTheChannelIsRemembered:
 
     def test_an_unparsable_file_is_not_fatal(self, tmp_path):
         from nano import config
+
         path_obj = tmp_path / "config.toml"
         path_obj.write_text("this is not toml = = =\n", encoding="utf-8")
         assert config.load_channel(str(path_obj)) is None
@@ -103,9 +113,13 @@ class TestTheLegendIsComplete:
     """A legend that omits a key teaches the user the key does not exist."""
 
     #: Textual key names are not what a legend prints.
-    SHOWN_AS = {"left_square_bracket": "[", "right_square_bracket": "]",
-                "slash": "/", "question_mark": "?"}
-    IMPLIED = {"enter", "tab"}
+    SHOWN_AS: ClassVar[dict[str, str]] = {
+        "left_square_bracket": "[",
+        "right_square_bracket": "]",
+        "slash": "/",
+        "question_mark": "?",
+    }
+    IMPLIED: ClassVar[set[str]] = {"enter", "tab"}
 
     def test_every_binding_appears(self):
         legend = " ".join(KEY_HINTS)
@@ -131,8 +145,7 @@ class TestUnfavouritingKeepsWhatTheUserTyped:
 
     def test_a_toggle_cycle_keeps_rating_tags_and_note(self, tmp_path):
         with Favorites(str(tmp_path / "f.db")) as store:
-            store.add("BANK", 5, name="Invented",
-                      rating=4, tags="a, b", note="hello")
+            store.add("BANK", 5, name="Invented", rating=4, tags="a, b", note="hello")
             before = store.get("BANK", 5)
 
             assert store.toggle("BANK", 5) is False
@@ -140,8 +153,7 @@ class TestUnfavouritingKeepsWhatTheUserTyped:
             assert store.toggle("BANK", 5) is True
 
             after = store.get("BANK", 5)
-            assert (after.rating, after.tags, after.note) == (4, "a, b",
-                                                              "hello")
+            assert (after.rating, after.tags, after.note) == (4, "a, b", "hello")
             assert after.added == before.added
 
     def test_an_unfavourited_slot_is_not_a_favourite(self, tmp_path):
@@ -176,9 +188,12 @@ class TestUnfavouritingKeepsWhatTheUserTyped:
                 note TEXT NOT NULL DEFAULT '',
                 added REAL NOT NULL DEFAULT 0,
                 PRIMARY KEY (bank_id, number));
-            """)
-        db.execute("INSERT INTO favorites (bank_id, number, name, rating) "
-                   "VALUES ('BANK', 7, 'Invented', 5)")
+            """
+        )
+        db.execute(
+            "INSERT INTO favorites (bank_id, number, name, rating) "
+            "VALUES ('BANK', 7, 'Invented', 5)"
+        )
         db.execute("PRAGMA user_version = 1")
         db.commit()
         db.close()
@@ -243,8 +258,6 @@ class TestABoolIsNotANumber:
     """
 
     def _loaders(self):
-        import inspect
-
         import importlib
 
         module = importlib.import_module("nano.config")
@@ -261,19 +274,18 @@ class TestABoolIsNotANumber:
     def test_no_numeric_loader_accepts_true(self, tmp_path):
         offenders = []
         for name, fn in self._loaders():
-            key = name[len("load_"):]
+            key = name[len("load_") :]
             path = str(tmp_path / f"{key}.toml")
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(f"{key} = true\n")
             if fn(path) is not None:
                 offenders.append(name)
-        assert not offenders, (
-            f"{offenders} accept a TOML boolean as a number")
+        assert not offenders, f"{offenders} accept a TOML boolean as a number"
 
     def test_no_numeric_loader_accepts_an_absurd_value(self, tmp_path):
         offenders = []
         for name, fn in self._loaders():
-            key = name[len("load_"):]
+            key = name[len("load_") :]
             path = str(tmp_path / f"{key}.toml")
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(f"{key} = 9999\n")

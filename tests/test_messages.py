@@ -17,7 +17,6 @@
 
 import pytest
 
-from nano import banks
 from nano import messages as m
 from nano import records as rec
 
@@ -27,7 +26,7 @@ class TestPacking:
 
     def test_it_round_trips(self):
         data = bytes(range(256)) * 2
-        assert m.unpack7(m.pack7(data))[:len(data)] == data
+        assert m.unpack7(m.pack7(data))[: len(data)] == data
 
     def test_a_program_packs_to_the_size_the_wire_carries(self):
         """350 bytes become 400. Measured against the instrument."""
@@ -52,8 +51,7 @@ class TestPacking:
         """
         data = bytes(range(7))
         forward = m.unpack7(m.pack7(data))[:7]
-        backward = bytes(reversed(m.unpack7(bytes(
-            reversed(m.pack7(data))))[:7]))
+        backward = bytes(reversed(m.unpack7(bytes(reversed(m.pack7(data))))[:7]))
         assert forward == data
         assert backward != data
 
@@ -87,7 +85,8 @@ class TestNames:
         assert rec.mix_name(record) == "Invented  "
         assert m.decode_name(record) != "Invented  ", (
             "if these agreed, the offset would not matter and this test "
-            "would be proving nothing")
+            "would be proving nothing"
+        )
 
 
 class TestFraming:
@@ -104,8 +103,7 @@ class TestFraming:
 
     def test_a_foreign_message_parses_as_none(self):
         assert m.parse(bytes([0xF0, 0x43, 0x00, 0xF7])) is None
-        assert m.parse(bytes([0xF0, 0x00, 0x00, 0x0E, 0x0F, 0x00,
-                              0xF7])) is None
+        assert m.parse(bytes([0xF0, 0x00, 0x00, 0x0E, 0x0F, 0x00, 0xF7])) is None
 
     def test_a_dump_carries_its_number_apart_from_its_payload(self):
         packed = m.pack7(bytes(rec.PROGRAM_BYTES))
@@ -128,12 +126,27 @@ class TestFraming:
 
 class TestIdentity:
     #: What this unit actually answered, byte for byte.
-    REPLY = bytes([0xF0, 0x7E, 0x7F, 0x06, 0x02,
-                   0x00, 0x00, 0x0E,        # Alesis, extended
-                   0x0E, 0x00,              # QS family
-                   0x07, 0x00,              # member: this box
-                   0x30, 0x31, 0x30, 0x30,  # "0100"
-                   0xF7])
+    REPLY = bytes(
+        [
+            0xF0,
+            0x7E,
+            0x7F,
+            0x06,
+            0x02,
+            0x00,
+            0x00,
+            0x0E,  # Alesis, extended
+            0x0E,
+            0x00,  # QS family
+            0x07,
+            0x00,  # member: this box
+            0x30,
+            0x31,
+            0x30,
+            0x30,  # "0100"
+            0xF7,
+        ]
+    )
 
     def test_it_is_recognised(self):
         fields = m.identity_reply_fields(self.REPLY)
@@ -147,8 +160,25 @@ class TestIdentity:
         assert m.identity_reply_fields(m.identity_request()) is None
 
     def test_another_manufacturer_is_not_this_one(self):
-        roland = bytes([0xF0, 0x7E, 0x10, 0x06, 0x02, 0x41, 0x10, 0x01,
-                        0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0xF7])
+        roland = bytes(
+            [
+                0xF0,
+                0x7E,
+                0x10,
+                0x06,
+                0x02,
+                0x41,
+                0x10,
+                0x01,
+                0x00,
+                0x03,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0xF7,
+            ]
+        )
         fields = m.identity_reply_fields(roland)
         assert fields is not None
         assert not fields["is_alesis"]
@@ -163,8 +193,8 @@ class TestSelection:
         assert list(messages[0]) == [0xB0, 0x00, 0x02]
 
     def test_the_channel_lands_in_the_status_byte(self):
-        assert list(m.bank_select(1, channel=9)[0])[0] == 0xB9
-        assert list(m.program_change(5, channel=9))[0] == 0xC9
+        assert next(iter(m.bank_select(1, channel=9)[0])) == 0xB9
+        assert next(iter(m.program_change(5, channel=9))) == 0xC9
 
     def test_out_of_range_is_refused(self):
         with pytest.raises(m.ProtocolError):
@@ -192,8 +222,7 @@ class TestRequests:
 
     def test_every_opcode_used_here_has_a_name(self):
         """A timeout that says "no 0x00 came back" helps nobody."""
-        for opcode in list(m.Function.REPLY_TO) + list(
-                m.Function.REPLY_TO.values()):
+        for opcode in list(m.Function.REPLY_TO) + list(m.Function.REPLY_TO.values()):
             assert not m.Function.name(opcode).startswith("function ")
 
 
@@ -223,7 +252,7 @@ class TestTheEditBufferCarriesANumberToo:
     def test_the_shift_it_guards_against_is_silent(self):
         """Proof the guard is needed: the wrong reading is not an error."""
         message = self._dump(m.Function.EDIT_PROGRAM_DUMP, [0])
-        wrong = m.unpack7(bytes(message)[6:-1])      # number left in
+        wrong = m.unpack7(bytes(message)[6:-1])  # number left in
         assert len(wrong) >= rec.PROGRAM_BYTES, "it is still the right size"
         assert m.decode_name(wrong) != "Invented  "
         assert m.decode_name(wrong).strip(), "and still looks like a name"

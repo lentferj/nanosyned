@@ -49,19 +49,40 @@ Two things about this protocol that shape every caller:
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import ClassVar
 
 __all__ = [
-    "SYSEX_START", "SYSEX_END", "ALESIS_ID", "QS_FAMILY", "NANOSYNTH_MEMBER",
-    "Function", "ProtocolError", "Packet",
-    "frame", "parse", "pack7", "unpack7",
-    "NAME_CHARS", "NAME_BIT_OFFSET", "decode_name", "encode_name",
-    "bit_field", "set_bit_field",
-    "identity_request", "identity_reply_fields",
-    "program_dump_request", "edit_program_dump_request",
-    "effects_dump_request", "edit_effects_dump_request",
-    "mix_dump_request", "global_dump_request", "all_dump_request",
-    "mode_select", "bank_select", "program_change",
+    "ALESIS_ID",
+    "NAME_BIT_OFFSET",
+    "NAME_CHARS",
+    "NANOSYNTH_MEMBER",
+    "QS_FAMILY",
+    "SYSEX_END",
+    "SYSEX_START",
+    "Function",
+    "Packet",
+    "ProtocolError",
+    "all_dump_request",
+    "bank_select",
+    "bit_field",
+    "decode_name",
+    "edit_effects_dump_request",
+    "edit_program_dump_request",
+    "effects_dump_request",
+    "encode_name",
+    "frame",
+    "global_dump_request",
+    "identity_reply_fields",
+    "identity_request",
+    "mix_dump_request",
+    "mode_select",
+    "pack7",
+    "parse",
+    "program_change",
+    "program_dump_request",
+    "set_bit_field",
+    "unpack7",
 ]
 
 SYSEX_START = 0xF0
@@ -120,21 +141,33 @@ class Function:
     #: say "no User Program Dump came back" is worth more than one that
     #: says "no 0x00 came back", and leaving the requests out of this table
     #: is how the sibling x5ded ended up printing the latter.
-    NAMES = {
-        0x00: "User Program Dump", 0x01: "User Program Dump Request",
-        0x02: "Edit Program Dump", 0x03: "Edit Program Dump Request",
-        0x04: "Old Mix Dump", 0x05: "Old Mix Dump Request",
-        0x06: "User Effects Dump", 0x07: "User Effects Dump Request",
-        0x08: "Edit Effects Dump", 0x09: "Edit Effects Dump Request",
-        0x0A: "Global Dump", 0x0B: "Global Dump Request",
-        0x0C: "All Dump Request", 0x0D: "Mode Select",
-        0x0E: "Mix Dump", 0x0F: "Mix Dump Request",
-        0x10: "MIDI Edit", 0x11: "Sector Erase", 0x12: "Sector Write",
-        0x13: "Sector Request", 0x14: "FLASH ACK", 0x15: "FLASH NACK",
+    NAMES: ClassVar[dict[int, str]] = {
+        0x00: "User Program Dump",
+        0x01: "User Program Dump Request",
+        0x02: "Edit Program Dump",
+        0x03: "Edit Program Dump Request",
+        0x04: "Old Mix Dump",
+        0x05: "Old Mix Dump Request",
+        0x06: "User Effects Dump",
+        0x07: "User Effects Dump Request",
+        0x08: "Edit Effects Dump",
+        0x09: "Edit Effects Dump Request",
+        0x0A: "Global Dump",
+        0x0B: "Global Dump Request",
+        0x0C: "All Dump Request",
+        0x0D: "Mode Select",
+        0x0E: "Mix Dump",
+        0x0F: "Mix Dump Request",
+        0x10: "MIDI Edit",
+        0x11: "Sector Erase",
+        0x12: "Sector Write",
+        0x13: "Sector Request",
+        0x14: "FLASH ACK",
+        0x15: "FLASH NACK",
     }
 
     #: Which dump answers which request.
-    REPLY_TO = {
+    REPLY_TO: ClassVar[dict[int, int]] = {
         USER_PROGRAM_REQUEST: USER_PROGRAM_DUMP,
         EDIT_PROGRAM_REQUEST: EDIT_PROGRAM_DUMP,
         OLD_MIX_REQUEST: OLD_MIX_DUMP,
@@ -154,8 +187,7 @@ class Packet:
 
     __slots__ = ("function", "number", "payload")
 
-    def __init__(self, function: int, number: Optional[int],
-                 payload: bytes) -> None:
+    def __init__(self, function: int, number: int | None, payload: bytes) -> None:
         self.function = function
         #: The object number a dump carries, or ``None`` for those that
         #: carry none. Kept separate from the payload because every caller
@@ -173,8 +205,10 @@ class Packet:
         return unpack7(self.payload)
 
     def __repr__(self) -> str:
-        return (f"Packet({self.function_name!r}, number={self.number}, "
-                f"{len(self.payload)} packed bytes)")
+        return (
+            f"Packet({self.function_name!r}, number={self.number}, "
+            f"{len(self.payload)} packed bytes)"
+        )
 
 
 #: Opcodes whose message carries a number byte after the opcode.
@@ -187,15 +221,24 @@ class Packet:
 #: with a name one character out -- ``' Invented1'`` where the record
 #: holds ``'Invented12'``. That is a name a person would accept at a
 #: glance, which is what makes it worth a table rather than a comment.
-NUMBERED = frozenset({
-    Function.USER_PROGRAM_DUMP, Function.USER_PROGRAM_REQUEST,
-    Function.EDIT_PROGRAM_DUMP, Function.EDIT_PROGRAM_REQUEST,
-    Function.OLD_MIX_DUMP, Function.OLD_MIX_REQUEST,
-    Function.USER_EFFECTS_DUMP, Function.USER_EFFECTS_REQUEST,
-    Function.EDIT_EFFECTS_DUMP, Function.EDIT_EFFECTS_REQUEST,
-    Function.MIX_DUMP, Function.MIX_REQUEST,
-    Function.GLOBAL_DUMP, Function.GLOBAL_REQUEST,
-})
+NUMBERED = frozenset(
+    {
+        Function.USER_PROGRAM_DUMP,
+        Function.USER_PROGRAM_REQUEST,
+        Function.EDIT_PROGRAM_DUMP,
+        Function.EDIT_PROGRAM_REQUEST,
+        Function.OLD_MIX_DUMP,
+        Function.OLD_MIX_REQUEST,
+        Function.USER_EFFECTS_DUMP,
+        Function.USER_EFFECTS_REQUEST,
+        Function.EDIT_EFFECTS_DUMP,
+        Function.EDIT_EFFECTS_REQUEST,
+        Function.MIX_DUMP,
+        Function.MIX_REQUEST,
+        Function.GLOBAL_DUMP,
+        Function.GLOBAL_REQUEST,
+    }
+)
 
 
 def frame(function: int, body: Sequence[int] = ()) -> bytes:
@@ -204,12 +247,12 @@ def frame(function: int, body: Sequence[int] = ()) -> bytes:
         if not 0 <= byte <= 0x7F:
             raise ProtocolError(
                 f"{byte:#04x} is not a 7-bit data byte; SysEx carries no "
-                f"byte with bit 7 set")
-    return bytes([SYSEX_START, *ALESIS_ID, QS_FAMILY, function, *body,
-                  SYSEX_END])
+                f"byte with bit 7 set"
+            )
+    return bytes([SYSEX_START, *ALESIS_ID, QS_FAMILY, function, *body, SYSEX_END])
 
 
-def parse(message: Sequence[int]) -> Optional[Packet]:
+def parse(message: Sequence[int]) -> Packet | None:
     """Parse one Alesis QS message, or ``None`` if it is not one.
 
     ``None`` rather than an exception for foreign traffic: a shared MIDI
@@ -272,8 +315,7 @@ def unpack7(data: Sequence[int]) -> bytes:
     acc = bits = 0
     for byte in data:
         if not 0 <= byte <= 0x7F:
-            raise ProtocolError(
-                f"{byte:#04x} has bit 7 set; packed data must not")
+            raise ProtocolError(f"{byte:#04x} has bit 7 set; packed data must not")
         acc |= byte << bits
         bits += 7
         while bits >= 8:
@@ -303,13 +345,13 @@ def bit_field(data: Sequence[int], bit_offset: int, width: int) -> int:
         byte = at >> 3
         if byte >= len(data):
             raise ProtocolError(
-                f"bit {at} is past the end of a {len(data)}-byte record")
+                f"bit {at} is past the end of a {len(data)}-byte record"
+            )
         value |= ((data[byte] >> (at & 7)) & 1) << index
     return value
 
 
-def set_bit_field(data: bytearray, bit_offset: int, width: int,
-                  value: int) -> None:
+def set_bit_field(data: bytearray, bit_offset: int, width: int, value: int) -> None:
     """Write ``width`` bits at ``bit_offset``, low bit first."""
     if not 0 <= value < (1 << width):
         raise ProtocolError(f"{value} does not fit in {width} bits")
@@ -318,7 +360,8 @@ def set_bit_field(data: bytearray, bit_offset: int, width: int,
         byte = at >> 3
         if byte >= len(data):
             raise ProtocolError(
-                f"bit {at} is past the end of a {len(data)}-byte record")
+                f"bit {at} is past the end of a {len(data)}-byte record"
+            )
         mask = 1 << (at & 7)
         if (value >> index) & 1:
             data[byte] |= mask
@@ -326,8 +369,7 @@ def set_bit_field(data: bytearray, bit_offset: int, width: int,
             data[byte] &= ~mask & 0xFF
 
 
-def decode_name(record: Sequence[int],
-                bit_offset: int = NAME_BIT_OFFSET) -> str:
+def decode_name(record: Sequence[int], bit_offset: int = NAME_BIT_OFFSET) -> str:
     """The ten-character name at the start of a record.
 
     Trailing spaces are kept rather than stripped: the caller decides how
@@ -341,8 +383,9 @@ def decode_name(record: Sequence[int],
     return "".join(chars)
 
 
-def encode_name(record: bytearray, name: str,
-                bit_offset: int = NAME_BIT_OFFSET) -> None:
+def encode_name(
+    record: bytearray, name: str, bit_offset: int = NAME_BIT_OFFSET
+) -> None:
     """Write a ten-character name into a record, in place."""
     padded = f"{name:<{NAME_CHARS}}"[:NAME_CHARS]
     for index, char in enumerate(padded):
@@ -350,18 +393,20 @@ def encode_name(record: bytearray, name: str,
         if not 0 <= value <= 95:
             raise ProtocolError(
                 f"{char!r} is not in this instrument's character set, which "
-                f"runs from space to {chr(95 + NAME_BASE)!r}")
+                f"runs from space to {chr(95 + NAME_BASE)!r}"
+            )
         set_bit_field(record, bit_offset + 7 * index, 7, value)
 
 
 # --- requests ---------------------------------------------------------------
+
 
 def identity_request() -> bytes:
     """The universal Identity Request. Not an Alesis message."""
     return bytes([SYSEX_START, 0x7E, 0x7F, 0x06, 0x01, SYSEX_END])
 
 
-def identity_reply_fields(message: Sequence[int]) -> Optional[dict]:
+def identity_reply_fields(message: Sequence[int]) -> dict | None:
     """Fields of an Identity Reply, or ``None``.
 
     Matching the reply sub-ID (``02``) and never the request (``01``) is
@@ -379,8 +424,7 @@ def identity_reply_fields(message: Sequence[int]) -> Optional[dict]:
     if data[1] != 0x7E or data[3] != 0x06 or data[4] != 0x02:
         return None
     if tuple(data[5:8]) != ALESIS_ID:
-        return {"channel": data[2], "is_alesis": False,
-                "is_nanosynth": False}
+        return {"channel": data[2], "is_alesis": False, "is_nanosynth": False}
     family = (data[8], data[9])
     member = (data[10], data[11])
     version = bytes(data[12:-1]).decode("ascii", "replace")
@@ -392,8 +436,7 @@ def identity_reply_fields(message: Sequence[int]) -> Optional[dict]:
         "version": version,
         "is_alesis": True,
         "is_qs_family": family[0] == QS_FAMILY,
-        "is_nanosynth": (family[0] == QS_FAMILY
-                         and member[0] == NANOSYNTH_MEMBER),
+        "is_nanosynth": (family[0] == QS_FAMILY and member[0] == NANOSYNTH_MEMBER),
     }
 
 
@@ -453,7 +496,7 @@ def mode_select(mix_mode: bool) -> bytes:
     return frame(Function.MODE_SELECT, [0x01 if mix_mode else 0x00])
 
 
-def bank_select(bank: int, channel: int = 0) -> List[bytes]:
+def bank_select(bank: int, channel: int = 0) -> list[bytes]:
     """Bank Select, as **Controller 0 only**.
 
     The manual is explicit that this unit ignores Controller 32, which

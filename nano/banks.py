@@ -39,13 +39,24 @@ That is not an inconsistency to paper over with a helper that sends both.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 __all__ = [
-    "Bank", "Slot", "BANKS", "PROGRAMS_PER_BANK", "TOTAL_PROGRAMS",
-    "MIXES", "CATEGORIES", "CATEGORY_SIZE",
-    "bank", "banks", "bank_ids", "slots", "slot", "lookup",
-    "readable_banks", "front_panel_banks",
+    "BANKS",
+    "CATEGORIES",
+    "CATEGORY_SIZE",
+    "MIXES",
+    "PROGRAMS_PER_BANK",
+    "TOTAL_PROGRAMS",
+    "Bank",
+    "Slot",
+    "bank",
+    "bank_ids",
+    "banks",
+    "front_panel_banks",
+    "lookup",
+    "readable_banks",
+    "slot",
+    "slots",
 ]
 
 #: Every bank holds this many, and MIDI program numbers run 0-127, which is
@@ -120,13 +131,26 @@ class Slot:
 #: The sixteen categories on the front panel, in knob order, from the
 #: manual page 43. General MIDI orders its sounds in groups of eight and
 #: the panel follows it.
-CATEGORIES: Tuple[str, ...] = (
-    "Piano", "Chromatic", "Organ", "Guitar", "Bass", "Strings", "Ensemble",
-    "Brass", "Reed", "Pipe", "Synth Lead", "Synth Pad", "Synth FX",
-    "Ethnic", "Drums/Percussion", "Effects",
+CATEGORIES: tuple[str, ...] = (
+    "Piano",
+    "Chromatic",
+    "Organ",
+    "Guitar",
+    "Bass",
+    "Strings",
+    "Ensemble",
+    "Brass",
+    "Reed",
+    "Pipe",
+    "Synth Lead",
+    "Synth Pad",
+    "Synth FX",
+    "Ethnic",
+    "Drums/Percussion",
+    "Effects",
 )
 
-CATEGORY_SIZE = PROGRAMS_PER_BANK // len(CATEGORIES)   # 8
+CATEGORY_SIZE = PROGRAMS_PER_BANK // len(CATEGORIES)  # 8
 
 #: The five banks, in Bank Select order.
 #:
@@ -139,24 +163,54 @@ CATEGORY_SIZE = PROGRAMS_PER_BANK // len(CATEGORIES)   # 8
 #: against one, and the two agree with the arithmetic: 640 programs less
 #: the 256 on the front panel leaves 384, which is three banks. The heading
 #: is the error.
-BANKS: Tuple[Bank, ...] = (
-    Bank("GM", "General MIDI", 0, readable=False, front_panel=True,
-         note="ROM. The General MIDI set, in GM order."),
-    Bank("USER", "User", 1, readable=True, front_panel=True,
-         note="The 128 programs the unit will dump. Program 127 is the "
-              "silent one and cannot be changed."),
-    Bank("P1", "Preset 1", 2, readable=False, front_panel=False,
-         note="ROM, and reachable only over MIDI."),
-    Bank("P2", "Preset 2", 3, readable=False, front_panel=False,
-         note="ROM, and reachable only over MIDI."),
-    Bank("P3", "Preset 3", 4, readable=False, front_panel=False,
-         note="ROM, and reachable only over MIDI."),
+BANKS: tuple[Bank, ...] = (
+    Bank(
+        "GM",
+        "General MIDI",
+        0,
+        readable=False,
+        front_panel=True,
+        note="ROM. The General MIDI set, in GM order.",
+    ),
+    Bank(
+        "USER",
+        "User",
+        1,
+        readable=True,
+        front_panel=True,
+        note="The 128 programs the unit will dump. Program 127 is the "
+        "silent one and cannot be changed.",
+    ),
+    Bank(
+        "P1",
+        "Preset 1",
+        2,
+        readable=False,
+        front_panel=False,
+        note="ROM, and reachable only over MIDI.",
+    ),
+    Bank(
+        "P2",
+        "Preset 2",
+        3,
+        readable=False,
+        front_panel=False,
+        note="ROM, and reachable only over MIDI.",
+    ),
+    Bank(
+        "P3",
+        "Preset 3",
+        4,
+        readable=False,
+        front_panel=False,
+        note="ROM, and reachable only over MIDI.",
+    ),
 )
 
-TOTAL_PROGRAMS = len(BANKS) * PROGRAMS_PER_BANK      # 640
+TOTAL_PROGRAMS = len(BANKS) * PROGRAMS_PER_BANK  # 640
 
-_BY_ID: Dict[str, Bank] = {b.id: b for b in BANKS}
-_BY_SELECT: Dict[int, Bank] = {b.select: b for b in BANKS}
+_BY_ID: dict[str, Bank] = {b.id: b for b in BANKS}
+_BY_SELECT: dict[int, Bank] = {b.select: b for b in BANKS}
 
 #: The one program that is hardwired silent. The manual: "User bank Program
 #: 127 has been hardwired permanently into the NanoSynth. It cannot be
@@ -171,15 +225,15 @@ def bank(bank_id: str) -> Bank:
         return _BY_ID[bank_id]
     except KeyError:
         raise LookupError(
-            f"no bank {bank_id!r}; have "
-            f"{', '.join(b.id for b in BANKS)}") from None
+            f"no bank {bank_id!r}; have {', '.join(b.id for b in BANKS)}"
+        ) from None
 
 
-def banks() -> Tuple[Bank, ...]:
+def banks() -> tuple[Bank, ...]:
     return BANKS
 
 
-def bank_ids() -> List[str]:
+def bank_ids() -> list[str]:
     return [b.id for b in BANKS]
 
 
@@ -190,19 +244,20 @@ def by_select(value: int) -> Bank:
     except KeyError:
         raise LookupError(
             f"no bank answers Bank Select {value}; this unit has "
-            f"{', '.join(str(b.select) for b in BANKS)}") from None
+            f"{', '.join(str(b.select) for b in BANKS)}"
+        ) from None
 
 
-def readable_banks() -> List[Bank]:
+def readable_banks() -> list[Bank]:
     """The banks the unit will dump. There is one."""
     return [b for b in BANKS if b.readable]
 
 
-def front_panel_banks() -> List[Bank]:
+def front_panel_banks() -> list[Bank]:
     return [b for b in BANKS if b.front_panel]
 
 
-def slots(bank_id: str) -> List[Slot]:
+def slots(bank_id: str) -> list[Slot]:
     entry = bank(bank_id)
     return [Slot(entry, n, n) for n in range(PROGRAMS_PER_BANK)]
 
@@ -212,11 +267,12 @@ def slot(bank_id: str, number: int) -> Slot:
     if not 0 <= number < PROGRAMS_PER_BANK:
         raise LookupError(
             f"{entry.label} has {PROGRAMS_PER_BANK} programs, so {number} "
-            f"is not one of them")
+            f"is not one of them"
+        )
     return Slot(entry, number, number)
 
 
-def lookup(select: int, program: int) -> Optional[Slot]:
+def lookup(select: int, program: int) -> Slot | None:
     """What a Bank Select and Program Change together address."""
     try:
         entry = by_select(select)

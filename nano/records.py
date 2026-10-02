@@ -33,23 +33,37 @@ memory is a program somebody made.
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence
+from collections.abc import Sequence
 
 from nano import messages as m
 
 __all__ = [
-    "PROGRAM_BYTES", "PROGRAM_PACKED", "PROGRAM_COMMON", "SOUNDS_PER_PROGRAM",
-    "SOUND_BYTES", "MIX_BYTES", "MIX_PACKED", "MIX_COMMON", "MIX_CHANNELS",
-    "MIX_CHANNEL_BYTES", "EFFECTS_BYTES", "EFFECTS_PACKED", "GLOBAL_BYTES",
-    "program_name", "mix_name", "MIX_NAME_BIT_OFFSET", "sound_block", "check_size",
+    "EFFECTS_BYTES",
+    "EFFECTS_PACKED",
+    "GLOBAL_BYTES",
+    "MIX_BYTES",
+    "MIX_CHANNELS",
+    "MIX_CHANNEL_BYTES",
+    "MIX_COMMON",
+    "MIX_NAME_BIT_OFFSET",
+    "MIX_PACKED",
+    "PROGRAM_BYTES",
+    "PROGRAM_COMMON",
+    "PROGRAM_PACKED",
+    "SOUNDS_PER_PROGRAM",
+    "SOUND_BYTES",
+    "check_size",
     "global_fields",
+    "mix_name",
+    "program_name",
+    "sound_block",
 ]
 
 #: A program: 10 common bytes, then four 85-byte sound blocks.
 PROGRAM_COMMON = 10
 SOUNDS_PER_PROGRAM = 4
 SOUND_BYTES = 85
-PROGRAM_BYTES = PROGRAM_COMMON + SOUNDS_PER_PROGRAM * SOUND_BYTES    # 350
+PROGRAM_BYTES = PROGRAM_COMMON + SOUNDS_PER_PROGRAM * SOUND_BYTES  # 350
 #: ...which travels as this many packed bytes. Verified on the bench: a
 #: program dump is 408 bytes on the wire, which is 8 of header and footer
 #: plus these 400.
@@ -59,7 +73,7 @@ PROGRAM_PACKED = 400
 MIX_COMMON = 10
 MIX_CHANNELS = 16
 MIX_CHANNEL_BYTES = 8
-MIX_BYTES = MIX_COMMON + MIX_CHANNELS * MIX_CHANNEL_BYTES            # 138
+MIX_BYTES = MIX_COMMON + MIX_CHANNELS * MIX_CHANNEL_BYTES  # 138
 MIX_PACKED = 158
 
 EFFECTS_BYTES = 65
@@ -79,7 +93,8 @@ def check_size(record: Sequence[int], expected: int, what: str) -> None:
     if len(record) < expected:
         raise m.ProtocolError(
             f"{what} unpacked to {len(record)} bytes, fewer than the "
-            f"{expected} one occupies")
+            f"{expected} one occupies"
+        )
 
 
 def program_name(record: Sequence[int]) -> str:
@@ -111,14 +126,14 @@ def sound_block(record: Sequence[int], index: int) -> bytes:
     """
     if not 0 <= index < SOUNDS_PER_PROGRAM:
         raise ValueError(
-            f"a program has {SOUNDS_PER_PROGRAM} sounds, so {index} is not "
-            f"one of them")
+            f"a program has {SOUNDS_PER_PROGRAM} sounds, so {index} is not one of them"
+        )
     check_size(record, PROGRAM_BYTES, "a program")
     at = PROGRAM_COMMON + index * SOUND_BYTES
-    return bytes(record[at:at + SOUND_BYTES])
+    return bytes(record[at : at + SOUND_BYTES])
 
 
-def global_fields(record: Sequence[int]) -> Dict[str, int]:
+def global_fields(record: Sequence[int]) -> dict[str, int]:
     """The few global settings this program reports.
 
     Only the ones whose meaning is documented *and* was confirmed against

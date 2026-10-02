@@ -36,25 +36,32 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Optional, Tuple
 
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
-    tomllib = None
+    tomllib = None  # type: ignore[assignment]  # no tomllib before 3.11
 
 __all__ = [
-    "DEFAULT_PATH", "load_channel", "save_channel", "load_last_port",
-    "save_last_port", "load_last_recv_port",
-    "save_last_recv_port", "load_device_id", "save_device_id",
+    "DEFAULT_PATH",
+    "load_channel",
+    "load_device_id",
+    "load_last_port",
+    "load_last_recv_port",
+    "save_channel",
+    "save_device_id",
+    "save_last_port",
+    "save_last_recv_port",
 ]
 
 DEFAULT_PATH = "config.toml"
 
-_warned = False
+#: Config paths already warned about, so a run says it once per file
+#: rather than on every save attempt.
+_warned: set[str] = set()
 
 
-def _read(path: str) -> Tuple[dict, str]:
+def _read(path: str) -> tuple[dict, str]:
     if not os.path.exists(path) or tomllib is None:
         return {}, "ok"
     try:
@@ -65,8 +72,13 @@ def _read(path: str) -> Tuple[dict, str]:
 
 
 _TOML_ESCAPES = {
-    "\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r",
-    "\t": "\\t", "\b": "\\b", "\f": "\\f",
+    "\\": "\\\\",
+    '"': '\\"',
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
 }
 
 
@@ -89,7 +101,7 @@ def _toml_string(value: str) -> str:
         if char in _TOML_ESCAPES:
             out.append(_TOML_ESCAPES[char])
         elif ord(char) < 0x20 or ord(char) == 0x7F:
-            out.append("\\u%04X" % ord(char))
+            out.append(f"\\u{ord(char):04X}")
         else:
             out.append(char)
     out.append('"')
@@ -97,14 +109,16 @@ def _toml_string(value: str) -> str:
 
 
 def _update(path: str, **changes) -> None:
-    global _warned
     data, status = _read(path)
     if status == "unreadable":
-        if not _warned:
-            _warned = True
-            print(f"nanosyned: {path} could not be parsed, so settings are not "
-                  f"being saved. Fix or delete it; nothing has been "
-                  f"overwritten.", file=sys.stderr)
+        if path not in _warned:
+            _warned.add(path)
+            print(
+                f"nanosyned: {path} could not be parsed, so settings are not "
+                f"being saved. Fix or delete it; nothing has been "
+                f"overwritten.",
+                file=sys.stderr,
+            )
         return
     data.update(changes)
     lines = ["# nanosyned local config - gitignored, safe to delete."]
@@ -124,7 +138,7 @@ def _update(path: str, **changes) -> None:
         pass
 
 
-def load_channel(path: str = DEFAULT_PATH) -> Optional[int]:
+def load_channel(path: str = DEFAULT_PATH) -> int | None:
     """The channel last sent on, zero-based, or None.
 
     The bool check is not decoration. `isinstance(True, int)` is True and
@@ -144,7 +158,7 @@ def save_channel(channel: int, path: str = DEFAULT_PATH) -> None:
     _update(path, channel=int(channel))
 
 
-def load_last_port(path: str = DEFAULT_PATH) -> Optional[str]:
+def load_last_port(path: str = DEFAULT_PATH) -> str | None:
     value = _read(path)[0].get("port")
     return value if isinstance(value, str) and value else None
 
@@ -153,7 +167,7 @@ def save_last_port(port: str, path: str = DEFAULT_PATH) -> None:
     _update(path, port=str(port))
 
 
-def load_last_recv_port(path: str = DEFAULT_PATH) -> Optional[str]:
+def load_last_recv_port(path: str = DEFAULT_PATH) -> str | None:
     """The input port last opened, when it differed from the output one."""
     value = _read(path)[0].get("recv_port")
     return value if isinstance(value, str) and value else None
@@ -163,7 +177,7 @@ def save_last_recv_port(port: str, path: str = DEFAULT_PATH) -> None:
     _update(path, recv_port=str(port))
 
 
-def load_device_id(path: str = DEFAULT_PATH) -> Optional[int]:
+def load_device_id(path: str = DEFAULT_PATH) -> int | None:
     value = _read(path)[0].get("device_id")
     # `isinstance(True, int)` is True, so a hand-edited `device_id = true`
     # would come back as device 1 -- a real device, and the wrong one. A

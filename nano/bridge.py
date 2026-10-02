@@ -39,16 +39,22 @@ from __future__ import annotations
 import signal
 import sys
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 from nano import banks
 from nano import messages as m
 from nano import records as rec
 
 __all__ = [
-    "NanoBridge", "DeviceError", "list_ports", "likely_ports",
-    "install_clean_exit", "DEFAULT_TIMEOUT", "PROBE_TIMEOUT", "SEND_GAP",
+    "DEFAULT_TIMEOUT",
+    "PROBE_TIMEOUT",
     "SELECT_GAP",
+    "SEND_GAP",
+    "DeviceError",
+    "NanoBridge",
+    "install_clean_exit",
+    "likely_ports",
+    "list_ports",
 ]
 
 
@@ -76,7 +82,7 @@ SELECT_GAP = 0.005
 def _rtmidi():
     try:
         import rtmidi
-    except ImportError as exc:                      # pragma: no cover
+    except ImportError as exc:  # pragma: no cover
         raise DeviceError(
             "python-rtmidi is not installed, so no MIDI port can be "
             "opened. nanosyned still runs with --demo, which opens none."
@@ -84,7 +90,7 @@ def _rtmidi():
     return rtmidi
 
 
-def list_ports() -> Tuple[List[str], List[str]]:
+def list_ports() -> tuple[list[str], list[str]]:
     """``(inputs, outputs)`` as rtmidi names them."""
     rtmidi = _rtmidi()
     midi_in, midi_out = rtmidi.MidiIn(), rtmidi.MidiOut()
@@ -95,7 +101,7 @@ def list_ports() -> Tuple[List[str], List[str]]:
         midi_out.delete()
 
 
-def likely_ports() -> List[str]:
+def likely_ports() -> list[str]:
     """Ports whose name suggests the instrument. Only an ordering.
 
     A name hint cannot decide anything here and is not allowed to. This
@@ -110,7 +116,7 @@ def likely_ports() -> List[str]:
     return [p for p in outs if any(w in p.lower() for w in wanted)]
 
 
-def install_clean_exit(on_exit: Optional[Callable[[], None]] = None) -> None:
+def install_clean_exit(on_exit: Callable[[], None] | None = None) -> None:
     """Close ports on SIGINT/SIGTERM rather than leaving them open.
 
     Ctrl-C already unwinds -- it raises ``KeyboardInterrupt`` and every
@@ -120,6 +126,7 @@ def install_clean_exit(on_exit: Optional[Callable[[], None]] = None) -> None:
     teardown run. The optional ``on_exit`` is called first, for a caller
     that has something the ``finally`` blocks cannot reach.
     """
+
     def handler(signum, _frame):  # pragma: no cover - signal path
         if on_exit is not None:
             try:
@@ -138,9 +145,15 @@ def install_clean_exit(on_exit: Optional[Callable[[], None]] = None) -> None:
 class NanoBridge:
     """One open pair of ports, and the requests this program makes."""
 
-    def __init__(self, midi_in, midi_out, *, channel: int = 0,
-                 description: str = "", timeout: float = DEFAULT_TIMEOUT
-                 ) -> None:
+    def __init__(
+        self,
+        midi_in,
+        midi_out,
+        *,
+        channel: int = 0,
+        description: str = "",
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
         self._in = midi_in
         self._out = midi_out
         self.channel = channel
@@ -150,20 +163,24 @@ class NanoBridge:
         #: is "out -> in" for display and is not something open() accepts
         #: back. The sibling p2ked saved the description as a port name and
         #: produced a config that never matched.
-        self.port: Optional[str] = None
-        self.recv_port: Optional[str] = None
+        self.port: str | None = None
+        self.recv_port: str | None = None
         try:
-            self._in.ignore_types(sysex=False, timing=True,
-                                  active_sense=True)
-        except AttributeError:                      # a test double
+            self._in.ignore_types(sysex=False, timing=True, active_sense=True)
+        except AttributeError:  # a test double
             pass
 
     # --- lifecycle ----------------------------------------------------------
 
     @classmethod
-    def open(cls, port: str, *, recv_port: Optional[str] = None,
-             channel: int = 0, timeout: float = DEFAULT_TIMEOUT
-             ) -> "NanoBridge":
+    def open(
+        cls,
+        port: str,
+        *,
+        recv_port: str | None = None,
+        channel: int = 0,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> NanoBridge:
         rtmidi = _rtmidi()
         ins, outs = list_ports()
         listen = recv_port or port
@@ -186,8 +203,13 @@ class NanoBridge:
                 except Exception:
                     pass
             raise
-        bridge = cls(midi_in, midi_out, channel=channel,
-                     description=f"{port} -> {listen}", timeout=timeout)
+        bridge = cls(
+            midi_in,
+            midi_out,
+            channel=channel,
+            description=f"{port} -> {listen}",
+            timeout=timeout,
+        )
         bridge.port = port
         bridge.recv_port = listen
         return bridge
@@ -200,7 +222,7 @@ class NanoBridge:
             except Exception:
                 pass
 
-    def __enter__(self) -> "NanoBridge":
+    def __enter__(self) -> NanoBridge:
         return self
 
     def __exit__(self, *_exc) -> None:
@@ -215,9 +237,14 @@ class NanoBridge:
     def _send(self, data: bytes) -> None:
         self._out.send_message(list(data))
 
-    def request(self, outgoing: bytes, wanted: int, *,
-                number: Optional[int] = None,
-                timeout: Optional[float] = None) -> m.Packet:
+    def request(
+        self,
+        outgoing: bytes,
+        wanted: int,
+        *,
+        number: int | None = None,
+        timeout: float | None = None,
+    ) -> m.Packet:
         """Send a request and wait for the dump that answers it.
 
         ``wanted`` is the opcode of the **reply**, never of the request.
@@ -248,7 +275,7 @@ class NanoBridge:
             return packet
         raise TimeoutError(self._silence_means(wanted, number))
 
-    def _silence_means(self, wanted: int, number: Optional[int]) -> str:
+    def _silence_means(self, wanted: int, number: int | None) -> str:
         """Why nothing came back. Never picks one reason.
 
         The instrument answers a request it cannot serve with silence, and
@@ -269,7 +296,7 @@ class NanoBridge:
 
     # --- reading, all of it silent -----------------------------------------
 
-    def identify(self, *, timeout: Optional[float] = None) -> Optional[dict]:
+    def identify(self, *, timeout: float | None = None) -> dict | None:
         """Ask who is there. Two small messages, and **makes no sound**.
 
         **This unit does not answer an Identity Request when it gets one.**
@@ -302,22 +329,26 @@ class NanoBridge:
             if fields is not None and fields.get("is_alesis"):
                 return fields
             packet = m.parse(message[0])
-            if (packet is not None
-                    and packet.function == m.Function.GLOBAL_DUMP):
+            if packet is not None and packet.function == m.Function.GLOBAL_DUMP:
                 # The dump answered but no Identity Reply was waiting --
                 # it is a QS-family unit and that is as much as can be
                 # said without one.
                 answered_dump = True
         if answered_dump:
-            return {"channel": self.channel, "is_alesis": True,
-                    "is_qs_family": True, "is_nanosynth": True,
-                    "family": (m.QS_FAMILY, 0), "member": None,
-                    "version": "", "manufacturer": m.ALESIS_ID,
-                    "inferred": True}
+            return {
+                "channel": self.channel,
+                "is_alesis": True,
+                "is_qs_family": True,
+                "is_nanosynth": True,
+                "family": (m.QS_FAMILY, 0),
+                "member": None,
+                "version": "",
+                "manufacturer": m.ALESIS_ID,
+                "inferred": True,
+            }
         return None
 
-    def read_program(self, number: int, *,
-                     timeout: Optional[float] = None) -> bytes:
+    def read_program(self, number: int, *, timeout: float | None = None) -> bytes:
         """One user program's 350 bytes. **Makes no sound.**
 
         Only the user bank. The other four banks are ROM and the protocol
@@ -325,15 +356,20 @@ class NanoBridge:
         """
         packet = self.request(
             m.program_dump_request(number),
-            m.Function.USER_PROGRAM_DUMP, number=number, timeout=timeout)
+            m.Function.USER_PROGRAM_DUMP,
+            number=number,
+            timeout=timeout,
+        )
         data = packet.data()
         rec.check_size(data, rec.PROGRAM_BYTES, "a program")
-        return data[:rec.PROGRAM_BYTES]
+        return data[: rec.PROGRAM_BYTES]
 
     def read_program_names(
-            self, *, timeout: Optional[float] = None,
-            on_progress: Optional[Callable[[int, int], None]] = None
-    ) -> Dict[int, str]:
+        self,
+        *,
+        timeout: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> dict[int, str]:
         """Every user program name, one request at a time. **Silent.**
 
         128 round trips. There is no bulk request that returns only the
@@ -341,7 +377,7 @@ class NanoBridge:
         most of that is data this program does not use. One at a time is
         slower and asks the instrument for exactly what is wanted.
         """
-        out: Dict[int, str] = {}
+        out: dict[int, str] = {}
         for number in range(banks.PROGRAMS_PER_BANK):
             try:
                 record = self.read_program(number, timeout=timeout)
@@ -350,36 +386,40 @@ class NanoBridge:
             out[number] = rec.program_name(record)
             if on_progress is not None:
                 on_progress(number + 1, banks.PROGRAMS_PER_BANK)
-            time.sleep(SEND_GAP)        # a guess; see SEND_GAP
+            time.sleep(SEND_GAP)  # a guess; see SEND_GAP
         return out
 
-    def read_edit_program(self, *,
-                          timeout: Optional[float] = None) -> bytes:
+    def read_edit_program(self, *, timeout: float | None = None) -> bytes:
         """The edit buffer: whatever the unit is playing. **Silent.**"""
-        packet = self.request(m.edit_program_dump_request(),
-                              m.Function.EDIT_PROGRAM_DUMP, timeout=timeout)
+        packet = self.request(
+            m.edit_program_dump_request(), m.Function.EDIT_PROGRAM_DUMP, timeout=timeout
+        )
         data = packet.data()
         rec.check_size(data, rec.PROGRAM_BYTES, "a program")
-        return data[:rec.PROGRAM_BYTES]
+        return data[: rec.PROGRAM_BYTES]
 
-    def read_mix(self, number: int, *,
-                 timeout: Optional[float] = None) -> bytes:
+    def read_mix(self, number: int, *, timeout: float | None = None) -> bytes:
         """One of the 100 mixes. **Silent.**
 
         The manual does not mention mixes. The unit answers for them.
         """
         packet = self.request(
-            m.mix_dump_request(number), m.Function.MIX_DUMP,
-            number=number, timeout=timeout)
+            m.mix_dump_request(number),
+            m.Function.MIX_DUMP,
+            number=number,
+            timeout=timeout,
+        )
         data = packet.data()
         rec.check_size(data, rec.MIX_BYTES, "a mix")
-        return data[:rec.MIX_BYTES]
+        return data[: rec.MIX_BYTES]
 
     def read_mix_names(
-            self, *, timeout: Optional[float] = None,
-            on_progress: Optional[Callable[[int, int], None]] = None
-    ) -> Dict[int, str]:
-        out: Dict[int, str] = {}
+        self,
+        *,
+        timeout: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> dict[int, str]:
+        out: dict[int, str] = {}
         for number in range(banks.MIXES):
             try:
                 record = self.read_mix(number, timeout=timeout)
@@ -391,10 +431,10 @@ class NanoBridge:
             time.sleep(SEND_GAP)
         return out
 
-    def read_global(self, *, timeout: Optional[float] = None) -> bytes:
-        packet = self.request(m.global_dump_request(),
-                              m.Function.GLOBAL_DUMP, number=0,
-                              timeout=timeout)
+    def read_global(self, *, timeout: float | None = None) -> bytes:
+        packet = self.request(
+            m.global_dump_request(), m.Function.GLOBAL_DUMP, number=0, timeout=timeout
+        )
         return packet.data()
 
     # --- the one thing that makes a sound ----------------------------------
@@ -410,15 +450,18 @@ class NanoBridge:
         """
         for message in m.bank_select(target.bank.select, self.channel):
             self._send(message)
-        time.sleep(SELECT_GAP)          # a guess; see SELECT_GAP
+        time.sleep(SELECT_GAP)  # a guess; see SELECT_GAP
         self._send(m.program_change(target.program_change, self.channel))
 
     # --- discovery ----------------------------------------------------------
 
     @classmethod
-    def autodetect(cls, *, timeout: float = PROBE_TIMEOUT,
-                   on_try: Optional[Callable[[str], None]] = None
-                   ) -> "NanoBridge":
+    def autodetect(
+        cls,
+        *,
+        timeout: float = PROBE_TIMEOUT,
+        on_try: Callable[[str], None] | None = None,
+    ) -> NanoBridge:
         """Find the NanoSynth by asking every port who is there.
 
         Name hints only order the sweep. This instrument has no USB port of
@@ -444,9 +487,12 @@ class NanoBridge:
                 # specific, so no other manufacturer's box on the chain
                 # can answer it by accident -- which an Identity Request
                 # very much can, and on the bench always did.
-                bridge.request(m.global_dump_request(),
-                               m.Function.GLOBAL_DUMP, number=0,
-                               timeout=timeout)
+                bridge.request(
+                    m.global_dump_request(),
+                    m.Function.GLOBAL_DUMP,
+                    number=0,
+                    timeout=timeout,
+                )
                 found = True
             except Exception:
                 found = False

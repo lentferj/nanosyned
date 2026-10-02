@@ -17,8 +17,7 @@
 
 import pytest
 
-from nano import banks
-from nano import dumps
+from nano import banks, dumps
 from nano import messages as m
 from nano import records as rec
 
@@ -74,13 +73,11 @@ class TestTheFiveBanks:
 class TestRecordSizes:
     def test_a_program_is_ten_common_bytes_and_four_sounds(self):
         assert rec.PROGRAM_BYTES == 350
-        assert (rec.PROGRAM_COMMON
-                + rec.SOUNDS_PER_PROGRAM * rec.SOUND_BYTES) == 350
+        assert (rec.PROGRAM_COMMON + rec.SOUNDS_PER_PROGRAM * rec.SOUND_BYTES) == 350
 
     def test_a_mix_is_ten_common_bytes_and_sixteen_channels(self):
         assert rec.MIX_BYTES == 138
-        assert (rec.MIX_COMMON
-                + rec.MIX_CHANNELS * rec.MIX_CHANNEL_BYTES) == 138
+        assert (rec.MIX_COMMON + rec.MIX_CHANNELS * rec.MIX_CHANNEL_BYTES) == 138
 
     def test_a_short_record_is_refused(self):
         with pytest.raises(m.ProtocolError, match="fewer than"):
@@ -110,14 +107,14 @@ class TestReadingSyxFiles:
         for n in range(banks.PROGRAMS_PER_BANK):
             record = bytearray(rec.PROGRAM_BYTES)
             m.encode_name(record, f"Invented{n % 10}")
-            raw += _dump(m.Function.USER_PROGRAM_DUMP, n, record,
-                         rec.PROGRAM_BYTES)
+            raw += _dump(m.Function.USER_PROGRAM_DUMP, n, record, rec.PROGRAM_BYTES)
         for n in range(banks.MIXES):
             record = bytearray(rec.MIX_BYTES)
             m.encode_name(record, f"Set {n:02d}", rec.MIX_NAME_BIT_OFFSET)
             raw += _dump(m.Function.MIX_DUMP, n, record, rec.MIX_BYTES)
-        raw += _dump(m.Function.GLOBAL_DUMP, 0, bytes(rec.GLOBAL_BYTES),
-                     rec.GLOBAL_BYTES)
+        raw += _dump(
+            m.Function.GLOBAL_DUMP, 0, bytes(rec.GLOBAL_BYTES), rec.GLOBAL_BYTES
+        )
         return bytes(raw)
 
     def test_an_all_dump_is_recognised(self):

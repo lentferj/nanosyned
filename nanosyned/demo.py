@@ -29,33 +29,64 @@ beside a session that is driving the hardware.
 from __future__ import annotations
 
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 from nano import banks
 from nano import messages as m
 from nano import records as rec
 
-__all__ = ["DemoDevice", "demo_name", "demo_mix_name"]
+__all__ = ["DemoDevice", "demo_mix_name", "demo_name"]
 
 #: Deliberately silly, and deliberately not anybody's product names.
-_HEADS = ("Tin", "Glass", "Paper", "Rubber", "Copper", "Velvet", "Chalk",
-          "Iron", "Wool", "Amber", "Slate", "Cork", "Linen", "Pewter",
-          "Willow", "Basalt")
-_TAILS = ("Bell", "Drone", "Pluck", "Wash", "Stab", "Sweep", "Hum", "Bow",
-          "Choir", "Reed", "Thud", "Shine", "Comb", "Gust", "Coil", "Loom")
+_HEADS = (
+    "Tin",
+    "Glass",
+    "Paper",
+    "Rubber",
+    "Copper",
+    "Velvet",
+    "Chalk",
+    "Iron",
+    "Wool",
+    "Amber",
+    "Slate",
+    "Cork",
+    "Linen",
+    "Pewter",
+    "Willow",
+    "Basalt",
+)
+_TAILS = (
+    "Bell",
+    "Drone",
+    "Pluck",
+    "Wash",
+    "Stab",
+    "Sweep",
+    "Hum",
+    "Bow",
+    "Choir",
+    "Reed",
+    "Thud",
+    "Shine",
+    "Comb",
+    "Gust",
+    "Coil",
+    "Loom",
+)
 
 
 def demo_name(bank_id: str, number: int) -> str:
     """An invented name, stable for a given slot."""
-    seed = (sum(ord(c) for c in bank_id) * 7 + number * 13)
+    seed = sum(ord(c) for c in bank_id) * 7 + number * 13
     head = _HEADS[seed % len(_HEADS)]
     tail = _TAILS[(seed // len(_HEADS)) % len(_TAILS)]
-    return f"{head} {tail}"[:m.NAME_CHARS]
+    return f"{head} {tail}"[: m.NAME_CHARS]
 
 
 def demo_mix_name(number: int) -> str:
     seed = number * 11 + 3
-    return f"{_HEADS[seed % len(_HEADS)]} Set"[:m.NAME_CHARS]
+    return f"{_HEADS[seed % len(_HEADS)]} Set"[: m.NAME_CHARS]
 
 
 def _record(size: int, name: str, offset: int, number: int) -> bytes:
@@ -76,15 +107,15 @@ class DemoDevice:
         self.channel = channel
         self.timeout = 1.0
         self.latency = latency
-        self.port: Optional[str] = None
-        self.recv_port: Optional[str] = None
-        self.selected: Optional[banks.Slot] = None
+        self.port: str | None = None
+        self.recv_port: str | None = None
+        self.selected: banks.Slot | None = None
         self.selected_channel: int = channel
         #: ``(slot, channel)`` for every selection, in order. The channel
         #: is recorded because a demo that dropped it would let a test
         #: named for the channel pass while asserting only that something
         #: was sent -- which is what happened in the sibling p2ked.
-        self.selected_log: List[Tuple[banks.Slot, int]] = []
+        self.selected_log: list[tuple[banks.Slot, int]] = []
         self._closed = False
 
     def close(self) -> None:
@@ -96,7 +127,7 @@ class DemoDevice:
 
     # --- reading ------------------------------------------------------------
 
-    def identify(self, *, timeout: Optional[float] = None) -> Optional[dict]:
+    def identify(self, *, timeout: float | None = None) -> dict | None:
         """The shape `messages.identity_reply_fields` returns.
 
         Present so that `status` and the TUI's device screen take the same
@@ -117,19 +148,19 @@ class DemoDevice:
             "is_nanosynth": True,
         }
 
-    def read_program(self, number: int, *,
-                     timeout: Optional[float] = None) -> bytes:
+    def read_program(self, number: int, *, timeout: float | None = None) -> bytes:
         self._tick()
         if not 0 <= number <= 127:
             raise m.ProtocolError(f"user program {number} is outside 0-127")
-        name = ("Off" if number == banks.SILENT_PROGRAM[1]
-                else demo_name("USER", number))
+        name = "Off" if number == banks.SILENT_PROGRAM[1] else demo_name("USER", number)
         return _record(rec.PROGRAM_BYTES, name, m.NAME_BIT_OFFSET, number)
 
     def read_program_names(
-            self, *, timeout: Optional[float] = None,
-            on_progress: Optional[Callable[[int, int], None]] = None
-    ) -> Dict[int, str]:
+        self,
+        *,
+        timeout: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> dict[int, str]:
         out = {}
         for number in range(banks.PROGRAMS_PER_BANK):
             out[number] = rec.program_name(self.read_program(number))
@@ -137,29 +168,32 @@ class DemoDevice:
                 on_progress(number + 1, banks.PROGRAMS_PER_BANK)
         return out
 
-    def read_edit_program(self, *,
-                          timeout: Optional[float] = None) -> bytes:
+    def read_edit_program(self, *, timeout: float | None = None) -> bytes:
         self._tick()
         slot = self.selected
         if slot is None:
-            return _record(rec.PROGRAM_BYTES, demo_name("GM", 0),
-                           m.NAME_BIT_OFFSET, 0)
-        return _record(rec.PROGRAM_BYTES,
-                       demo_name(slot.bank_id, slot.number),
-                       m.NAME_BIT_OFFSET, slot.number)
+            return _record(rec.PROGRAM_BYTES, demo_name("GM", 0), m.NAME_BIT_OFFSET, 0)
+        return _record(
+            rec.PROGRAM_BYTES,
+            demo_name(slot.bank_id, slot.number),
+            m.NAME_BIT_OFFSET,
+            slot.number,
+        )
 
-    def read_mix(self, number: int, *,
-                 timeout: Optional[float] = None) -> bytes:
+    def read_mix(self, number: int, *, timeout: float | None = None) -> bytes:
         self._tick()
         if not 0 <= number < banks.MIXES:
-            raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES-1}")
-        return _record(rec.MIX_BYTES, demo_mix_name(number),
-                       rec.MIX_NAME_BIT_OFFSET, number)
+            raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES - 1}")
+        return _record(
+            rec.MIX_BYTES, demo_mix_name(number), rec.MIX_NAME_BIT_OFFSET, number
+        )
 
     def read_mix_names(
-            self, *, timeout: Optional[float] = None,
-            on_progress: Optional[Callable[[int, int], None]] = None
-    ) -> Dict[int, str]:
+        self,
+        *,
+        timeout: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> dict[int, str]:
         out = {}
         for number in range(banks.MIXES):
             out[number] = rec.mix_name(self.read_mix(number))
@@ -167,7 +201,7 @@ class DemoDevice:
                 on_progress(number + 1, banks.MIXES)
         return out
 
-    def read_global(self, *, timeout: Optional[float] = None) -> bytes:
+    def read_global(self, *, timeout: float | None = None) -> bytes:
         self._tick()
         return bytes(rec.GLOBAL_BYTES)
 

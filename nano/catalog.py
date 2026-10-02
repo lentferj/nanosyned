@@ -42,15 +42,16 @@ instrument whichever way it is done.
 from __future__ import annotations
 
 import json
-import sys
 import os
+import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
 
-__all__ = ["Entry", "Catalog", "load", "empty", "DEFAULT_PATH"]
+__all__ = ["DEFAULT_PATH", "Catalog", "Entry", "empty", "load"]
 
-DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "data", "catalog.json")
+DEFAULT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "catalog.json"
+)
 
 
 @dataclass(frozen=True)
@@ -67,21 +68,22 @@ class Entry:
 class Catalog:
     """Printed names, plus whatever has been read from a unit."""
 
-    def __init__(self, entries: Iterable[Entry] = (), *, source: str = "",
-                 generated: str = "") -> None:
-        self._entries: Dict[str, Entry] = {}
+    def __init__(
+        self, entries: Iterable[Entry] = (), *, source: str = "", generated: str = ""
+    ) -> None:
+        self._entries: dict[str, Entry] = {}
         for entry in entries:
             self._entries[entry.key] = entry
-        self._live: Dict[str, str] = {}
+        self._live: dict[str, str] = {}
         self.source = source
         self.generated = generated
 
     # --- printed ------------------------------------------------------------
 
-    def entry(self, bank_id: str, program_change: int) -> Optional[Entry]:
+    def entry(self, bank_id: str, program_change: int) -> Entry | None:
         return self._entries.get(f"{bank_id}:{program_change:03d}")
 
-    def name(self, bank_id: str, program_change: int) -> Optional[str]:
+    def name(self, bank_id: str, program_change: int) -> str | None:
         found = self.entry(bank_id, program_change)
         return found.name if found is not None else None
 
@@ -97,11 +99,10 @@ class Catalog:
 
     # --- live ---------------------------------------------------------------
 
-    def set_live_name(self, bank_id: str, program_change: int,
-                      name: str) -> None:
+    def set_live_name(self, bank_id: str, program_change: int, name: str) -> None:
         self._live[f"{bank_id}:{program_change:03d}"] = name
 
-    def live_name(self, bank_id: str, program_change: int) -> Optional[str]:
+    def live_name(self, bank_id: str, program_change: int) -> str | None:
         return self._live.get(f"{bank_id}:{program_change:03d}")
 
     def is_live(self, bank_id: str, program_change: int) -> bool:
@@ -130,8 +131,9 @@ class Catalog:
         printed = self.name(bank_id, program_change)
         return printed is not None and printed != live
 
-    def disagreement(self, bank_id: str, program_change: int,
-                     writable: bool) -> Optional[str]:
+    def disagreement(
+        self, bank_id: str, program_change: int, writable: bool
+    ) -> str | None:
         """Why the unit and the catalog differ here, in words.
 
         ``None`` when they agree or the slot has not been read.
@@ -151,7 +153,7 @@ class Catalog:
 
     # --- search -------------------------------------------------------------
 
-    def search(self, needle: str) -> List[Tuple[str, int, str, bool]]:
+    def search(self, needle: str) -> list[tuple[str, int, str, bool]]:
         """Case-insensitive substring search over both sources.
 
         Each hit carries whether the unit and the printed list disagree
@@ -163,7 +165,7 @@ class Catalog:
         wanted = needle.strip().lower()
         if not wanted:
             return []
-        seen: Dict[str, Tuple[str, int, str]] = {}
+        seen: dict[str, tuple[str, int, str]] = {}
         for key, entry in self._entries.items():
             if wanted in entry.name.lower():
                 seen[key] = (entry.bank_id, entry.program_change, entry.name)
@@ -171,15 +173,14 @@ class Catalog:
             if wanted in name.lower():
                 bank_id, _, number = key.rpartition(":")
                 seen[key] = (bank_id, int(number), name)
-        return [seen[key] + (self.differs(*seen[key][:2]),)
-                for key in sorted(seen)]
+        return [seen[key] + (self.differs(*seen[key][:2]),) for key in sorted(seen)]
 
 
 def empty() -> Catalog:
     return Catalog()
 
 
-def load(path: Optional[str] = None) -> Catalog:
+def load(path: str | None = None) -> Catalog:
     """Load the generated catalog, or an empty one.
 
     A missing catalog is normal and not an error: nanosyned works without it,
@@ -203,14 +204,21 @@ def load(path: Optional[str] = None) -> Catalog:
             # taking the program down with it is the odd behaviour, not
             # skipping it.
             try:
-                entries.append(Entry(bank_id=bank_id,
-                                     program_change=int(row["pc"]),
-                                     name=row["name"]))
+                entries.append(
+                    Entry(
+                        bank_id=bank_id, program_change=int(row["pc"]), name=row["name"]
+                    )
+                )
             except (KeyError, TypeError, ValueError):
                 skipped += 1
     if skipped:
-        print(f"warning: {target} has {skipped} unreadable row(s), skipped; "
-              f"regenerate it with tools/extract_catalog.py",
-              file=sys.stderr)
-    return Catalog(entries, source=payload.get("source", ""),
-                   generated=payload.get("generated", ""))
+        print(
+            f"warning: {target} has {skipped} unreadable row(s), skipped; "
+            f"regenerate it with tools/extract_catalog.py",
+            file=sys.stderr,
+        )
+    return Catalog(
+        entries,
+        source=payload.get("source", ""),
+        generated=payload.get("generated", ""),
+    )

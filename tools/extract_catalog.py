@@ -44,12 +44,17 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nano import banks                                        # noqa: E402
-from nano import dumps                                        # noqa: E402
+from nano import (
+    banks,
+    dumps,
+)
 
 DEFAULT_OUTPUT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "nano", "data", "catalog.json")
+    "nano",
+    "data",
+    "catalog.json",
+)
 
 #: A manual line: a bank id, a number and a name.
 #:    USER 000 Some Name
@@ -73,7 +78,7 @@ def from_manual(path):
     rows = {}
     bad = 0
     with open(path, encoding="utf-8") as handle:
-        for lineno, line in enumerate(handle, 1):
+        for line in handle:
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             found = LINE.match(line)
@@ -93,17 +98,21 @@ def from_manual(path):
                 continue
             rows[(bank_id, number)] = name
     if bad:
-        print(f"{path}: {bad} line(s) did not parse and were skipped",
-              file=sys.stderr)
+        print(f"{path}: {bad} line(s) did not parse and were skipped", file=sys.stderr)
     return rows, os.path.basename(path)
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--syx", action="append", default=[],
-                        help="a .syx dump; fills the User bank")
-    parser.add_argument("--manual", action="append", default=[],
-                        help="a transcribed list; fills any bank")
+    parser.add_argument(
+        "--syx", action="append", default=[], help="a .syx dump; fills the User bank"
+    )
+    parser.add_argument(
+        "--manual",
+        action="append",
+        default=[],
+        help="a transcribed list; fills any bank",
+    )
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     args = parser.parse_args(argv)
 
@@ -123,23 +132,26 @@ def main(argv=None) -> int:
         rows.update(found)
         sources.append(label)
 
-    payload = {"banks": {}, "source": "; ".join(sources),
-               "generated": __import__("datetime").date.today().isoformat()}
+    payload = {
+        "banks": {},
+        "source": "; ".join(sources),
+        "generated": __import__("datetime").date.today().isoformat(),
+    }
     for (bank_id, number), name in sorted(rows.items()):
-        payload["banks"].setdefault(bank_id, []).append(
-            {"pc": number, "name": name})
+        payload["banks"].setdefault(bank_id, []).append({"pc": number, "name": name})
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=1, ensure_ascii=False)
         handle.write("\n")
 
-    per_bank = ", ".join(f"{k} {len(v)}"
-                         for k, v in sorted(payload["banks"].items()))
+    per_bank = ", ".join(f"{k} {len(v)}" for k, v in sorted(payload["banks"].items()))
     print(f"wrote {len(rows)} name(s) to {args.output}")
     print(f"  {per_bank}")
-    print("\nThis file is gitignored. Alesis's names are not this "
-          "project's to redistribute.")
+    print(
+        "\nThis file is gitignored. Alesis's names are not this "
+        "project's to redistribute."
+    )
     return 0
 
 

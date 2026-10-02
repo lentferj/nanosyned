@@ -25,20 +25,19 @@ offsets.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
 
 from nano import banks
 from nano import messages as m
 from nano import records as rec
 
-__all__ = ["Library", "read_syx_file", "split_messages", "ALL_DUMP_MESSAGES"]
+__all__ = ["ALL_DUMP_MESSAGES", "Library", "read_syx_file", "split_messages"]
 
 #: What a complete All Dump contains, by opcode. Counted from a file the
 #: owner had and confirmed against the specification's own totals.
 ALL_DUMP_MESSAGES = {
-    m.Function.USER_PROGRAM_DUMP: banks.PROGRAMS_PER_BANK,   # 128
+    m.Function.USER_PROGRAM_DUMP: banks.PROGRAMS_PER_BANK,  # 128
     m.Function.USER_EFFECTS_DUMP: 128,
-    m.Function.MIX_DUMP: banks.MIXES,                        # 100
+    m.Function.MIX_DUMP: banks.MIXES,  # 100
     m.Function.GLOBAL_DUMP: 1,
 }
 
@@ -52,10 +51,10 @@ class Library:
     then say *which* part is missing rather than failing to load.
     """
 
-    programs: Dict[int, bytes] = field(default_factory=dict)
-    effects: Dict[int, bytes] = field(default_factory=dict)
-    mixes: Dict[int, bytes] = field(default_factory=dict)
-    globals_: Optional[bytes] = None
+    programs: dict[int, bytes] = field(default_factory=dict)
+    effects: dict[int, bytes] = field(default_factory=dict)
+    mixes: dict[int, bytes] = field(default_factory=dict)
+    globals_: bytes | None = None
     #: Messages that parsed as Alesis QS but were not dumps, and foreign
     #: messages, counted rather than discarded silently.
     skipped: int = 0
@@ -63,13 +62,13 @@ class Library:
 
     @property
     def is_all_dump(self) -> bool:
-        return (len(self.programs) == ALL_DUMP_MESSAGES[
-                    m.Function.USER_PROGRAM_DUMP]
-                and len(self.mixes) == ALL_DUMP_MESSAGES[
-                    m.Function.MIX_DUMP]
-                and self.globals_ is not None)
+        return (
+            len(self.programs) == ALL_DUMP_MESSAGES[m.Function.USER_PROGRAM_DUMP]
+            and len(self.mixes) == ALL_DUMP_MESSAGES[m.Function.MIX_DUMP]
+            and self.globals_ is not None
+        )
 
-    def program_names(self) -> Dict[int, str]:
+    def program_names(self) -> dict[int, str]:
         """Every program name this file carries, by number."""
         out = {}
         for number, record in sorted(self.programs.items()):
@@ -79,7 +78,7 @@ class Library:
                 continue
         return out
 
-    def mix_names(self) -> Dict[int, str]:
+    def mix_names(self) -> dict[int, str]:
         out = {}
         for number, record in sorted(self.mixes.items()):
             try:
@@ -101,7 +100,7 @@ class Library:
         return ", ".join(parts)
 
 
-def split_messages(raw: bytes) -> List[bytes]:
+def split_messages(raw: bytes) -> list[bytes]:
     """Every complete SysEx message in a blob, in order.
 
     A trailing ``F0`` with no ``F7`` is dropped rather than raising: that
@@ -117,7 +116,7 @@ def split_messages(raw: bytes) -> List[bytes]:
         end = raw.find(b"\xf7", start)
         if end < 0:
             break
-        out.append(raw[start:end + 1])
+        out.append(raw[start : end + 1])
         cursor = end + 1
     return out
 
@@ -141,13 +140,18 @@ def read_bytes(raw: bytes) -> Library:
         if packet is None:
             library.foreign += 1
             continue
+        number = packet.number
         try:
-            if packet.function == m.Function.USER_PROGRAM_DUMP:
-                library.programs[packet.number] = packet.data()
+            if number is None:
+                # Not one of the numbered dumps this library holds. Counted
+                # as skipped, which is where it fell before too.
+                library.skipped += 1
+            elif packet.function == m.Function.USER_PROGRAM_DUMP:
+                library.programs[number] = packet.data()
             elif packet.function == m.Function.USER_EFFECTS_DUMP:
-                library.effects[packet.number] = packet.data()
+                library.effects[number] = packet.data()
             elif packet.function == m.Function.MIX_DUMP:
-                library.mixes[packet.number] = packet.data()
+                library.mixes[number] = packet.data()
             elif packet.function == m.Function.GLOBAL_DUMP:
                 library.globals_ = packet.data()
             else:

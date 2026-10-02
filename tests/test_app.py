@@ -38,8 +38,7 @@ class TestStartup:
         async with app.run_test() as pilot:
             await pilot.pause()
             assert app.query_one("#bank-table").row_count == len(banks.BANKS)
-            assert (app.query_one("#slot-table").row_count
-                    == banks.PROGRAMS_PER_BANK)
+            assert app.query_one("#slot-table").row_count == banks.PROGRAMS_PER_BANK
 
 
 class TestCursorIsSilent:
@@ -164,12 +163,11 @@ class TestFavouritesActOnTheRowNotThePane:
     async def test_f_uses_the_rows_own_bank(self, tmp_path):
         store = fav.Favorites(str(tmp_path / "f.db"))
         store.add("P2", 5, name="Invented", rating=3)
-        app = NanosynedApp(DemoDevice(), catalog=cat.empty(),
-                           favorites=store)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
         async with app.run_test() as pilot:
             await pilot.pause()
             app.view_mode = VIEW_ALL_FAVOURITES
-            app._fill("GM")                 # pane elsewhere; row is P2:5
+            app._fill("GM")  # pane elsewhere; row is P2:5
             await pilot.pause()
             assert [(e.bank_id, e.number) for e in app._current] == [("P2", 5)]
             app.query_one("#slot-table").focus()
@@ -183,8 +181,11 @@ class TestFavouritesActOnTheRowNotThePane:
 
 class TestTheLegendIsComplete:
     def _app_source(self):
-        path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "nanosyned", "app.py")
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "nanosyned",
+            "app.py",
+        )
         with open(path, encoding="utf-8") as handle:
             return handle.read()
 
@@ -193,10 +194,11 @@ class TestTheLegendIsComplete:
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef):
                 continue
-            if any((isinstance(d, ast.Call)
-                    and getattr(d.func, "id", "") == "work")
-                   or getattr(d, "id", "") == "work"
-                   for d in node.decorator_list):
+            if any(
+                (isinstance(d, ast.Call) and getattr(d.func, "id", "") == "work")
+                or getattr(d, "id", "") == "work"
+                for d in node.decorator_list
+            ):
                 yield node
 
     def test_there_are_workers_to_check(self):
@@ -209,15 +211,18 @@ class TestTheLegendIsComplete:
         offenders = []
         for node in self._workers():
             for inner in ast.walk(node):
-                if (isinstance(inner, ast.Attribute)
-                        and inner.attr in ("favorites", "catalog")
-                        and isinstance(inner.value, ast.Name)
-                        and inner.value.id == "self"):
+                if (
+                    isinstance(inner, ast.Attribute)
+                    and inner.attr in ("favorites", "catalog")
+                    and isinstance(inner.value, ast.Name)
+                    and inner.value.id == "self"
+                ):
                     offenders.append(node.name)
         assert not offenders, (
             f"worker(s) {sorted(set(offenders))} reach self.favorites or "
             f"self.catalog; workers do MIDI and hand off with "
-            f"call_from_thread")
+            f"call_from_thread"
+        )
 
     def test_no_worker_sets_the_busy_flag_itself(self):
         """By the time a worker runs, a second keypress has already passed
@@ -225,10 +230,14 @@ class TestTheLegendIsComplete:
         offenders = []
         for node in self._workers():
             for inner in ast.walk(node):
-                if (isinstance(inner, ast.Assign)
-                        and any(isinstance(t, ast.Attribute)
-                                and t.attr == "_busy" for t in inner.targets)
-                        and getattr(inner.value, "value", None) is True):
+                if (
+                    isinstance(inner, ast.Assign)
+                    and any(
+                        isinstance(t, ast.Attribute) and t.attr == "_busy"
+                        for t in inner.targets
+                    )
+                    and getattr(inner.value, "value", None) is True
+                ):
                     offenders.append(node.name)
         assert not offenders, f"worker(s) {offenders} set _busy themselves"
 

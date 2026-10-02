@@ -44,11 +44,13 @@ def _test_sources():
 def _config_saves():
     for name, tree in _test_sources():
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr.startswith("save_")
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "config"):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr.startswith("save_")
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "config"
+            ):
                 yield name, node
 
 
@@ -56,15 +58,14 @@ def test_every_config_save_in_the_suite_names_its_file():
     offenders = []
     for name, node in _config_saves():
         # the path is either the last positional argument or path=
-        if not (len(node.args) >= 2
-                or any(kw.arg == "path" for kw in node.keywords)):
+        if not (len(node.args) >= 2 or any(kw.arg == "path" for kw in node.keywords)):
             offenders.append(f"{name}:{node.lineno} {node.func.attr}")
     assert not offenders, (
         f"{offenders} save to config.DEFAULT_PATH, which is relative to the "
-        f"working directory. Pass a tmp_path.")
+        f"working directory. Pass a tmp_path."
+    )
 
 
 def test_the_check_has_something_to_check():
     """Guard against the search passing because it matched nothing."""
-    assert list(_config_saves()), (
-        "no config.save_* calls found; the check is vacuous")
+    assert list(_config_saves()), "no config.save_* calls found; the check is vacuous"

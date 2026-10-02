@@ -51,20 +51,19 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
-from typing import Dict, List, Optional
+from typing import Any, ClassVar
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Header, Input, Label, Static
 
 from nano import banks
 from nano import catalog as cat
-from nano import records as rec
 
-__all__ = ["NanosynedApp", "main", "build_parser", "KEY_HINTS", "wrap_blocks"]
+__all__ = ["KEY_HINTS", "NanosynedApp", "build_parser", "main", "wrap_blocks"]
 
 _SEP = " · "
 
@@ -81,9 +80,19 @@ VIEW_LABELS = {
 }
 
 KEY_HINTS = (
-    "↑↓ move", "tab pane", "⏎ select on the unit", "r read names",
-    "/ search", "[ ] channel", "c set channel", "f favourite",
-    "F favourites view", "t tags", "n note", "i device", "? help",
+    "↑↓ move",
+    "tab pane",
+    "⏎ select on the unit",
+    "r read names",
+    "/ search",
+    "[ ] channel",
+    "c set channel",
+    "f favourite",
+    "F favourites view",
+    "t tags",
+    "n note",
+    "i device",
+    "? help",
     "q quit",
 )
 
@@ -138,8 +147,10 @@ class ReportScreen(ModalScreen[None]):
     ReportScreen .body { height: 1fr; overflow-y: auto; }
     """
 
-    BINDINGS = [Binding("escape", "close", "Close"),
-                Binding("q", "close", "Close")]
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "close", "Close"),
+        Binding("q", "close", "Close"),
+    ]
 
     def __init__(self, title: str, body: str) -> None:
         super().__init__()
@@ -156,7 +167,7 @@ class ReportScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
-class PromptScreen(ModalScreen[Optional[str]]):
+class PromptScreen(ModalScreen[str | None]):
     """One line of text."""
 
     DEFAULT_CSS = """
@@ -167,7 +178,7 @@ class PromptScreen(ModalScreen[Optional[str]]):
     }
     """
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, prompt: str, current: str = "") -> None:
         super().__init__()
@@ -208,7 +219,7 @@ class NanosynedApp(App):
     #status { height: 1; background: $boost; color: $text; padding: 0 1; }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         # Enter is NOT bound here: a focused DataTable consumes it for its
         # own row selection, so it arrives as RowSelected instead.
         Binding("r", "read_names", "Read names"),
@@ -226,8 +237,9 @@ class NanosynedApp(App):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, device, *, catalog=None, favorites=None,
-                 config_path: Optional[str] = None) -> None:
+    def __init__(
+        self, device, *, catalog=None, favorites=None, config_path: str | None = None
+    ) -> None:
         super().__init__()
         self.device = device
         self.catalog = catalog if catalog is not None else cat.empty()
@@ -240,9 +252,9 @@ class NanosynedApp(App):
         self._config_path = config_path
         self.view_mode = VIEW_ALL
         self._lock = threading.RLock()
-        self._bank_ids: List[str] = banks.bank_ids()
+        self._bank_ids: list[str] = banks.bank_ids()
         self._current_bank = self._bank_ids[0]
-        self._current: List[banks.Slot] = []
+        self._current: list[banks.Slot] = []
         self._busy = False
         self._filling = False
 
@@ -258,31 +270,34 @@ class NanosynedApp(App):
     def on_mount(self) -> None:
         self.title = "nanosyned"
         table = self.query_one("#bank-table", DataTable)
-        for label, key in (("bank", "bank"), ("n", "n"), ("", "src"),
-                           ("♥", "fav")):
+        for label, key in (("bank", "bank"), ("n", "n"), ("", "src"), ("♥", "fav")):
             table.add_column(label, key=key)
         for bank_id in self._bank_ids:
             entry = banks.bank(bank_id)
             marked = len(self._favorite_keys(bank_id))
-            table.add_row(entry.label, str(entry.count),
-                          "" if entry.readable else "rom",
-                          # blank rather than "0": a column of zeroes is
-                          # noise, and the eye wants the few that differ
-                          str(marked) if marked else "", key=bank_id)
+            table.add_row(
+                entry.label,
+                str(entry.count),
+                "" if entry.readable else "rom",
+                # blank rather than "0": a column of zeroes is
+                # noise, and the eye wants the few that differ
+                str(marked) if marked else "",
+                key=bank_id,
+            )
 
         slots = self.query_one("#slot-table", DataTable)
         # The favourite marker leads the row rather than trailing it: it is
         # a gutter mark the eye runs down, and gluing it to the name would
         # carry it into anything that sorts or searches.
-        for label, key in (("♥", "fav"), ("#", "num"), ("name", "name"),
-                           ("PC", "pc")):
+        for label, key in (("♥", "fav"), ("#", "num"), ("name", "name"), ("PC", "pc")):
             slots.add_column(label, key=key)
         self._fill(self._current_bank)
         table.focus()
         self.notify_status(
-            f"{len(self.catalog)} names from the catalog" if self.catalog
+            f"{len(self.catalog)} names from the catalog"
+            if self.catalog
             else "no catalog -- numbers only. Build one with "
-                 "tools/extract_catalog.py, or press r to read from the unit."
+            "tools/extract_catalog.py, or press r to read from the unit."
         )
 
     # --- filling ------------------------------------------------------------
@@ -292,7 +307,7 @@ class NanosynedApp(App):
             return set()
         return self.favorites.keys_for_bank(bank_id)
 
-    def _all_favourites(self) -> List[banks.Slot]:
+    def _all_favourites(self) -> list[banks.Slot]:
         """Every favourite in every bank, in bank order then number.
 
         Built from the slots rather than from the favourites rows, so a row
@@ -301,19 +316,18 @@ class NanosynedApp(App):
         """
         if self.favorites is None:
             return []
-        wanted = {}
+        wanted: dict[str, set[int]] = {}
         for favourite in self.favorites.all(order="bank"):
             wanted.setdefault(favourite.bank_id, set()).add(favourite.number)
-        out = []
+        out: list[banks.Slot] = []
         for bank_id in banks.bank_ids():
             numbers = wanted.get(bank_id)
             if not numbers:
                 continue
-            out.extend(e for e in banks.slots(bank_id)
-                       if e.program_change in numbers)
+            out.extend(e for e in banks.slots(bank_id) if e.program_change in numbers)
         return out
 
-    def _visible(self, bank_id: str) -> List[banks.Slot]:
+    def _visible(self, bank_id: str) -> list[banks.Slot]:
         if self.view_mode == VIEW_ALL_FAVOURITES:
             return self._all_favourites()
         entries = banks.slots(bank_id)
@@ -322,7 +336,6 @@ class NanosynedApp(App):
             entries = [e for e in entries if e.program_change in marked]
         return entries
 
-
     def _cursor_entry(self):
         """The row under the cursor, or None."""
         table = self.query_one("#slot-table", DataTable)
@@ -330,7 +343,6 @@ class NanosynedApp(App):
         if not self._current or row is None or row >= len(self._current):
             return None
         return self._current[row]
-
 
     # --- the send channel ---------------------------------------------------
 
@@ -343,20 +355,20 @@ class NanosynedApp(App):
         try:
             self.device.channel = channel
         except Exception:
-            self.notify_status("this device has no settable channel",
-                               refused=True)
+            self.notify_status("this device has no settable channel", refused=True)
             return
         self._remember_channel(channel)
         self.notify_status(f"sending on MIDI channel {channel + 1}")
 
     def _remember_channel(self, channel: int) -> None:
         """Save it for next time. Only OSError is swallowed."""
-        if getattr(self, "_config_path", None) is None:
+        path = self._config_path
+        if path is None:
             return
         from nano import config
 
         try:
-            config.save_channel(channel, self._config_path)
+            config.save_channel(channel, path)
         except OSError:
             pass
 
@@ -381,8 +393,8 @@ class NanosynedApp(App):
             self._set_channel(value - 1)
 
         self.push_screen(
-            PromptScreen("MIDI channel (1-16):", str(self._channel() + 1)),
-            apply)
+            PromptScreen("MIDI channel (1-16):", str(self._channel() + 1)), apply
+        )
 
     def action_toggle_favorite(self) -> None:
         """Mark or unmark the slot under the cursor. Sends no MIDI."""
@@ -409,7 +421,6 @@ class NanosynedApp(App):
         self.notify_status(f"{'favourited' if now else 'unfavourited'} {name}")
         self._refill_keeping_place()
 
-
     def _favourite_under_cursor(self):
         """The favourite row for the slot under the cursor, if there is one.
 
@@ -432,8 +443,7 @@ class NanosynedApp(App):
         if where is None:
             return
         if existing is None:
-            self.notify_status("not a favourite yet -- press f first",
-                               refused=True)
+            self.notify_status("not a favourite yet -- press f first", refused=True)
             return
 
         def apply(value):
@@ -443,16 +453,14 @@ class NanosynedApp(App):
             self._refill_keeping_place()
             self.notify_status("tags set")
 
-        self.push_screen(PromptScreen("Tags (comma separated):",
-                                  existing.tags), apply)
+        self.push_screen(PromptScreen("Tags (comma separated):", existing.tags), apply)
 
     def action_edit_note(self) -> None:
         where, existing = self._favourite_under_cursor()
         if where is None:
             return
         if existing is None:
-            self.notify_status("not a favourite yet -- press f first",
-                               refused=True)
+            self.notify_status("not a favourite yet -- press f first", refused=True)
             return
 
         def apply(value):
@@ -481,11 +489,12 @@ class NanosynedApp(App):
         if self.view_mode == VIEW_ALL:
             self.notify_status(VIEW_LABELS[self.view_mode])
         elif not shown:
-            where = ("this bank" if self.view_mode == VIEW_BANK_FAVOURITES
-                     else "any bank")
+            where = (
+                "this bank" if self.view_mode == VIEW_BANK_FAVOURITES else "any bank"
+            )
             self.notify_status(
-                f"{VIEW_LABELS[self.view_mode]} - nothing favourited in "
-                f"{where} yet")
+                f"{VIEW_LABELS[self.view_mode]} - nothing favourited in {where} yet"
+            )
         else:
             self.notify_status(f"{VIEW_LABELS[self.view_mode]} - {shown}")
 
@@ -505,21 +514,25 @@ class NanosynedApp(App):
         try:
             table.clear()
             for entry in self._current:
-                name = self.catalog.display_name(entry.bank_id,
-                                                 entry.program_change)
+                name = self.catalog.display_name(entry.bank_id, entry.program_change)
                 if self.catalog.differs(entry.bank_id, entry.program_change):
                     shown = f"[b]{name}[/b] [dim]*[/dim]"
-                elif self.catalog.is_live(entry.bank_id,
-                                          entry.program_change):
+                elif self.catalog.is_live(entry.bank_id, entry.program_change):
                     shown = f"[b]{name}[/b]"
                 else:
                     shown = name
-                here = (self._favorite_keys(entry.bank_id)
-                        if self.view_mode == VIEW_ALL_FAVOURITES else marked)
+                here = (
+                    self._favorite_keys(entry.bank_id)
+                    if self.view_mode == VIEW_ALL_FAVOURITES
+                    else marked
+                )
                 table.add_row(
                     "[b]♥[/b]" if entry.program_change in here else "",
-                    entry.display, shown, str(entry.program_change),
-                    key=entry.key)
+                    entry.display,
+                    shown,
+                    str(entry.program_change),
+                    key=entry.key,
+                )
         finally:
             self._filling = False
         self._detail(0)
@@ -531,14 +544,19 @@ class NanosynedApp(App):
         entry = self._current[row]
         name = self.catalog.display_name(entry.bank_id, entry.program_change)
         where = "front panel and MIDI" if entry.bank.front_panel else "MIDI only"
-        source = ("read from the unit"
-                  if self.catalog.is_live(entry.bank_id, entry.program_change)
-                  else ("ROM, from the catalog" if not entry.bank.readable
-                        else "not read yet"))
+        source = (
+            "read from the unit"
+            if self.catalog.is_live(entry.bank_id, entry.program_change)
+            else (
+                "ROM, from the catalog" if not entry.bank.readable else "not read yet"
+            )
+        )
         silent = ""
         if (entry.bank_id, entry.number) == banks.SILENT_PROGRAM:
-            silent = ("   [dim]this one is the hardwired silent program; "
-                      "selecting it mutes the channel[/dim]")
+            silent = (
+                "   [dim]this one is the hardwired silent program; "
+                "selecting it mutes the channel[/dim]"
+            )
         self.query_one("#detail", Static).update(
             f"[b]{entry.display}[/b]  {name}   [dim]{entry.category}[/dim]\n"
             f"Bank Select (CC0) [b]{entry.bank.select}[/b] · Program Change "
@@ -597,8 +615,7 @@ class NanosynedApp(App):
             with self._lock:
                 self.device.select(entry)
         except Exception as exc:
-            self.call_from_thread(
-                self.notify_status, f"select: {exc}", refused=True)
+            self.call_from_thread(self.notify_status, f"select: {exc}", refused=True)
             return
         finally:
             self._busy = False
@@ -606,7 +623,8 @@ class NanosynedApp(App):
             self.notify_status,
             f"selected {entry.display} — Bank Select {entry.bank.select} "
             f"then Program Change {entry.program_change} on channel "
-            f"{self.device.channel + 1}")
+            f"{self.device.channel + 1}",
+        )
 
     def action_read_names(self) -> None:
         if self._busy:
@@ -616,9 +634,11 @@ class NanosynedApp(App):
         if not entry.readable:
             self.notify_status(
                 f"{entry.label} is ROM and the protocol has no request for "
-                f"it; only the User bank can be read back", refused=True)
+                f"it; only the User bank can be read back",
+                refused=True,
+            )
             return
-        self._busy = True          # main thread; see action_select
+        self._busy = True  # main thread; see action_select
         self._read_worker(self._current_bank)
 
     @work(thread=True)
@@ -630,32 +650,32 @@ class NanosynedApp(App):
         79 kB of it, and nearly all of that is data this program does not
         use. The caller set ``_busy``; this clears it.
         """
+
         def progress(done, total):
             self.call_from_thread(
-                self.notify_status,
-                f"reading the User bank, {done}/{total} (silent)...")
+                self.notify_status, f"reading the User bank, {done}/{total} (silent)..."
+            )
 
         try:
             with self._lock:
                 names = self.device.read_program_names(on_progress=progress)
         except Exception as exc:
-            self.call_from_thread(
-                self.notify_status, f"read: {exc}", refused=True)
+            self.call_from_thread(self.notify_status, f"read: {exc}", refused=True)
             return
         finally:
             self._busy = False
         self.call_from_thread(self._adopt, bank_id, names)
 
-    def _adopt(self, bank_id: str, names: Dict[int, str]) -> None:
+    def _adopt(self, bank_id: str, names: dict[int, str]) -> None:
         for program_change, name in names.items():
             self.catalog.set_live_name(bank_id, program_change, name)
-        differing = sum(1 for pc in names
-                        if self.catalog.differs(bank_id, pc))
+        differing = sum(1 for pc in names if self.catalog.differs(bank_id, pc))
         if bank_id == self._current_bank:
             self._fill(bank_id)
         self.notify_status(
             f"read {len(names)} names from {bank_id}"
-            + (f"; {differing} differ from the catalog" if differing else ""))
+            + (f"; {differing} differ from the catalog" if differing else "")
+        )
 
     def action_search(self) -> None:
         def done(text) -> None:
@@ -672,8 +692,9 @@ class NanosynedApp(App):
                 except LookupError:
                     continue
                 shown = name.rstrip() + (" *" if differs else "")
-                lines.append(f"{entry.display:<6} {shown:<12} "
-                             f"PC {entry.program_change:>3}")
+                lines.append(
+                    f"{entry.display:<6} {shown:<12} PC {entry.program_change:>3}"
+                )
             if len(hits) > 400:
                 lines.append(f"... and {len(hits) - 400} more")
             self.push_screen(ReportScreen("Search", "\n".join(lines)))
@@ -690,8 +711,7 @@ class NanosynedApp(App):
             with self._lock:
                 fields = self.device.identify()
         except Exception as exc:
-            self.call_from_thread(
-                self.notify_status, f"device: {exc}", refused=True)
+            self.call_from_thread(self.notify_status, f"device: {exc}", refused=True)
             return
         self.call_from_thread(self._show_info, fields)
 
@@ -700,17 +720,21 @@ class NanosynedApp(App):
         if fields and fields.get("is_alesis"):
             import nano.messages as msg
 
-            lines.append("manufacturer    "
-                         + ".".join(f"{b:02X}" for b in msg.ALESIS_ID)
-                         + "  (Alesis, extended ID)")
-            lines.append(f"family          {fields['family'][0]:#04x}"
-                         + ("  (QS)" if fields.get("is_qs_family") else ""))
+            lines.append(
+                "manufacturer    "
+                + ".".join(f"{b:02X}" for b in msg.ALESIS_ID)
+                + "  (Alesis, extended ID)"
+            )
+            lines.append(
+                f"family          {fields['family'][0]:#04x}"
+                + ("  (QS)" if fields.get("is_qs_family") else "")
+            )
             member = fields.get("member")
             if member is not None:
                 lines.append(
                     f"member          {member[0]:#04x}"
-                    + ("  (NanoSynth)"
-                       if member[0] == msg.NANOSYNTH_MEMBER else ""))
+                    + ("  (NanoSynth)" if member[0] == msg.NANOSYNTH_MEMBER else "")
+                )
             if fields.get("version"):
                 lines.append(f"software        {fields['version']}")
             lines.append("")
@@ -730,12 +754,18 @@ class NanosynedApp(App):
             lines.append("Other instruments on the chain may have answered;")
             lines.append("this reports only the one it is looking for.")
         lines.append("")
-        lines.append(f"catalog         {len(self.catalog)} names"
-                     + (f" from {self.catalog.source}"
-                        if self.catalog.source else ""))
-        lines.append(f"favourites      "
-                     + (f"{len(self.favorites)}"
-                        if self.favorites is not None else "(none open)"))
+        lines.append(
+            f"catalog         {len(self.catalog)} names"
+            + (f" from {self.catalog.source}" if self.catalog.source else "")
+        )
+        lines.append(
+            "favourites      "
+            + (
+                f"{len(self.favorites)}"
+                if self.favorites is not None
+                else "(none open)"
+            )
+        )
         self.push_screen(ReportScreen("Device", "\n".join(lines)))
 
     def action_help(self) -> None:
@@ -780,24 +810,29 @@ Keys
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="nanosyned",
-        description="Browse an Alesis NanoSynth's sounds.")
+        prog="nanosyned", description="Browse an Alesis NanoSynth's sounds."
+    )
     parser.add_argument("--port")
     parser.add_argument("--recv-port")
-    parser.add_argument("--demo", action="store_true",
-                        help="built-in demo device; opens no MIDI ports")
-    parser.add_argument("--midi-channel", type=int, default=None,
-                        help="the unit's global channel, 1-16")
+    parser.add_argument(
+        "--demo", action="store_true", help="built-in demo device; opens no MIDI ports"
+    )
+    parser.add_argument(
+        "--midi-channel", type=int, default=None, help="the unit's global channel, 1-16"
+    )
     parser.add_argument("--catalog", default=None)
-    parser.add_argument("--config", default=None,
-                        help="settings cache (default: ./config.toml)")
-    parser.add_argument("--favorites", default=None,
-                        help="favourites database (default: "
-                             "the per-platform data directory)")
+    parser.add_argument(
+        "--config", default=None, help="settings cache (default: ./config.toml)"
+    )
+    parser.add_argument(
+        "--favorites",
+        default=None,
+        help="favourites database (default: the per-platform data directory)",
+    )
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     from nano import config as cfg
 
@@ -805,6 +840,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.midi_channel is not None and not 1 <= args.midi_channel <= 16:
         sys.exit("error: --midi-channel is 1-16")
 
+    #: DemoDevice and NanoBridge are structurally interchangeable -- the
+    #: demo mirrors the bridge's interface without inheriting from it -- so
+    #: the local is deliberately untyped rather than forced into a Protocol.
+    device: Any
     if args.demo:
         from nanosyned.demo import DemoDevice
 
@@ -819,14 +858,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             if args.port:
                 device = b.NanoBridge.open(
-                    args.port, recv_port=args.recv_port,
-                    channel=((args.midi_channel - 1) if args.midi_channel
-                             else (remembered if remembered is not None
-                                   else 0)))
+                    args.port,
+                    recv_port=args.recv_port,
+                    channel=(
+                        (args.midi_channel - 1)
+                        if args.midi_channel
+                        else (remembered if remembered is not None else 0)
+                    ),
+                )
             else:
                 device = b.NanoBridge.autodetect(
-                    on_try=lambda n: print(f"  probing {n}...",
-                                           file=sys.stderr))
+                    on_try=lambda n: print(f"  probing {n}...", file=sys.stderr)
+                )
         except Exception as exc:
             sys.exit(f"error: {exc}")
 
@@ -846,9 +889,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         # right refusal, and sqlite3 raises on a file that is not a database
         # at all. Every other startup failure here leaves by sys.exit; these
         # two used to print a traceback.
-        raise SystemExit(f"error: {exc}")
-    app = NanosynedApp(device, catalog=cat.load(args.catalog),
-                   favorites=store, config_path=config_path)
+        raise SystemExit(f"error: {exc}") from None
+    app = NanosynedApp(
+        device, catalog=cat.load(args.catalog), favorites=store, config_path=config_path
+    )
     try:
         app.run()
     finally:
