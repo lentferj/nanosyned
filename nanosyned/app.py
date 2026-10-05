@@ -62,6 +62,9 @@ from textual.widgets import DataTable, Header, Input, Label, Static
 
 from nano import banks
 from nano import catalog as cat
+from vinsynlib.cli import add_common_arguments, make_parser, validate_common
+from vinsynlib.keys import wrap_blocks as _wrap_blocks
+from vinsynlib.ui.hints import KeyHints
 
 __all__ = ["KEY_HINTS", "NanosynedApp", "build_parser", "main", "wrap_blocks"]
 
@@ -100,39 +103,11 @@ KEY_HINTS = (
 def wrap_blocks(blocks, width: int, sep: str = _SEP) -> str:
     """Pack hints into lines no wider than ``width``.
 
-    Ported from the siblings. Breaks happen only between blocks, so a hint
-    is never split mid-label. The point is that the legend wraps instead of
-    truncating: a footer that silently drops its last keys teaches the user
-    those keys do not exist.
+    Re-exported from :func:`vinsynlib.keys.wrap_blocks`, which every tool
+    in this family now uses. Kept as a name because it is part of this
+    module's published surface.
     """
-    lines, current = [], ""
-    for block in blocks:
-        candidate = block if not current else current + sep + block
-        if width and len(candidate) > width and current:
-            lines.append(current)
-            current = block
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-    return "\n".join(lines)
-
-
-class KeyHints(Static):
-    """The legend, wrapped to the window rather than truncated."""
-
-    DEFAULT_CSS = "KeyHints { height: auto; background: $panel; padding: 0 1; }"
-
-    def on_mount(self) -> None:
-        self._render_hints()
-
-    def on_resize(self) -> None:
-        self._render_hints()
-
-    def _render_hints(self) -> None:
-        # NOT named _render: Widget._render is Textual's own, and shadowing
-        # it makes every layout pass ask a None for its height.
-        self.update(wrap_blocks(KEY_HINTS, max(self.size.width - 2, 20)))
+    return _wrap_blocks(blocks, width, sep)
 
 
 class ReportScreen(ModalScreen[None]):
@@ -265,7 +240,10 @@ class NanosynedApp(App):
             yield DataTable(id="slot-table", cursor_type="row")
         yield Static("", id="detail")
         yield Static("", id="status")
-        yield KeyHints()
+        # KEY_HINTS passed explicitly: the shared widget defaults to the
+        # canonical family legend, and this tool's own hints are its
+        # business, not the library's.
+        yield KeyHints(KEY_HINTS)
 
     def on_mount(self) -> None:
         self.title = "nanosyned"
@@ -809,25 +787,24 @@ Keys
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="nanosyned", description="Browse an Alesis NanoSynth's sounds."
-    )
-    parser.add_argument("--port")
-    parser.add_argument("--recv-port")
-    parser.add_argument(
-        "--demo", action="store_true", help="built-in demo device; opens no MIDI ports"
-    )
-    parser.add_argument(
-        "--midi-channel", type=int, default=None, help="the unit's global channel, 1-16"
-    )
-    parser.add_argument("--catalog", default=None)
-    parser.add_argument(
-        "--config", default=None, help="settings cache (default: ./config.toml)"
-    )
-    parser.add_argument(
-        "--favorites",
-        default=None,
-        help="favourites database (default: the per-platform data directory)",
+    parser = make_parser("nanosyned", "Browse an Alesis NanoSynth's sounds.")
+    # Every flag's help text is the family's, from vinsynlib.spec. This tool
+    # used to word four of them its own way, which is how the same option
+    # came to read one way in one program and another in the other eight.
+    #
+    # --midi-channel is the family's older spelling of --device-channel and
+    # is still accepted: the NanoSynth's own base channel is a different
+    # number from the channel a program change is sent on, and the old name
+    # is on nine command lines already.
+    add_common_arguments(
+        parser,
+        port=True,
+        recv_port=True,
+        device_channel=True,
+        catalog=True,
+        config=True,
+        favorites=True,
+        scan=False,
     )
     return parser
 
@@ -837,8 +814,10 @@ def main(argv: list[str] | None = None) -> int:
     from nano import config as cfg
 
     config_path = getattr(args, "config", None) or cfg.DEFAULT_PATH
-    if args.midi_channel is not None and not 1 <= args.midi_channel <= 16:
-        sys.exit("error: --midi-channel is 1-16")
+    # The family's range checks, before anything is opened: a mistyped
+    # channel costs a message rather than a wrong program change sent to a
+    # real instrument.
+    validate_common(args)
 
     #: DemoDevice and NanoBridge are structurally interchangeable -- the
     #: demo mirrors the bridge's interface without inheriting from it -- so
@@ -861,8 +840,8 @@ def main(argv: list[str] | None = None) -> int:
                     args.port,
                     recv_port=args.recv_port,
                     channel=(
-                        (args.midi_channel - 1)
-                        if args.midi_channel
+                        (args.device_channel - 1)
+                        if args.device_channel is not None
                         else (remembered if remembered is not None else 0)
                     ),
                 )

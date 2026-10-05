@@ -54,12 +54,20 @@ audit: audit-vulns audit-deadcode audit-deps audit-secrets
 # Audits what this project declares, not whatever happens to be installed in
 # the ambient environment. Auditing the venv would report CVEs in unrelated
 # system packages and drown the project's own dependencies in noise.
+#
+# vinsynlib is filtered out of the list handed to pip-audit: it is a
+# sibling checkout rather than a package on an index (see [tool.uv.sources]
+# in pyproject.toml), so pip cannot resolve it and pip-audit would fail
+# resolving rather than auditing anything. It is this project's own source
+# that has already been reviewed in this repository, and it carries no
+# third-party dependencies of its own at this layer.
 audit-vulns:
 	@echo "== pip-audit: runtime dependencies (from pyproject.toml) =="
 	@$(PY) -c "import pathlib, tomllib; \
 	    data = tomllib.load(open('pyproject.toml', 'rb')); \
 	    pathlib.Path('.audit-runtime-req.txt').write_text(\
-	        ''.join(r + chr(10) for r in data['project']['dependencies']))"
+	        ''.join(r + chr(10) for r in data['project']['dependencies'] \
+	        if not r.startswith('vinsynlib')))"
 	$(PY) -m pip_audit --progress-spinner=off -r .audit-runtime-req.txt
 	@rm -f .audit-runtime-req.txt
 	@echo "== pip-audit: development tooling (requirements-dev.txt) =="

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A terminal browser for the Alesis NanoSynth"
 requires-python = ">=3.11"
 license = { text = "GPL-2.0-or-later" }
-dependencies = ["textual>=0.40", "python-rtmidi>=1.4"]
+dependencies = ["textual>=0.40", "python-rtmidi>=1.4", "vinsynlib"]
 
 [project.scripts]
 nanosyned = "nanosyned.app:main"
@@ -16,6 +16,14 @@ nanocli = "nanosyned.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["nano*", "nanosyned*"]
+
+# vinsynlib is not on PyPI. It is the shared base of this family of
+# terminal instrument browsers and lives in a sibling checkout, so it is
+# installed from the working tree rather than from an index. Editable,
+# because a change to the library is a change here and should not need
+# a reinstall to see.
+[tool.uv.sources]
+vinsynlib = { path = "../vinsynlib", editable = true }
 
 # --- pytest and coverage ----------------------------------------------------
 [tool.pytest.ini_options]
@@ -83,7 +91,10 @@ ignore = [
 max-complexity = 10
 
 [tool.ruff.lint.isort]
-known-first-party = ["nano", "nanosyned"]
+# vinsynlib is a sibling checkout, not a published package, so ruff cannot
+# tell it from third-party. Saying so keeps this project's own imports in
+# one block instead of splitting the family's code away from them.
+known-first-party = ["nano", "nanosyned", "vinsynlib"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests are allowed to assert; application code is not. All S101 hits in the

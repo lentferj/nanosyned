@@ -17,23 +17,21 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.4.0
+  # A local hook, not mirrors-mypy. That one runs mypy in an isolated
+  # virtualenv built from `additional_dependencies`, and vinsynlib cannot be
+  # named there: it is a sibling checkout, not a package on an index. In an
+  # environment without it every `from vinsynlib...` came back
+  # import-not-found, which is a check that reports the imports rather than
+  # the code. Running the project's own .venv is both correct and the same
+  # interpreter `make typecheck` uses.
+  - repo: local
     hooks:
       - id: mypy
-        files: ^(nano|nanosyned|tools)/
-        # mypy needs the project's own config; without this it re-discovers
-        # targets per-file and the per-module overrides in pyproject.toml are
-        # not applied the same way.
-        args: [--config-file=pyproject.toml]
-        additional_dependencies:
-          # The hook runs in its own isolated environment, so the project's
-          # runtime dependencies have to be named here or every third-party
-          # import becomes import-not-found. python-rtmidi ships no stubs,
-          # which is why pyproject.toml carries an override for it; textual
-          # ships py.typed and needs no such thing.
-          - textual==8.2.8
-          - python-rtmidi==1.5.8
+        name: mypy
+        entry: .venv/bin/python -m mypy
+        language: system
+        types: [python]
+        pass_filenames: false
 
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0

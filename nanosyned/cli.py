@@ -30,6 +30,13 @@ from nano import banks, config, dumps
 from nano import catalog as cat
 from nano import messages as m
 from nano import records as rec
+from vinsynlib.cli import (
+    add_common_arguments,
+    channel_of,
+    make_parser,
+    validate_common,
+)
+from vinsynlib.midi import list_ports, render_ports
 
 __all__ = ["build_parser", "main"]
 
@@ -64,19 +71,23 @@ def _catalog(args) -> cat.Catalog:
 
 def _cmd_ports(_device, _args) -> None:
     """List MIDI ports. Opens nothing."""
-    from nano import bridge as b
-
-    ins, outs = b.list_ports()
-    print("inputs:")
-    for name in ins:
-        print(f"  {name}")
-    print("\noutputs:")
-    for name in outs:
-        print(f"  {name}")
+    # The listing itself is the family's (vinsynlib.midi.render_ports), so
+    # that `ports` looks the same in all nine tools: inputs, then outputs,
+    # two spaces of indent, and a bracketed mark on any port that can
+    # answer. This unit is never named by rtmidi, so no hint is passed and
+    # the mark simply does not appear -- the listing never claims a
+    # judgement it cannot make.
+    ins, outs = list_ports()
     print(
-        "\nThis unit may not be named on any of them: it has no USB of "
-        "its own\nand answers through whatever interface it is cabled "
-        "behind."
+        render_ports(
+            ins,
+            outs,
+            note=(
+                "This unit may not be named on any of them: it has no USB of "
+                "its own\nand answers through whatever interface it is cabled "
+                "behind."
+            ),
+        )
     )
 
 
@@ -269,27 +280,22 @@ OFFLINE = {"ports", "banks", "list", "syx", "find"}
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="nanocli",
-        description="Browse an Alesis NanoSynth. Everything is read-only "
-        "except `select`.",
+    parser = make_parser(
+        "nanocli",
+        "Browse an Alesis NanoSynth. Everything is read-only except `select`.",
     )
-    parser.add_argument("--port", help="MIDI output port name")
-    parser.add_argument("--recv-port", help="MIDI input port, if different")
-    parser.add_argument(
-        "--channel", type=int, help="MIDI channel 1-16 (default: remembered, or 1)"
-    )
-    parser.add_argument("--catalog", help="path to a generated catalog")
-    parser.add_argument("--config", help="path to the config file")
-    parser.add_argument(
-        "--demo",
-        action="store_true",
-        help="a NanoSynth that is not there; opens no port",
-    )
-    parser.add_argument(
-        "--yes",
-        action="store_true",
-        help="do not ask before an action that makes sound",
+    # Every flag's help text is the family's, from vinsynlib.spec. This tool
+    # used to word four of them its own way, which is how the same option
+    # came to read one way in one program and another in the other eight.
+    add_common_arguments(
+        parser,
+        port=True,
+        recv_port=True,
+        channel=True,
+        catalog=True,
+        config=True,
+        demo=True,
+        yes=True,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -330,13 +336,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config_path = getattr(args, "config", None) or config.DEFAULT_PATH
 
-    if args.channel is not None and not 1 <= args.channel <= 16:
-        raise SystemExit("error: --channel is 1-16")
-    channel = (
-        (args.channel - 1)
-        if args.channel is not None
-        else (config.load_channel(config_path) or 0)
-    )
+    # The family's range checks, before anything is opened.
+    validate_common(args)
+    # channel_of subtracts one: --channel is 1-16 on every command line in
+    # this family and 0-15 on the wire.
+    channel = channel_of(args, default=config.load_channel(config_path)) or 0
 
     #: DemoDevice and NanoBridge are structurally interchangeable; the
     #: local is untyped for the same reason as in nanosyned.app.main.

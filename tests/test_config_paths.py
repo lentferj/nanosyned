@@ -26,23 +26,38 @@ Being gitignored is what makes this worth a test rather than a habit: the
 file never appears in ``git status``, so the only evidence is somebody
 noticing it sitting next to the source. One was, dated during a test run.
 The sibling rxved had the same shape of bug with backup files and fixed it
-in ``1f5aa3a``; p2ked, kwsed and nanosyned all carried the same copied line.
+in ``1f5aa3a``; p2ked, kwsed and nanosyned all carried the same copied
+line.
+
+The checks below were this file's own AST walk, copied into each project
+in the family. They are now one call into :mod:`vinsynlib.devchecks`.
 """
 
 import ast
 import os
 
+from vinsynlib import devchecks
 
-def _test_sources():
+
+def test_every_config_save_in_the_suite_names_its_file() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
-    for name in sorted(os.listdir(here)):
-        if name.startswith("test_") and name.endswith(".py"):
-            with open(os.path.join(here, name), encoding="utf-8") as handle:
-                yield name, ast.parse(handle.read())
+    offenders = devchecks.config_saves_without_path(here)
+    assert not offenders, (
+        f"{offenders} save to config.DEFAULT_PATH, which is relative to the "
+        f"working directory. Pass a tmp_path."
+    )
 
 
-def _config_saves():
-    for name, tree in _test_sources():
+def test_the_check_has_something_to_check() -> None:
+    """Guard against the search passing because it matched nothing.
+
+    Counts every ``config.save_*`` in the suite, offending or not:
+    :func:`devchecks.config_saves_without_path` returns only the offenders,
+    so "none" from it means nothing at all on its own.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    saves = 0
+    for _name, tree in devchecks.iter_test_sources(here):
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Call)
@@ -51,21 +66,21 @@ def _config_saves():
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == "config"
             ):
-                yield name, node
+                saves += 1
+    assert saves, "no config.save_* calls found; the check is vacuous"
 
 
-def test_every_config_save_in_the_suite_names_its_file():
+def test_this_project_imports_no_sibling() -> None:
+    """A sibling project's package is not installed beside this one."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
     offenders = []
-    for name, node in _config_saves():
-        # the path is either the last positional argument or path=
-        if not (len(node.args) >= 2 or any(kw.arg == "path" for kw in node.keywords)):
-            offenders.append(f"{name}:{node.lineno} {node.func.attr}")
-    assert not offenders, (
-        f"{offenders} save to config.DEFAULT_PATH, which is relative to the "
-        f"working directory. Pass a tmp_path."
-    )
-
-
-def test_the_check_has_something_to_check():
-    """Guard against the search passing because it matched nothing."""
-    assert list(_config_saves()), "no config.save_* calls found; the check is vacuous"
+    for pkg in ("nanosyned", "nano"):
+        d = os.path.join(root, pkg)
+        for name in os.listdir(d):
+            if name.endswith(".py"):
+                offenders += devchecks.foreign_imports(
+                    os.path.join(d, name),
+                    own=("nanosyned", "nano", "vinsynlib"),
+                )
+    assert not offenders, offenders
