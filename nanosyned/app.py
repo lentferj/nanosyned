@@ -799,12 +799,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_arguments(
         parser,
         port=True,
+        scan=True,
         recv_port=True,
         device_channel=True,
         catalog=True,
         config=True,
         favorites=True,
-        scan=False,
     )
     return parser
 
@@ -846,14 +846,26 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 )
             else:
-                device = b.NanoBridge.autodetect(
-                    on_try=lambda n: print(f"  probing {n}...", file=sys.stderr)
+                # One Global Dump Request to the remembered port; the sweep
+                # only when there is nothing remembered, when the
+                # remembered port no longer answers, or on --scan.
+                device = b.NanoBridge.connect(
+                    config_path=config_path,
+                    channel=(
+                        (args.device_channel - 1)
+                        if args.device_channel is not None
+                        else (remembered if remembered is not None else 0)
+                    ),
+                    scan=args.scan,
+                    on_try=lambda n: print(f"  probing {n}...", file=sys.stderr),
                 )
         except Exception as exc:
             sys.exit(f"error: {exc}")
 
-        # Remember whatever channel is actually in use -- which after an
-        # autodetect is the one the unit reported, not the one asked for.
+        # Remember whatever channel is actually in use -- which after a
+        # sweep is the one the unit reported, not the one asked for. The
+        # port pair is saved by `connect` itself, and only after a sweep: the
+        # fast path must not rewrite the file it was asked to trust.
         try:
             cfg.save_channel(getattr(device, "channel", 0), config_path)
         except OSError:

@@ -290,6 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_arguments(
         parser,
         port=True,
+        scan=True,
         recv_port=True,
         channel=True,
         catalog=True,
@@ -359,34 +360,22 @@ def main(argv: list[str] | None = None) -> int:
                         args.port, recv_port=args.recv_port, channel=channel
                     )
                 else:
-                    remembered = config.load_last_port(config_path)
-                    device = None
-                    if remembered:
-                        try:
-                            device = b.NanoBridge.open(
-                                remembered,
-                                recv_port=config.load_last_recv_port(config_path)
-                                if hasattr(config, "load_last_recv_port")
-                                else None,
-                                channel=channel,
-                            )
-                            device.request(
-                                m.global_dump_request(),
-                                m.Function.GLOBAL_DUMP,
-                                number=0,
-                                timeout=b.PROBE_TIMEOUT,
-                            )
-                        except Exception:
-                            if device is not None:
-                                device.close()
-                            device = None
-                    if device is None:
-                        device = b.NanoBridge.autodetect(
-                            on_try=lambda n: print(f"  probing {n}...", file=sys.stderr)
-                        )
+                    # One Global Dump Request to the remembered port; the
+                    # sweep only when there is nothing remembered, when the
+                    # remembered port no longer answers, or on --scan. The
+                    # inline remembered-port try/except this replaces fell
+                    # back to the sweep silently, which is how a launch that
+                    # had lost its port looked exactly like a fast one.
+                    device = b.NanoBridge.connect(
+                        config_path=config_path,
+                        channel=channel,
+                        scan=args.scan,
+                        on_try=lambda n: print(f"  probing {n}...", file=sys.stderr),
+                    )
                 try:
-                    if getattr(device, "port", None):
-                        config.save_last_port(device.port, config_path)
+                    port = getattr(device, "port", None)
+                    if port:
+                        config.save_last_port(port, config_path)
                 except OSError:
                     pass
             except Exception as exc:
