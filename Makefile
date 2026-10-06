@@ -91,8 +91,19 @@ audit-secrets:
 	$(BIN)/detect-secrets-hook --baseline .secrets.baseline $(PYFILES) \
 		Makefile README.md pyproject.toml requirements-dev.txt  # pragma: allowlist secret
 
-venv:
+.PHONY: _need-vinsynlib
+# vinsynlib is the shared base of this family and is not on an index, so it
+# has to be a sibling checkout. Say that plainly rather than letting pip fail
+# on a path that is not there.
+_need-vinsynlib:
+	@test -d ../vinsynlib || { \
+		echo "vinsynlib is not beside this checkout. Get it first:"; \
+		echo "    git clone https://github.com/lentferj/vinsynlib.git ../vinsynlib"; \
+		exit 1; }
+
+venv: _need-vinsynlib
 	python3 -m venv --system-site-packages .venv
 	$(PY) -m pip install --upgrade pip
+	$(PY) -m pip install --no-deps -e ../vinsynlib
 	$(PY) -m pip install -e . -r requirements-dev.txt
 	$(BIN)/pre-commit install

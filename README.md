@@ -50,6 +50,29 @@ the instrument, and the browser marks which is which.
 **Bank Select is Controller 0.** The unit ignores Controller 32, which
 many sequencers send instead.
 
+## Install
+
+Two checkouts, side by side — this project and the shared library it uses:
+
+```sh
+git clone https://github.com/lentferj/vinsynlib.git ../vinsynlib
+python3 -m venv .venv
+.venv/bin/pip install --no-deps -e ../vinsynlib
+.venv/bin/pip install -e .
+```
+
+Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** — the
+shared base of this family of terminal instrument tools: the settings cache,
+the keymap and legend, the command line and the port listing. It is **not on
+PyPI**, so it is installed from the sibling checkout above, and installed
+*first* so that the second command finds the requirement already satisfied.
+
+`--no-deps` on the first install because vinsynlib's dependencies are this
+project's too, and a second copy of `textual` in the same venv is a version
+skew to diagnose somewhere else. With `uv`, `uv sync` takes the path from
+`[tool.uv.sources]` in `pyproject.toml`, so the checkout only has to exist
+and neither `pip` line is needed.
+
 ## Running it
 
 ```
