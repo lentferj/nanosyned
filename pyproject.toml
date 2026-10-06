@@ -11,8 +11,8 @@ license = { text = "GPL-2.0-or-later" }
 dependencies = ["textual>=0.40", "python-rtmidi>=1.4", "vinsynlib"]
 
 [project.scripts]
-nanosyned = "nanosyned.app:main"
-nanocli = "nanosyned.cli:main"
+nanosyned = "nanosyned.entry:app"
+nanocli = "nanosyned.entry:cli"
 
 [tool.setuptools.packages.find]
 include = ["nano*", "nanosyned*"]
