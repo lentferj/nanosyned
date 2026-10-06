@@ -283,6 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = make_parser(
         "nanocli",
         "Browse an Alesis NanoSynth. Everything is read-only except `select`.",
+        distribution="nanosyned",
     )
     # Every flag's help text is the family's, from vinsynlib.spec. This tool
     # used to word four of them its own way, which is how the same option
