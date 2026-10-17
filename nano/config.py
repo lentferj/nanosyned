@@ -33,24 +33,36 @@ What is added here is the name. One string decides what the one warning
 message says, and it has to be right: several of these programs can be
 open in one session, and a user who is told a file could not be parsed has
 to be able to tell which one is unhappy.
+
+The ui-state wrappers are the 0.4.0 API, and :data:`UNSET` forwards "not
+given" rather than a value: a caller that omits *default* gets the
+library's sentinel back, so the caller can tell "no preference remembered"
+apart from any value a preference could hold.
 """
 
 from __future__ import annotations
 
-from vinsynlib.config import DEFAULT_PATH, Settings
+from vinsynlib.config import DEFAULT_PATH, UNSET, Settings
 
 __all__ = [
     "DEFAULT_PATH",
+    "UNSET",
     "load_channel",
     "load_device_id",
     "load_last_port",
     "load_last_recv_port",
     "load_port_pair",
+    "load_ui_bool",
+    "load_ui_int",
+    "load_ui_state",
+    "load_ui_str",
+    "read_ui_state",
     "save_channel",
     "save_device_id",
     "save_last_port",
     "save_last_recv_port",
     "save_ports",
+    "save_ui_state",
 ]
 
 _settings = Settings("nanosyned", DEFAULT_PATH)
@@ -68,6 +80,13 @@ save_device_id = _settings.save_device_id
 #: Both ports at once, in one write. What the connection policy saves after a
 #: sweep: a half-written pair is a pair where the second half is lost.
 save_ports = _settings.save_ports
+#: UI-state wrappers, the 0.4.0 API: key, value, path last where asked.
+load_ui_state = _settings.load_ui_state
+load_ui_int = _settings.load_ui_int
+load_ui_bool = _settings.load_ui_bool
+load_ui_str = _settings.load_ui_str
+read_ui_state = _settings.read_ui_state
+save_ui_state = _settings.save_ui_state
 
 
 def load_port_pair(path: str | None = None) -> tuple[str, str] | None:

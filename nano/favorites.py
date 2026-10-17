@@ -32,9 +32,12 @@ from __future__ import annotations
 from typing import Any
 
 from vinsynlib import favorites as _favorites
+
+#: The family's single implementation of what a rating looks like.
 from vinsynlib.favorites import (
     SCHEMA_VERSION,
     Favorite,
+    rating_cell,
 )
 
 __all__ = [
@@ -45,6 +48,7 @@ __all__ = [
     "Favorites",
     "data_dir",
     "default_path",
+    "rating_cell",
 ]
 
 APP_NAME = "nanosyned"

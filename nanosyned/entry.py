@@ -35,13 +35,15 @@ import sys
 
 #: The minimum that has the API this project was written against.
 #:
-#: ``0.2.0`` is the version that added ``midi.open_remembered_or_swept``'s
-#: ``on_fallback`` hook, the per-file ownership guard in the settings cache,
-#: and the ``__version__`` whose absence used to be undetectable.
-MINIMUM = (0, 2, 0)
+#: ``0.4.2`` is the version whose API this project is written against — the
+#: shared ``ui.report``/``ui.prompt``/``ui.confirm``/``ui.modals`` widgets,
+#: ``ui.work`` (BusyGate/close_when_idle), ``undo``, ``backup``, ``build``,
+#: ``livenames``, ``render``, the full settings API including ui-state, and the
+#: ``catalog`` key grammar.
+MINIMUM = (0, 4, 2)
 
-#: Where to get it; on PyPI since 0.2.0.
-SOURCE = "vinsynlib>=0.2.0"
+#: Where to get it; on PyPI since 0.4.2.
+SOURCE = "vinsynlib>=0.4.2"
 
 
 def _release_parts(version: str, width: int) -> tuple[int, ...] | None:

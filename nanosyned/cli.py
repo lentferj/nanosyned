@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Sequence
 from typing import Any
 
 from nano import banks, config, dumps
@@ -37,29 +36,9 @@ from vinsynlib.cli import (
     validate_common,
 )
 from vinsynlib.midi import list_ports, render_ports
+from vinsynlib.render import progress, table
 
 __all__ = ["build_parser", "main"]
-
-
-def _table(rows: Sequence[Sequence[str]], headers: Sequence[str]) -> str:
-    if not rows:
-        return "(nothing)"
-    widths = [
-        max(len(str(r[i])) for r in (*rows, headers)) for i in range(len(headers))
-    ]
-    out = [
-        "  ".join(
-            str(h).ljust(w) for h, w in zip(headers, widths, strict=True)
-        ).rstrip(),
-        "  ".join("-" * w for w in widths),
-    ]
-    for row in rows:
-        out.append(
-            "  ".join(
-                str(c).ljust(w) for c, w in zip(row, widths, strict=True)
-            ).rstrip()
-        )
-    return "\n".join(out)
 
 
 def _catalog(args) -> cat.Catalog:
@@ -105,7 +84,7 @@ def _cmd_banks(_device, _args) -> None:
                 str(entry.count),
             ]
         )
-    print(_table(rows, ["id", "name", "CC0", "readable", "panel", "count"]))
+    print(table(["id", "name", "CC0", "readable", "panel", "count"], rows))
     print(
         f"\n{banks.TOTAL_PROGRAMS} programs. Only the User bank can be "
         f"read back:\nthe rest are ROM and the protocol has no request "
@@ -128,7 +107,7 @@ def _cmd_list(_device, args) -> None:
             ]
         )
     print(f"{entry.label} — {entry.count} programs\n")
-    print(_table(rows, ["#", "name", "category"]))
+    print(table(["#", "name", "category"], rows))
 
 
 def _cmd_status(device, _args) -> None:
@@ -171,11 +150,15 @@ def _cmd_current(device, _args) -> None:
 def _cmd_read(device, args) -> None:
     """Read the User bank's names off the unit. Silent, makes no sound."""
 
-    def progress(done, total):
+    def _progress(done, total):
         if done % 16 == 0 or done == total:
-            print(f"  {done}/{total}", file=sys.stderr)
+            print(
+                progress("reading the User bank", done, total),
+                end="",
+                file=sys.stderr,
+            )
 
-    names = device.read_program_names(on_progress=progress)
+    names = device.read_program_names(on_progress=_progress)
     catalog = _catalog(args)
     rows = []
     for number, name in sorted(names.items()):
@@ -183,9 +166,10 @@ def _cmd_read(device, args) -> None:
         mark = "*" if printed and printed.strip() != name.strip() else ""
         rows.append([f"{number:03d}", name.rstrip(), printed, mark])
     print(f"\nUser bank — {len(names)} of {banks.PROGRAMS_PER_BANK} answered\n")
-    print(_table(rows, ["#", "on the unit", "in the catalog", ""]))
+    print(table(["#", "on the unit", "in the catalog", ""], rows, empty="(nothing)"))
     if any(r[3] for r in rows):
         print("\n* the unit and the catalog disagree about this slot")
+    print(file=sys.stderr)
 
 
 def _cmd_mixes(device, _args) -> None:
@@ -194,14 +178,18 @@ def _cmd_mixes(device, _args) -> None:
     The manual does not mention mixes at all. The unit has 100 of them.
     """
 
-    def progress(done, total):
+    def _progress(done, total):
         if done % 20 == 0 or done == total:
-            print(f"  {done}/{total}", file=sys.stderr)
+            print(
+                progress("reading the mixes", done, total),
+                end="",
+                file=sys.stderr,
+            )
 
-    names = device.read_mix_names(on_progress=progress)
+    names = device.read_mix_names(on_progress=_progress)
     rows = [[f"{n:02d}", name.rstrip()] for n, name in sorted(names.items())]
     print(f"\n{len(names)} mix(es)\n")
-    print(_table(rows, ["#", "name"]))
+    print(table(["#", "name"], rows, empty="(nothing)"))
 
 
 def _cmd_select(device, args) -> int:
@@ -235,12 +223,12 @@ def _cmd_syx(_device, args) -> None:
     if names:
         rows = [[f"{n:03d}", v.rstrip()] for n, v in sorted(names.items())]
         print()
-        print(_table(rows, ["#", "program"]))
+        print(table(["#", "program"], rows, empty="(nothing)"))
     mixes = library.mix_names()
     if mixes and args.mixes:
         rows = [[f"{n:02d}", v.rstrip()] for n, v in sorted(mixes.items())]
         print()
-        print(_table(rows, ["#", "mix"]))
+        print(table(["#", "mix"], rows, empty="(nothing)"))
 
 
 def _cmd_find(_device, args) -> None:
@@ -265,7 +253,7 @@ def _cmd_find(_device, args) -> None:
                 str(number),
             ]
         )
-    print(_table(rows, ["bank", "#", "name", "CC0", "PC"]))
+    print(table(["bank", "#", "name", "CC0", "PC"], rows))
     if any(hit[3] for hit in hits):
         print(
             "\n* the unit and the catalog disagree about this slot; the "
