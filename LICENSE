@@ -31,6 +31,10 @@ nano/messages.py, nano/records.py, nano/dumps.py
     Alesis QS6/QS7/QS8/QSR System Exclusive Specification, Alesis Corp.
     System Exclusive dumps produced by the instrument itself
 
+  Its parameter tables are the next thing to be transcribed from the
+  specification; that transcription is not in this distribution yet —
+  nano/params.py does not exist.
+
 nano/banks.py
   The five banks, their Bank Select values, the sixteen front-panel
   categories and the hardwired silent program are transcribed as data
@@ -38,10 +42,29 @@ nano/banks.py
 
     Alesis NanoSynth Reference Manual, Alesis Corp., 1998
 
-nano/bridge.py, nano/favorites.py, nano/config.py, nano/catalog.py
-  Ported from the sibling projects x5ded, kwsed, p2ked, rxved, s3ked and
-  k2kremote, which are under the same licence.
+  Facts and interface data, transcribed for interoperability. Neither
+  document is redistributed here.
 
-  Facts and interface data, transcribed for interoperability. None of those
-  documents is redistributed here.
+vinsynlib
+  The shared base of this family of terminal instrument browsers, and a
+  runtime dependency of nanosyned (GPL-2.0-or-later; see its own LICENSE
+  and per-file notices), at version 0.4.2. Everything nanosyned once
+  carried a copy of now lives there: the settings cache, the favourites
+  store, the keymap and legend, the command line, the port listing and
+  the backup envelope, which nano/backup.py binds rather than copies.
+  vinsynlib carries the copyright of the sibling projects it was
+  assembled from — the same ones the transport below is ported from.
+
+nano/bridge.py, nano/favorites.py, nano/config.py, nano/catalog.py
+  The transport and UI shape is ported from the sibling projects below,
+  which are under the same licence:
+
+    rxved      Copyright (C) 2026  rxved contributors
+    p2ked      Copyright (C) 2026  p2ked contributors
+    emorphed    Copyright (C) 2026  emorphed contributors
+    x5ded      Copyright (C) 2026  x5ded contributors
+    s3ked      Copyright (C) 2026  s3ked contributors
+    eosed      Copyright (C) 2026  eosed contributors
+    k2kremote  Copyright (C) 2026  k2kremote contributors
+    mpc2emu    Copyright (C) 2025-2026  mpc2emu contributors
 

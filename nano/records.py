@@ -34,8 +34,12 @@ memory is a program somebody made.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from nano import messages as m
+
+if TYPE_CHECKING:
+    from nano.params import Param
 
 __all__ = [
     "EFFECTS_BYTES",
@@ -53,7 +57,10 @@ __all__ = [
     "SOUNDS_PER_PROGRAM",
     "SOUND_BYTES",
     "check_size",
+    "decode_bit_field",
+    "encode_bit_field",
     "global_fields",
+    "global_record_bytes",
     "mix_name",
     "program_name",
     "sound_block",
@@ -144,3 +151,117 @@ def global_fields(record: Sequence[int]) -> dict[str, int]:
     """
     check_size(record, 1, "the global dump")
     return {"raw_bytes": len(record)}
+
+
+# --- parameters into records ------------------------------------------------
+#
+# Alesis prints a parameter's bit address as a range from its *most*
+# significant bit to its *least* significant one, with the byte number first
+# and bit 7 the most significant bit of a byte:
+#
+#     1:6-1:0     byte 1, bit 6 ... byte 1, bit 0     (7 bits)
+#     2:2-1:4     byte 2, bit 2 ... byte 1, bit 4     (7 bits, crosses a byte)
+#
+# ``Param.bit_address`` stores the range's *last* address: the index of the
+# field's least significant bit in the unpacked record. The strip below walks
+# the field from its most significant bit down, which is the direction the
+# spec prints.
+#
+# This is deliberately not ``messages.bit_field``/``set_bit_field``. Those
+# are low-bit-first helpers kept for the ten-character names; they take a
+# raw low-bit offset. Passing the spec's *first* (most significant) address
+# to them shifts the field by ``bits - 1`` bits and still returns a value --
+# a plausible wrong one, in the neighbouring bits. See
+# ``encode_bit_field``'s docstring: the trap is documented there because
+# that is where a reader will be.
+
+
+def encode_bit_field(record: bytearray, param: Param, value: int) -> None:
+    """Write ``param``'s value into an unpacked record, **MSB first**.
+
+    The spec prints each field most-significant-bit first, and this walks
+    the field in that order: the value's bit ``bits - 1`` lands at
+    ``bit_address + bits - 1`` (the spec's *first* printed address) and bit
+    0 lands at ``bit_address``. It is the exact inverse of
+    :func:`decode_bit_field`.
+
+    ``value`` is the raw stored field, ``0 <= value < 1 << param.bits``: for
+    a Global parameter that is the two's-complement bit pattern, and for a
+    Mix, Program or Effects parameter it is the offset-binary value, i.e.
+    ``twos_complement - param.offset``.
+
+    **Do not confuse this address convention with the name helpers'.**
+    :func:`nano.messages.set_bit_field` also writes a low bit first, but it
+    takes a raw offset and has no idea a spec range was involved. Handing it
+    the spec's first address (``1:6``) instead of the low end of the range
+    (``1:0``) moves the field up by ``bits - 1`` bits. Nothing raises: the
+    record is the right length and the field decodes to a different, legal
+    value, which is why this module converts in one place.
+    """
+    if not 0 <= value < (1 << param.bits):
+        raise m.ProtocolError(f"{value} does not fit in {param.bits} bits")
+    top = param.bit_address + param.bits - 1
+    for step in range(param.bits):
+        at = top - step  # most significant bit first
+        byte, bit = at >> 3, at & 7
+        if byte >= len(record):
+            raise m.ProtocolError(
+                f"bit {at} is past the end of a {len(record)}-byte record"
+            )
+        mask = 1 << bit
+        if (value >> (param.bits - 1 - step)) & 1:
+            record[byte] |= mask
+        else:
+            record[byte] &= ~mask & 0xFF
+
+
+def decode_bit_field(record: Sequence[int], param: Param) -> int:
+    """Read ``param``'s raw field out of an unpacked record.
+
+    The exact inverse of :func:`encode_bit_field`: most significant bit
+    first, starting at the spec's first printed address and ending at
+    ``bit_address``. The result is the *stored* value -- two's complement
+    for a Global parameter, offset binary for a packed one -- so a
+    Mix/Program/Effects caller adds ``param.offset`` to see the value the
+    ``10`` message takes.
+    """
+    value = 0
+    top = param.bit_address + param.bits - 1
+    for step in range(param.bits):
+        at = top - step
+        byte, bit = at >> 3, at & 7
+        if byte >= len(record):
+            raise m.ProtocolError(
+                f"bit {at} is past the end of a {len(record)}-byte record"
+            )
+        if (record[byte] >> bit) & 1:
+            value |= 1 << (param.bits - 1 - step)
+    return value
+
+
+def global_record_bytes(record: Sequence[int]) -> dict[str, int]:
+    """Every Global parameter that fits in ``record``, label to value.
+
+    The Global record is not bit-packed: each parameter is right-justified
+    in its own byte, so a ``bit_address`` of ``byte * 8`` and the
+    parameter's width recover the field. Signed parameters are stored in
+    two's complement (the spec says so, and gives no Offset column), so a
+    parameter whose ``low`` is negative is sign-extended here rather than
+    returned as its unsigned bit pattern.
+
+    "That fits" matters: dumps from software before version 2.00 carry only
+    the first seventeen of the twenty bytes, and a field past the end is
+    skipped rather than raising.
+    """
+    from nano import params  # deferred: params imports this module's sizes
+
+    values: dict[str, int] = {}
+    for param in params.GLOBAL_PARAMS:
+        last_bit = param.bit_address + param.bits - 1
+        if last_bit >> 3 >= len(record):
+            continue
+        value = decode_bit_field(record, param)
+        if param.low < 0 and value >= 1 << (param.bits - 1):
+            value -= 1 << param.bits
+        values[param.label] = value
+    return values

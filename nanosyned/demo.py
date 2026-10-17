@@ -23,7 +23,10 @@ reason: those names are Alesis's work, not this project's, and this
 project does not redistribute them.
 
 The demo opens no MIDI port and constructs no bridge, so it is safe to run
-beside a session that is driving the hardware.
+beside a session that is driving the hardware. It satisfies
+:class:`nano.device.Device` structurally -- same calls, same shapes -- which
+is what lets the app be written against that Protocol and run against
+either device.
 """
 
 from __future__ import annotations
@@ -122,6 +125,17 @@ class DemoDevice:
         self._closed = True
 
     def _tick(self) -> None:
+        """Every request passes through here, as through a live port.
+
+        Matches the sibling emorphed's demo: after ``close()`` every
+        request raises, the way a closed port would, so a caller that kept
+        using the device learns it promptly rather than being answered
+        politely by a unit that is not there.
+        """
+        if self._closed:
+            raise RuntimeError(
+                "this demo device is closed; a real bridge would be a closed port"
+            )
         if self.latency:
             time.sleep(self.latency)
 

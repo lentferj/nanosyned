@@ -256,3 +256,168 @@ class TestTheEditBufferCarriesANumberToo:
         assert len(wrong) >= rec.PROGRAM_BYTES, "it is still the right size"
         assert m.decode_name(wrong) != "Invented  "
         assert m.decode_name(wrong).strip(), "and still looks like a name"
+
+
+class TestStoreEncoders:
+    """The other direction: the messages that replace what the unit holds.
+
+    A store and a reply share their frame, so each of these is checked by
+    parsing it back through :func:`m.parse`. The record ends with a byte
+    that has bit 7 set -- the packer would still accept an all-7-bit
+    record, so without that a broken pack/unpack would pass here and fail
+    on somebody's instrument.
+    """
+
+    @staticmethod
+    def _record(size, number=0x2A):
+        record = bytearray(size)
+        m.encode_name(record, "Invented")
+        record[-1] = 0x80 | number
+        return bytes(record)
+
+    def _round_trip(self, message, function, number, record):
+        packet = m.parse(message)
+        assert packet is not None
+        assert packet.function == function
+        assert packet.number == number
+        assert packet.data()[: len(record)] == record
+        # The packer pads to a whole 7-bit group. The padding must be zero:
+        # anything else would be bytes the caller never wrote.
+        assert set(packet.data()[len(record) :]) <= {0}
+        return packet
+
+    def test_a_program_store_round_trips(self):
+        record = self._record(rec.PROGRAM_BYTES)
+        message = m.program_dump(7, record)
+        packet = self._round_trip(message, m.Function.USER_PROGRAM_DUMP, 7, record)
+        assert len(packet.payload) == rec.PROGRAM_PACKED
+        # Eight bytes of header and footer around the 400 packed ones.
+        assert len(message) == 8 + rec.PROGRAM_PACKED
+
+    def test_an_effects_store_round_trips(self):
+        record = self._record(rec.EFFECTS_BYTES)
+        packet = self._round_trip(
+            m.effects_dump(3, record), m.Function.USER_EFFECTS_DUMP, 3, record
+        )
+        assert len(packet.payload) == rec.EFFECTS_PACKED
+
+    def test_an_edit_effects_store_is_numbered_zero(self):
+        """Program mode's scratch; mix mode's is a different thing."""
+        record = self._record(rec.EFFECTS_BYTES)
+        self._round_trip(
+            m.edit_effects_dump(record), m.Function.EDIT_EFFECTS_DUMP, 0, record
+        )
+
+    def test_a_mix_store_round_trips(self):
+        record = self._record(rec.MIX_BYTES)
+        packet = self._round_trip(
+            m.mix_dump(99, record), m.Function.MIX_DUMP, 99, record
+        )
+        assert len(packet.payload) == rec.MIX_PACKED
+
+    def test_the_mix_edit_buffer_has_a_number_of_its_own(self):
+        """100, not 0: it is past the 99 user mixes and is not a slot."""
+        record = self._record(rec.MIX_BYTES)
+        self._round_trip(m.mix_dump(100, record), m.Function.MIX_DUMP, 100, record)
+
+    def test_a_global_store_round_trips(self):
+        record = self._record(rec.GLOBAL_BYTES)
+        packet = self._round_trip(
+            m.global_dump(record), m.Function.GLOBAL_DUMP, 0, record
+        )
+        assert len(packet.payload) == 23
+
+    def test_a_store_is_not_its_request(self):
+        """Same frame shape, one byte apart, opposite effect on the unit."""
+        record = self._record(rec.PROGRAM_BYTES)
+        store = m.parse(m.program_dump(7, record))
+        request = m.parse(m.program_dump_request(7))
+        assert store.function == m.Function.USER_PROGRAM_DUMP
+        assert request.function == m.Function.USER_PROGRAM_REQUEST
+        assert store.function != request.function
+
+
+class TestMidiEdit:
+    """Four body bytes: seven fields and one signed value split across two.
+
+    The expectations below are worked out by hand from the specification
+    and then pinned, which is the only way pinning them says anything.
+    """
+
+    def test_the_example_layout_is_pinned(self):
+        # mode 2 (program), function 8, sound 0, page 0, channel 0, pot 0,
+        # value +5.
+        #   0mmfffff = 0 10 01000 = 0x48
+        #   0ssppppp = 0 00 00000 = 0x00
+        #   0ccccddv = 0 0000 00 0 = 0x00
+        #   0vvvvvvv = 0 0000101 = 0x05
+        message = m.midi_edit(2, 8, 0, 0, 5, sound=0, channel=0)
+        assert list(message) == [
+            m.SYSEX_START,
+            *m.ALESIS_ID,
+            m.QS_FAMILY,
+            m.Function.MIDI_EDIT,
+            0x48,
+            0x00,
+            0x00,
+            0x05,
+            m.SYSEX_END,
+        ]
+        packet = m.parse(message)
+        assert packet.function == m.Function.MIDI_EDIT
+        assert packet.payload == bytes([0x48, 0x00, 0x00, 0x05])
+
+    def test_every_field_lands_where_it_belongs(self):
+        # mode 1 (mix), function 16, sound 2, page 23, channel 15, pot 3,
+        # value +127.
+        #   0mmfffff = 0 01 10000 = 0x30
+        #   0ssppppp = 0 10 10111 = 0x57
+        #   0ccccddv = 0 1111 11 0 = 0x7E
+        #   0vvvvvvv = 0 1111111 = 0x7F
+        body = list(m.midi_edit(1, 16, 23, 3, 127, sound=2, channel=15))[6:-1]
+        assert body == [0x30, 0x57, 0x7E, 0x7F]
+
+    def test_a_negative_value_is_twos_complement(self):
+        """-1 is 0xFF: MSB 1, low seven bits 0x7F. Read unsigned it is 127."""
+        body = list(m.midi_edit(0, 0, 0, 0, -1))[6:-1]
+        assert body == [0x00, 0x00, 0x01, 0x7F]
+        # -128 is 0x80: MSB 1 and the low seven bits all zero.
+        body = list(m.midi_edit(0, 0, 0, 0, -128))[6:-1]
+        assert body == [0x00, 0x00, 0x01, 0x00]
+
+    def test_the_defaults_are_the_first_sound_and_channel(self):
+        # sound 0, channel 0: only the mode/function byte moves.
+        assert list(m.midi_edit(0, 1, 0, 0, 0))[6:-1] == [0x01, 0x00, 0x00, 0x00]
+
+
+class TestStoreRefusals:
+    """Every encoder checks its ranges before it frames anything."""
+
+    def test_a_program_and_an_effects_number_have_a_hundred_and_twenty_eight(self):
+        with pytest.raises(m.ProtocolError, match="0-127"):
+            m.program_dump(128, bytes(rec.PROGRAM_BYTES))
+        with pytest.raises(m.ProtocolError, match="0-127"):
+            m.effects_dump(-1, bytes(rec.EFFECTS_BYTES))
+
+    def test_a_mix_number_stops_at_the_edit_buffer(self):
+        with pytest.raises(m.ProtocolError, match="0-100"):
+            m.mix_dump(101, bytes(rec.MIX_BYTES))
+
+    def test_midi_edit_fields_are_checked(self):
+        out_of_range = {
+            "mode": 4,
+            "function": 17,
+            "page": 24,
+            "pot": 4,
+            "sound": 4,
+            "channel": 16,
+            "value": 128,
+        }
+        for field, bad in out_of_range.items():
+            arguments = {"mode": 0, "function": 0, "page": 0, "pot": 0, "value": 0}
+            arguments[field] = bad
+            with pytest.raises(m.ProtocolError):
+                m.midi_edit(**arguments)
+        # And the floor, one past the other end of the signed value's range.
+        with pytest.raises(m.ProtocolError, match="-128"):
+            m.midi_edit(0, 0, 0, 0, -129)

@@ -45,6 +45,19 @@ Two things about this protocol that shape every caller:
 2. **A name is not bytes.** Ten characters of seven bits each, starting
    eight bits into the record and not aligned to anything. ``value + 32``
    is the ASCII character.
+
+This module carries **both directions**, and they are not symmetric. The
+request side asks the unit for something and is safe to send at any time.
+The store side sends it something back, and a store over a user slot is
+permanent: the program, effects, mix or global record it carries replaces
+what was there. Nothing in this module decides whether that is wanted --
+it builds the message -- but the opcodes differ only in the number byte of
+a frame, which is exactly the sort of thing a caller gets wrong, so the
+two are named apart here (``*_request`` against the encoder's bare name).
+
+Every message in this module, in both directions, is transcribed from
+Alesis's published QS6/7/8/R System Exclusive specification and then
+confirmed against this unit on the bench.
 """
 
 from __future__ import annotations
@@ -67,19 +80,25 @@ __all__ = [
     "bank_select",
     "bit_field",
     "decode_name",
+    "edit_effects_dump",
     "edit_effects_dump_request",
     "edit_program_dump_request",
+    "effects_dump",
     "effects_dump_request",
     "encode_name",
     "frame",
+    "global_dump",
     "global_dump_request",
     "identity_reply_fields",
     "identity_request",
+    "midi_edit",
+    "mix_dump",
     "mix_dump_request",
     "mode_select",
     "pack7",
     "parse",
     "program_change",
+    "program_dump",
     "program_dump_request",
     "set_bit_field",
     "unpack7",
@@ -494,6 +513,138 @@ def all_dump_request() -> bytes:
 def mode_select(mix_mode: bool) -> bytes:
     """Put the unit in Program or Mix mode. **This changes what plays.**"""
     return frame(Function.MODE_SELECT, [0x01 if mix_mode else 0x00])
+
+
+# --- stores -----------------------------------------------------------------
+#
+# The other direction. Each of these replaces what the unit holds for the
+# slot it names, and a store to a *user* slot is permanent. They are built
+# with the same :func:`frame` as the requests because on the wire they are
+# the same shape -- an opcode and a number -- which is precisely why they
+# are named apart here.
+#
+# The records are packed with :func:`pack7` and their size is not checked
+# here. Checking it would mean importing :mod:`nano.records`, which imports
+# this module, and the caller is the one holding a record it knows the size
+# of; a wrongly-sized record packs to a message the unit will accept and
+# store wrongly, and refusing it is the caller's job.
+
+
+def program_dump(number: int, record: Sequence[int] | bytes) -> bytes:
+    """Store one of the 128 **user** programs.
+
+    The record is the 350 bytes of :data:`nano.records.PROGRAM_BYTES`,
+    which pack to 400 and make the message 408 bytes on the wire. Sending
+    this overwrites user program ``number``, so it is not a probe.
+    """
+    if not 0 <= number <= 127:
+        raise ProtocolError(f"user program {number} is outside 0-127")
+    return frame(Function.USER_PROGRAM_DUMP, [number, *pack7(record)])
+
+
+def effects_dump(number: int, record: Sequence[int] | bytes) -> bytes:
+    """Store one of the 128 **user** effects patches.
+
+    The 65-byte record travels as 75 packed bytes. ``number`` names the
+    user slot, not a mode.
+    """
+    if not 0 <= number <= 127:
+        raise ProtocolError(f"effects {number} is outside 0-127")
+    return frame(Function.USER_EFFECTS_DUMP, [number, *pack7(record)])
+
+
+def edit_effects_dump(record: Sequence[int] | bytes) -> bytes:
+    """Store the effects edit buffer -- the unit's scratch, not a slot.
+
+    It carries a number like the other dumps, and it is always ``0``: the
+    effects edit buffer is one thing, the program-mode scratch. Mix mode
+    has its own scratch and this is not it.
+    """
+    return frame(Function.EDIT_EFFECTS_DUMP, [0x00, *pack7(record)])
+
+
+def mix_dump(number: int, record: Sequence[int] | bytes) -> bytes:
+    """Store a mix: ``0``-``99`` for a user slot, ``100`` for the buffer.
+
+    The 138-byte record packs to 158. Number ``100`` is the mix edit
+    buffer, which is not a slot and does not survive a mode change; it is
+    the one number past the 99 user mixes and it is not a typo for 0.
+    """
+    if not 0 <= number <= 100:
+        raise ProtocolError(f"mix {number} is outside 0-100")
+    return frame(Function.MIX_DUMP, [number, *pack7(record)])
+
+
+def global_dump(record: Sequence[int] | bytes) -> bytes:
+    """Store the global settings.
+
+    There is only one set, so there is no number to choose: the body opens
+    with a literal ``00`` and the 20-byte record follows, packed to 23.
+    That leading byte is the same shape as a numbered dump's number, which
+    is why :data:`NUMBERED` lists this opcode -- and why it must keep
+    doing so for a reply to parse.
+    """
+    return frame(Function.GLOBAL_DUMP, [0x00, *pack7(record)])
+
+
+#: MIDI Edit's ``mm`` field: which block of parameters the edit addresses.
+MIDI_EDIT_GLOBAL = 0
+MIDI_EDIT_MIX = 1
+MIDI_EDIT_PROGRAM = 2
+MIDI_EDIT_EFFECTS = 3
+
+
+def midi_edit(  # noqa: PLR0913 -- the body is seven fields; the spec's shape
+    mode: int,
+    function: int,
+    page: int,
+    pot: int,
+    value: int,
+    *,
+    sound: int = 0,
+    channel: int = 0,
+) -> bytes:
+    """Address one parameter for editing, without storing anything.
+
+    Four body bytes, each with a leading zero so the eight-bit value does
+    not overflow into a byte that would end the message::
+
+        0mmfffff   0ssppppp   0ccccddv   0vvvvvvv
+
+    ``mm`` selects the block -- global, mix, program or effects -- and
+    ``fffff`` is the function within it, 0-16. ``ss`` is the program sound
+    or the effects bus and ``ppppp`` is the parameter page, 0-23. ``cccc``
+    is the channel and ``dd`` the pot. ``v`` is **one eight-bit signed
+    value split across the last two bytes, MSB first**: byte 3 keeps its
+    top bit and the other seven bits go in byte 4. Reading it as an
+    unsigned byte is right half the time, which is how it was missed.
+
+    This only moves a parameter; it is the store that keeps the result.
+    """
+    if not 0 <= mode <= 3:
+        raise ProtocolError(f"edit mode {mode} is outside 0-3")
+    if not 0 <= function <= 16:
+        raise ProtocolError(f"function {function} is outside 0-16")
+    if not 0 <= sound <= 3:
+        raise ProtocolError(f"sound {sound} is outside 0-3")
+    if not 0 <= page <= 23:
+        raise ProtocolError(f"page {page} is outside 0-23")
+    if not 0 <= channel <= 15:
+        raise ProtocolError(f"channel {channel} is outside 0-15")
+    if not 0 <= pot <= 3:
+        raise ProtocolError(f"pot {pot} is outside 0-3")
+    if not -128 <= value <= 127:
+        raise ProtocolError(f"value {value} is outside -128 to 127")
+    encoded = value & 0xFF
+    return frame(
+        Function.MIDI_EDIT,
+        [
+            (mode << 5) | function,
+            (sound << 5) | page,
+            (channel << 3) | (pot << 1) | ((encoded >> 7) & 1),
+            encoded & 0x7F,
+        ],
+    )
 
 
 def bank_select(bank: int, channel: int = 0) -> list[bytes]:

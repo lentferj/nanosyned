@@ -56,15 +56,17 @@ from typing import Any, ClassVar
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
-from textual.widgets import DataTable, Header, Input, Label, Static
+from textual.containers import Horizontal
+from textual.widgets import DataTable, Header, Static
 
 from nano import banks
 from nano import catalog as cat
+from nanosyned.screens import KeyHints, PromptScreen, ReportScreen
+from nanosyned.text import literal
+from vinsynlib import keys
+from vinsynlib.build import build_of
 from vinsynlib.cli import add_common_arguments, make_parser, validate_common
 from vinsynlib.keys import wrap_blocks as _wrap_blocks
-from vinsynlib.ui.hints import KeyHints
 
 __all__ = ["KEY_HINTS", "NanosynedApp", "build_parser", "main", "wrap_blocks"]
 
@@ -82,22 +84,30 @@ VIEW_LABELS = {
     VIEW_ALL_FAVOURITES: "every favourite, all banks",
 }
 
-KEY_HINTS = (
-    "↑↓ move",
-    "tab pane",
-    "⏎ select on the unit",
-    "r read names",
-    "/ search",
-    "[ ] channel",
-    "c set channel",
-    "f favourite",
-    "F favourites view",
-    "t tags",
-    "n note",
-    "i device",
-    "? help",
-    "q quit",
-)
+
+def _view_key(blocks: tuple[str, ...]) -> tuple[str, ...]:
+    """Swap the family's ``F favourites view`` for this tool's ``v``.
+
+    ``f`` writes the favourites database and ``F`` does not, so the
+    family's shift-pair left a write one slip away from a read; ``v`` has
+    no such twin. rxved and p2ked made the same swap, and the family asks
+    a tool that renames a shared key to say why in its own test -- see
+    tests/test_conformance.py, where the whole divergence is two
+    sentences.
+    """
+    return tuple(
+        "v favourites view" if block == "F favourites view" else block
+        for block in blocks
+    )
+
+
+#: The legend. Every binding the app has, in the order somebody meets them.
+#: Built from the family's shared legend rather than hand-written: it used
+#: to be a tuple of its own, in its own order. ``keys.legend`` puts this
+#: tool's own hints in the one place the family leaves for them -- after
+#: `n note`, before `i device` -- and this tool has no extras: every key it
+#: binds is a shared one, `v` apart, which `_view_key` renames.
+KEY_HINTS = _view_key(keys.legend())
 
 
 def wrap_blocks(blocks, width: int, sep: str = _SEP) -> str:
@@ -108,71 +118,6 @@ def wrap_blocks(blocks, width: int, sep: str = _SEP) -> str:
     module's published surface.
     """
     return _wrap_blocks(blocks, width, sep)
-
-
-class ReportScreen(ModalScreen[None]):
-    """A scrollable block of text."""
-
-    DEFAULT_CSS = """
-    ReportScreen { align: center middle; }
-    ReportScreen > Vertical {
-        width: 84; height: 80%; border: thick $accent;
-        background: $surface; padding: 1 2;
-    }
-    ReportScreen .body { height: 1fr; overflow-y: auto; }
-    """
-
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "close", "Close"),
-        Binding("q", "close", "Close"),
-    ]
-
-    def __init__(self, title: str, body: str) -> None:
-        super().__init__()
-        self._title = title
-        self._body = body
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(f"[b]{self._title}[/b]")
-            yield Static(self._body, classes="body")
-            yield Static("[dim]esc / q to close[/dim]")
-
-    def action_close(self) -> None:
-        self.dismiss(None)
-
-
-class PromptScreen(ModalScreen[str | None]):
-    """One line of text."""
-
-    DEFAULT_CSS = """
-    PromptScreen { align: center middle; }
-    PromptScreen > Vertical {
-        width: 70; height: auto; border: thick $accent;
-        background: $surface; padding: 1 2;
-    }
-    """
-
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "Cancel")]
-
-    def __init__(self, prompt: str, current: str = "") -> None:
-        super().__init__()
-        self._prompt = prompt
-        self._current = current
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(self._prompt)
-            yield Input(value=self._current, id="value")
-
-    def on_mount(self) -> None:
-        self.query_one("#value", Input).focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
 
 
 class NanosynedApp(App):
@@ -192,6 +137,15 @@ class NanosynedApp(App):
     DataTable { height: 1fr; }
     #detail { height: 3; padding: 0 1; border-top: solid $panel; }
     #status { height: 1; background: $boost; color: $text; padding: 0 1; }
+    /* The ID is repeated or the rule never paints: an ID selector outranks
+       a class, so a bare ``.refused`` was dead CSS and every refusal drew in
+       the same grey as a success. Red and bold, the sibling rxved's shape,
+       so a refused action is legible at a glance. */
+    #status.refused {
+        background: $error;
+        color: $text;
+        text-style: bold;
+    }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -202,7 +156,11 @@ class NanosynedApp(App):
         Binding("right_square_bracket", "channel_up", "Channel +"),
         Binding("c", "pick_channel", "Set channel"),
         Binding("f", "toggle_favorite", "Favourite"),
-        Binding("F", "cycle_favorites", "Favourites view"),
+        # `v`, not the family's `F`: `f` writes the favourites database and
+        # `F` does not, so the family's shift-pair left a write one slip away
+        # from a read. `v` has no such twin. rxved and p2ked made the same
+        # swap; the rename is declared in tests/test_conformance.py.
+        Binding("v", "cycle_favorites", "Favourites view"),
         Binding("t", "edit_tags", "Tags"),
         Binding("n", "edit_note", "Note"),
         Binding("slash", "search", "Search"),
@@ -363,7 +321,7 @@ class NanosynedApp(App):
             try:
                 value = int(text)
             except ValueError:
-                self.notify_status(f"{text!r} is not a number", refused=True)
+                self.notify_status(f"{literal(text)!r} is not a number", refused=True)
                 return
             if not 1 <= value <= 16:
                 self.notify_status("MIDI channels are 1-16", refused=True)
@@ -396,7 +354,7 @@ class NanosynedApp(App):
         # survive being toggled off and on. As a delete followed by a
         # fresh add this destroyed all four, and this is one keystroke.
         now = self.favorites.toggle(bank_id, entry.program_change, name=name)
-        self.notify_status(f"{'favourited' if now else 'unfavourited'} {name}")
+        self.notify_status(f"{'favourited' if now else 'unfavourited'} {literal(name)}")
         self._refill_keeping_place()
 
     def _favourite_under_cursor(self):
@@ -492,7 +450,14 @@ class NanosynedApp(App):
         try:
             table.clear()
             for entry in self._current:
-                name = self.catalog.display_name(entry.bank_id, entry.program_change)
+                # Escaped before the project's own [b]/[dim] goes around
+                # it: a name is unit-supplied and user-editable, and an
+                # unclosed markup tag in one kills the pane for all of
+                # them. The markup is this project's, so it is the one
+                # side of this f-string that is not escaped.
+                name = literal(
+                    self.catalog.display_name(entry.bank_id, entry.program_change)
+                )
                 if self.catalog.differs(entry.bank_id, entry.program_change):
                     shown = f"[b]{name}[/b] [dim]*[/dim]"
                 elif self.catalog.is_live(entry.bank_id, entry.program_change):
@@ -520,7 +485,7 @@ class NanosynedApp(App):
             self.query_one("#detail", Static).update("")
             return
         entry = self._current[row]
-        name = self.catalog.display_name(entry.bank_id, entry.program_change)
+        name = literal(self.catalog.display_name(entry.bank_id, entry.program_change))
         where = "front panel and MIDI" if entry.bank.front_panel else "MIDI only"
         source = (
             "read from the unit"
@@ -542,8 +507,15 @@ class NanosynedApp(App):
         )
 
     def notify_status(self, message: str, *, refused: bool = False) -> None:
-        prefix = "[b]refused[/b] · " if refused else ""
-        self.query_one("#status", Static).update(prefix + message)
+        """Say the last thing; a refusal goes red and bold.
+
+        The family's shape (rxved): the widget carries a ``refused`` class
+        rather than a text prefix, so a refusal is a red bar the eye cannot
+        miss instead of another grey status line.
+        """
+        status = self.query_one("#status", Static)
+        status.update(message)
+        status.set_class(refused, "refused")
 
     # --- navigation ---------------------------------------------------------
 
@@ -661,15 +633,18 @@ class NanosynedApp(App):
                 return
             hits = self.catalog.search(text)
             if not hits:
-                self.notify_status(f"nothing matching {text!r}")
+                # literal on the typed text too: whatever came back from
+                # the prompt goes into a markup widget, and the prompt is
+                # where a bracket the user typed is most at home.
+                self.notify_status(f"nothing matching {literal(text)!r}")
                 return
-            lines = [f"{len(hits)} match(es) for {text!r}", ""]
+            lines = [f"{len(hits)} match(es) for {literal(text)!r}", ""]
             for bank_id, _kind, number, name in hits[:400]:
                 try:
                     entry = banks.slot(bank_id, number)
                 except LookupError:
                     continue
-                shown = name.rstrip() + (
+                shown = literal(name.rstrip()) + (
                     " *" if self.catalog.differs(bank_id, number) else ""
                 )
                 lines.append(
@@ -696,7 +671,7 @@ class NanosynedApp(App):
         self.call_from_thread(self._show_info, fields)
 
     def _show_info(self, fields) -> None:
-        lines = [f"connection      {self.device.description}", ""]
+        lines = [f"connection      {literal(self.device.description)}", ""]
         if fields and fields.get("is_alesis"):
             import nano.messages as msg
 
@@ -746,10 +721,12 @@ class NanosynedApp(App):
                 else "(none open)"
             )
         )
+        lines.append("")
+        lines.append(_build_line())
         self.push_screen(ReportScreen("Device", "\n".join(lines)))
 
     def action_help(self) -> None:
-        self.push_screen(ReportScreen("nanosyned", _HELP))
+        self.push_screen(ReportScreen("nanosyned", f"{_HELP}\n\n{_build_line()}"))
 
 
 _HELP = """The five banks
@@ -781,11 +758,32 @@ Keys
   [ ]       previous / next MIDI channel
   c         set the MIDI channel
   f         favourite the slot under the cursor
-  F         all slots / favourites here / every favourite
+  v         all slots / favourites here / every favourite
   t n       tags, note
   i         what the unit says it is
   q         quit
 """
+
+
+def _build_line() -> str:
+    """One line naming both builds: this tool, and the library under it.
+
+    A checkout nobody installed has no version to name and a wheel has no
+    commit; each degrades to the words for what it is (compare
+    :func:`vinsynlib.build.build_of`, which never guesses) rather than
+    dressing a ``None`` up as something proved.
+    """
+    parts = []
+    for name, origin in (("nanosyned", __file__), ("vinsynlib", None)):
+        build = build_of(name, origin=origin)
+        where = build.version or "an unknown version"
+        if build.commit:
+            tagged = ""
+            if build.tag:
+                tagged = f", {build.tag.removeprefix('refs/tags/')}"
+            where += f" (commit {build.commit[:7]}{tagged})"
+        parts.append(f"{name} {where}")
+    return " · ".join(parts)
 
 
 def build_parser() -> argparse.ArgumentParser:

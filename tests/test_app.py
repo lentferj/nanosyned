@@ -78,7 +78,7 @@ class TestCursorIsSilent:
         async with app.run_test() as pilot:
             await pilot.pause()
             for _ in range(4):
-                await pilot.press("F")
+                await pilot.press("v")
             await pilot.pause()
             assert app.device.selected_log == []
 
@@ -259,4 +259,4 @@ class TestSearch:
             await pilot.pause()
             app.screen.dismiss("Invented")
             await pilot.pause()
-            assert "Invented Name" in app.screen._body
+            assert "Invented Name" in app.screen.body

@@ -9,8 +9,10 @@ talks to.
 
 ## Verified against the instrument
 
-Confirmed by sending the message and reading what came back, on an
-Alesis NanoSynth reporting software version 1.00:
+Every read this program makes — `identify()`, the User bank's names,
+the edit buffer, the mixes and the global dump — was confirmed by
+sending the message and reading what came back, on an Alesis NanoSynth
+reporting software version 1.00:
 
 - The Alesis manufacturer ID `00 00 0E` and QS family `0E`.
 - **Family member `07`.** Alesis's published list gives QS6 `03`,
@@ -61,14 +63,45 @@ says it both sends and receives System Exclusive.
 ## Guesses
 
 - `SEND_GAP` and `SELECT_GAP` in `nano/bridge.py`. Neither has been
-  measured. They are labelled at the point of use and measuring them is a
-  TODO item. Do not quote them as measurements.
+  measured, and they stay guesses until they are. Alesis documents no
+  inter-message timing for this unit. `tools/measure_send_gap.py` (TODO
+  item 1, T6.1) is the specified tool: run against the unit, it measures
+  both gaps, and the measured values replace these. It has not been
+  written yet — until it has run, do not quote the constants as
+  measurements.
+
+## Writing to the instrument
+
+nanosyned is gaining a write path, and the honest state of it is: **the
+fence has landed, the write itself has not.** The protocol can write —
+a User Program Dump sent *to* the unit stores it, and the FLASH sector
+commands exist — and the four records in play are user programs, mixes,
+effects and global. No write goes out yet, and none has been verified on
+hardware.
+
+What is in place is the fence the siblings use (TODO.md item 6):
+
+- Every write is preceded by an unconditional backup. The destination
+  is read in full and written to a file before a byte goes out; if that
+  read fails, nothing is written. `nano/backup.py` is that envelope,
+  bound from vinsynlib rather than copied.
+- Every write is followed by a read-back verify, and a block that does
+  not read back identical is reported as a mismatch, not counted as a
+  success.
+- User program 127 is hardwired silent and cannot be changed; it is
+  the one slot where a write is refused outright.
+- Writes are modal, armed-then-fired, never one keystroke from the
+  browser, and the screen says what is about to be destroyed, by name.
+
+**Back up your unit first.** A write to this instrument's memory is a
+program somebody made. Until the write path itself is verified on
+hardware, the backup you took is the only copy that matters. See
+README.md: *Use at your own risk — back up first*.
 
 ## Not decoded
 
 The interior of a program's four 85-byte sound blocks, and most of the
-20-byte global record. nanosyned browses and selects; it does not edit,
-and a half-decoded parameter map invites writing to it.
+20-byte global record. nanosyned browses and selects; it does not edit.
 
 ## Alesis's content is not redistributed here
 
@@ -79,8 +112,11 @@ not Alesis's.
 
 ## AI assistance
 
-This project was written with AI assistance (Claude). The protocol work
-was done against the published specification and a real instrument, and
-every claim above is marked with which of those it rests on. Findings
-that came from the instrument are recorded in `docs/RESOLUTION_NOTES.md`
-with what was sent and what came back.
+nanosyned was built by its human author together with AI assistance.
+The ideas, the project vision and every feature came from the human
+author; AI assisted with writing the code and analyzing the binary
+formats. The reverse engineering rests on hands-on human work: testing
+and verification on real hardware, and aural A/B comparison of presets.
+Every claim above is marked with what it rests on. Findings that came
+from the instrument are recorded in `docs/RESOLUTION_NOTES.md` with
+what was sent and what came back.
