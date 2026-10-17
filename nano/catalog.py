@@ -35,148 +35,84 @@ of what the browser shows is printed names and one fifth is the
 instrument's own, which is exactly why the two are kept apart and marked
 differently.
 
+**The storage layer is vinsynlib's now.** Keys, rows, splitting, dumping
+and the printed-versus-live separation live in
+:mod:`vinsynlib.catalog`; this module binds it to the instrument.
+That grammar keys on the **display** number, which on this instrument is
+the same as the program change -- the CLI prints 000..127 and both
+count 000..127 -- so no offset arithmetic happens anywhere in it.
+
 Nothing in this module plays anything. Reading names is silent on this
 instrument whichever way it is done.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import sys
-from collections.abc import Iterable
-from dataclasses import dataclass
 
-__all__ = ["DEFAULT_PATH", "Catalog", "Entry", "empty", "load"]
+from vinsynlib.catalog import (
+    UNNAMED,
+    Entry,
+    display_to_wire,
+    dump,
+    make_key,
+    split_key,
+    wire_to_display,
+)
+from vinsynlib.catalog import (
+    Catalog as _Catalog,
+)
+from vinsynlib.catalog import (
+    load as _load,
+)
+
+__all__ = [
+    "DEFAULT_PATH",
+    "UNNAMED",
+    "Catalog",
+    "Entry",
+    "display_to_wire",
+    "dump",
+    "empty",
+    "load",
+    "make_key",
+    "split_key",
+    "wire_to_display",
+]
 
 DEFAULT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "catalog.json"
 )
 
 
-@dataclass(frozen=True)
-class Entry:
-    bank_id: str
-    program_change: int
-    name: str
+class Catalog(_Catalog):
+    """Printed names, plus whatever has been read from a unit.
 
-    @property
-    def key(self) -> str:
-        return f"{self.bank_id}:{self.program_change:03d}"
+    A thin binding over :class:`vinsynlib.catalog.Catalog`, keeping the
+    one project-specific name semantics: in a writable bank a
+    disagreement means somebody's work is on the machine, and in a ROM
+    one it means the printed list is wrong. The library reports only
+    that the two differ; which of those is true on this instrument is
+    what :meth:`disagreement` is here for.
+    """
 
-
-class Catalog:
-    """Printed names, plus whatever has been read from a unit."""
-
-    def __init__(
-        self, entries: Iterable[Entry] = (), *, source: str = "", generated: str = ""
-    ) -> None:
-        self._entries: dict[str, Entry] = {}
-        for entry in entries:
-            self._entries[entry.key] = entry
-        self._live: dict[str, str] = {}
-        self.source = source
-        self.generated = generated
-
-    # --- printed ------------------------------------------------------------
-
-    def entry(self, bank_id: str, program_change: int) -> Entry | None:
-        return self._entries.get(f"{bank_id}:{program_change:03d}")
-
-    def name(self, bank_id: str, program_change: int) -> str | None:
-        found = self.entry(bank_id, program_change)
-        return found.name if found is not None else None
-
-    def has(self, bank_id: str) -> bool:
-        prefix = f"{bank_id}:"
-        return any(key.startswith(prefix) for key in self._entries)
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-    def __bool__(self) -> bool:
-        return bool(self._entries)
-
-    # --- live ---------------------------------------------------------------
-
-    def set_live_name(self, bank_id: str, program_change: int, name: str) -> None:
-        self._live[f"{bank_id}:{program_change:03d}"] = name
-
-    def live_name(self, bank_id: str, program_change: int) -> str | None:
-        return self._live.get(f"{bank_id}:{program_change:03d}")
-
-    def is_live(self, bank_id: str, program_change: int) -> bool:
-        return f"{bank_id}:{program_change:03d}" in self._live
-
-    def differs(self, bank_id: str, program_change: int) -> bool:
-        """Whether the unit and the printed list disagree about this slot.
-
-        **What a disagreement means depends on the bank.** In a user bank it
-        means somebody has saved their own work over the factory preset,
-        which is the most useful thing this program can point out. In a ROM
-        bank it cannot mean that -- ROM does not change -- so it means the
-        printed list is wrong, and the unit is right.
-
-        **Nothing in this project has yet compared the two**: no unit has
-        answered nanosyned, so every name it has seen came from a file or a
-        document. The sibling projects each found their disagreements to
-        be whitespace -- an instrument holding two spaces where a printed
-        list shows one -- and that is the shape to expect here, but
-        expecting is not knowing. Callers should say which kind of
-        disagreement they are showing; see :meth:`disagreement`.
-        """
-        live = self.live_name(bank_id, program_change)
-        if live is None:
-            return False
-        printed = self.name(bank_id, program_change)
-        return printed is not None and printed != live
-
-    def disagreement(
-        self, bank_id: str, program_change: int, writable: bool
-    ) -> str | None:
+    def disagreement(self, bank_id: str, number: int, writable: bool) -> str | None:
         """Why the unit and the catalog differ here, in words.
 
+        ``writable`` controls the wording: a writable bank that differs
+        means somebody saved their own work over the factory preset;
+        otherwise the printed list is wrong, and the unit is right.
         ``None`` when they agree or the slot has not been read.
         """
-        if not self.differs(bank_id, program_change):
+        if not self.differs(bank_id, number):
             return None
         if writable:
             return "saved over the factory preset"
         return "the printed list is wrong; the unit is right"
 
-    def display_name(self, bank_id: str, program_change: int) -> str:
-        """What to show: the unit's name if known, else the printed one."""
-        live = self.live_name(bank_id, program_change)
-        if live is not None:
-            return live
-        return self.name(bank_id, program_change) or ""
-
-    # --- search -------------------------------------------------------------
-
-    def search(self, needle: str) -> list[tuple[str, int, str, bool]]:
-        """Case-insensitive substring search over both sources.
-
-        Each hit carries whether the unit and the printed list disagree
-        about that slot, so a caller can show the same marker the browser
-        does. Search is where it matters most: the browser marks a slot the
-        user is already looking at, while a search result is a name from a
-        bank they have not opened.
-        """
-        wanted = needle.strip().lower()
-        if not wanted:
-            return []
-        seen: dict[str, tuple[str, int, str]] = {}
-        for key, entry in self._entries.items():
-            if wanted in entry.name.lower():
-                seen[key] = (entry.bank_id, entry.program_change, entry.name)
-        for key, name in self._live.items():
-            if wanted in name.lower():
-                bank_id, _, number = key.rpartition(":")
-                seen[key] = (bank_id, int(number), name)
-        return [seen[key] + (self.differs(*seen[key][:2]),) for key in sorted(seen)]
-
 
 def empty() -> Catalog:
+    """A catalog that knows no names. What you get with no data file."""
     return Catalog()
 
 
@@ -185,40 +121,14 @@ def load(path: str | None = None) -> Catalog:
 
     A missing catalog is normal and not an error: nanosyned works without it,
     showing numbers only, and a connected unit can supply every name itself.
+    A file that exists but is not a catalog raises, because silently browsing
+    unnamed slots would be a poor way to find out the extractor broke. One
+    bad row costs one row, not the file: unreadable rows are counted to
+    stderr and skipped.
     """
-    target = path or DEFAULT_PATH
-    if not os.path.exists(target):
-        return empty()
-    try:
-        with open(target, encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, json.JSONDecodeError):
-        return empty()
-    entries = []
-    skipped = 0
-    for bank_id, rows in payload.get("banks", {}).items():
-        for row in rows:
-            # One bad row must not cost the whole catalog. A missing one is
-            # already normal here -- the program runs on numbers alone and
-            # a connected unit can supply every name -- so a corrupt one
-            # taking the program down with it is the odd behaviour, not
-            # skipping it.
-            try:
-                entries.append(
-                    Entry(
-                        bank_id=bank_id, program_change=int(row["pc"]), name=row["name"]
-                    )
-                )
-            except (KeyError, TypeError, ValueError):
-                skipped += 1
-    if skipped:
-        print(
-            f"warning: {target} has {skipped} unreadable row(s), skipped; "
-            f"regenerate it with tools/extract_catalog.py",
-            file=sys.stderr,
-        )
-    return Catalog(
-        entries,
-        source=payload.get("source", ""),
-        generated=payload.get("generated", ""),
-    )
+    # The library builds the base class; hand its state to the subclass so
+    # the browser keeps disagreement() without a second copy of the layer.
+    base = _load(path or DEFAULT_PATH)
+    out = Catalog.__new__(Catalog)
+    out.__dict__.update(base.__dict__)
+    return out

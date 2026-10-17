@@ -37,7 +37,6 @@ three preset banks, and it is exactly as good as your transcription.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -47,6 +46,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nano import (
     banks,
     dumps,
+)
+from nano.catalog import (
+    Catalog,
+    Entry,
+    dump,
 )
 
 DEFAULT_OUTPUT = os.path.join(
@@ -132,20 +136,26 @@ def main(argv=None) -> int:
         rows.update(found)
         sources.append(label)
 
-    payload = {
-        "banks": {},
-        "source": "; ".join(sources),
-        "generated": __import__("datetime").date.today().isoformat(),
-    }
-    for (bank_id, number), name in sorted(rows.items()):
-        payload["banks"].setdefault(bank_id, []).append({"pc": number, "name": name})
+    payload_rows = [
+        Entry(bank_id=bank_id, number=number, name=name)
+        for (bank_id, number), name in sorted(rows.items())
+    ]
+    # The generated file is the browser's default catalog, on formats the
+    # row grammar inherited from the binding: rows carry the display
+    # number in "n", which on this instrument is the program change, both
+    # 0-based, so no "pc" row is ever written -- a "pc" row would come
+    # back one higher.
+    catalog = Catalog(
+        payload_rows,
+        source="; ".join(sources),
+        generated=__import__("datetime").date.today().isoformat(),
+    )
+    dump(catalog, args.output)
 
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
-    with open(args.output, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=1, ensure_ascii=False)
-        handle.write("\n")
-
-    per_bank = ", ".join(f"{k} {len(v)}" for k, v in sorted(payload["banks"].items()))
+    counts: dict[str, int] = {}
+    for entry in payload_rows:
+        counts[entry.bank_id] = counts.get(entry.bank_id, 0) + 1
+    per_bank = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
     print(f"wrote {len(rows)} name(s) to {args.output}")
     print(f"  {per_bank}")
     print(

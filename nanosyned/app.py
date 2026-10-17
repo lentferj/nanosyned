@@ -664,12 +664,14 @@ class NanosynedApp(App):
                 self.notify_status(f"nothing matching {text!r}")
                 return
             lines = [f"{len(hits)} match(es) for {text!r}", ""]
-            for bank_id, program_change, name, differs in hits[:400]:
+            for bank_id, _kind, number, name in hits[:400]:
                 try:
-                    entry = banks.slot(bank_id, program_change)
+                    entry = banks.slot(bank_id, number)
                 except LookupError:
                     continue
-                shown = name.rstrip() + (" *" if differs else "")
+                shown = name.rstrip() + (
+                    " *" if self.catalog.differs(bank_id, number) else ""
+                )
                 lines.append(
                     f"{entry.display:<6} {shown:<12} PC {entry.program_change:>3}"
                 )

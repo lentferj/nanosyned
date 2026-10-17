@@ -239,7 +239,7 @@ def _cmd_find(_device, args) -> None:
         print(f"nothing matching {args.name!r}", file=sys.stderr)
         return
     rows = []
-    for bank_id, number, name, differs in hits:
+    for bank_id, _kind, number, name in hits:
         try:
             entry = banks.bank(bank_id)
         except LookupError:
@@ -248,13 +248,13 @@ def _cmd_find(_device, args) -> None:
             [
                 entry.label,
                 f"{number:03d}",
-                name.rstrip() + (" *" if differs else ""),
+                name.rstrip() + (" *" if catalog.differs(bank_id, number) else ""),
                 str(entry.select),
                 str(number),
             ]
         )
     print(table(["bank", "#", "name", "CC0", "PC"], rows))
-    if any(hit[3] for hit in hits):
+    if any(catalog.differs(bank_id, number) for bank_id, _kind, number, _name in hits):
         print(
             "\n* the unit and the catalog disagree about this slot; the "
             "unit's name is shown"

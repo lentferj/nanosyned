@@ -53,7 +53,7 @@ class TestOfflineCommands:
         path.write_text(
             json.dumps(
                 {
-                    "banks": {"GM": [{"pc": 0, "name": "Invented Name"}]},
+                    "banks": {"GM": [{"n": 0, "name": "Invented Name"}]},
                     "source": "test",
                     "generated": "2026-01-01",
                 }
