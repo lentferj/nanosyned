@@ -358,3 +358,41 @@ from a working one. It stays `0.005`. Whether the edit buffer not updating
 is a fact about the unit's Program Change handling, a fact about the edit
 buffer until a note is played, or a flaw in the probe is not established
 here — it is recorded as an open question rather than a finding.
+
+## 18. The preset names come from the manual, read by OCR
+
+The Reference Manual carries the whole program list — all 640 names for
+all five banks — under "NanoSynth Program List", **pages 30-33**. Only the
+User bank can be read from the unit; the General MIDI bank and the three
+preset banks are ROM and the protocol has no request for them, so their
+names exist nowhere but that table.
+
+The table cannot be read as text. Its fonts are subsetted Type 1C with a
+**Custom encoding and no ToUnicode map** (`pdffonts` shows `uni no` on
+every embedded face), so `pdftotext` returns mojibake — the same property
+that has always meant the manual's pages are read as images here. So
+`tools/extract_catalog.py --pdf` renders pages 30-33 with `pdftoppm` at
+300 dpi and reads them with `tesseract` in TSV mode, which gives each
+word's bounding box.
+
+The columns are then recovered by x: the five bank columns sit at fixed
+x-windows, and the boundaries are placed in the **blank gaps between one
+column's last name and the next column's index number** — not on the
+header labels, which sit a pixel or two from the next column's index and
+let it bleed into the previous cell (P1 004 read "Suitcase 4" until the
+boundary moved). The table lists the banks by their controller-0 value
+(GM 0, User 1, then 2, 3, 4); this project calls 2/3/4 `P1`/`P2`/`P3`, and
+the columns are mapped left to right. Each cell carries the page's own
+index number before the name, which is trimmed once — once, because a real
+name may begin with a number ("61 Tines") and a name may begin with a digit
+that is not one ("8va Piano" must not become "va Piano").
+
+**The names are OCR and contain errors** — a footnote number glued to a
+name, an em dash read for an en dash. `--draft FILE` writes them as a
+`BANK NNN Name` transcription to proofread and rebuild with `--manual`. A
+`.syx` dump wins over the page for the User bank, so `--pdf --syx dump.syx`
+gives the unit's own names for that bank and the page's for the rest.
+
+`tests/test_extract_pdf.py` pins the parser — the column geometry, the
+one-time index trim, and the two traps above ("61 Tines", "8va Piano") —
+over an invented TSV, so it needs neither the PDF nor OCR.

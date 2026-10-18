@@ -255,8 +255,36 @@ Alesis's work and this project does not redistribute them. Generate it
 from your own material:
 
 ```
-python3 tools/extract_catalog.py --syx my-own-dump.syx
-python3 tools/extract_catalog.py --manual my-transcription.txt
+python3 tools/extract_catalog.py --syx my-own-dump.syx          # User bank
+python3 tools/extract_catalog.py --pdf                          # the manual
+python3 tools/extract_catalog.py --manual my-transcription.txt  # any bank
+```
+
+**The preset names are in the manual.** The
+`Alesis Nanosynth Reference Manual.PDF` carries the full program list —
+all 640 names for all five banks — under *"NanoSynth Program List"*,
+starting on **page 30** and running to page 33. Those pages' fonts are
+subsetted with no to-Unicode map, so the text layer is mojibake and the
+pages have to be read as images:
+
+```
+python3 tools/extract_catalog.py --pdf --draft draft.txt
+```
+
+`--pdf` renders those four pages and reads them with OCR (it needs
+`pdftoppm` from poppler-utils and `tesseract` on `PATH`; set
+`NANOSYNED_TESSERACT` if tesseract lives somewhere else, and
+`NANOSYNED_MANUAL` or pass a path if the PDF is elsewhere). **OCR makes
+mistakes** — a trailing footnote number, a `—` read for a `–` — so
+`--draft draft.txt` writes the result as a `BANK NNN Name` list to
+proofread and feed back through `--manual`. Only the User bank can be read
+from the instrument itself; the other four banks' names come from here.
+
+A dump beats the page: give both and the User bank's names come from the
+unit, the rest from the manual.
+
+```
+python3 tools/extract_catalog.py --pdf --syx my-own-dump.syx
 ```
 
 nanosyned runs without it.
