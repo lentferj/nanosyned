@@ -119,7 +119,7 @@ def _cmd_list(_device, args) -> None:
             ]
         )
     print(f"{entry.label} — {entry.count} programs\n")
-    print(table(["#", "name", "category", "MSB", "LSB"], rows))
+    print(table(["#", "name", "category", "MSB", "LSB", "PC"], rows))
 
 
 def _cmd_status(device, _args) -> None:
