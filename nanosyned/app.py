@@ -614,6 +614,7 @@ class NanosynedApp(App):
             self.notify_status("this device has no settable channel", refused=True)
             return
         self._remember_channel(channel)
+        self._update_subtitle()
         self.notify_status(f"sending on MIDI channel {channel + 1}")
 
     def _remember_channel(self, channel: int) -> None:
@@ -927,6 +928,7 @@ class NanosynedApp(App):
         finally:
             self._filling = False
         self._detail(0)
+        self._update_subtitle()
 
     def _detail(self, row: int) -> None:
         if not self._current or row >= len(self._current):
@@ -964,6 +966,51 @@ class NanosynedApp(App):
         status = self.query_one("#status", Static)
         status.update(message)
         status.set_class(refused, "refused")
+
+    def _update_subtitle(self) -> None:
+        """Say in the header which pane this is and which channel sends on.
+
+        The family puts the same line in the Header's subtitle, and for the
+        same reason: the send channel is the one piece of state that is
+        always in play and never asked about. ``[`` and ``]`` move it
+        silently, and a Bank Select plus Program Change sent on the wrong
+        channel is silent too -- the unit just never hears it, or hears it
+        on a channel nobody is listening to. Showing it makes both visible
+        at a glance.
+
+        The count carries its denominator -- "12" alone reads as a small
+        bank, "12 of 128" reads as part of one -- which is what answers
+        "why is this list shorter than I remember" after a restart that
+        brought a rating filter back.
+        """
+        entry = banks.bank(self._current_bank)
+        shown = len(self._current)
+        # The denominator is the same view with the rating filter lifted:
+        # the filter is the only thing that can quietly take rows away, so
+        # the two numbers say exactly how many it took.
+        saved = self.rating_filter
+        self.rating_filter = None
+        try:
+            total = len(self._visible(self._current_bank))
+        finally:
+            self.rating_filter = saved
+        counted = f"{shown} of {total}" if shown != total else f"{shown}"
+
+        if self.view_mode == VIEW_ALL_FAVOURITES:
+            what = f"every favourite — {counted}"
+        elif self.view_mode == VIEW_BANK_FAVOURITES:
+            plural = "" if shown == 1 else "s"
+            what = f"{entry.label} — {counted} favourite{plural}"
+        else:
+            plural = "" if shown == 1 else "s"
+            what = f"{entry.label} — {counted} program{plural}"
+
+        filters = ""
+        if self.rating_filter is not None:
+            stars = "★" * self.rating_filter.stars or "any"
+            sign = "≥" if self.rating_filter.at_least else "="
+            filters = f"{stars} {sign}   "
+        self.sub_title = f"{filters}{what}   ·   ch {self._channel() + 1}"
 
     # --- navigation ---------------------------------------------------------
 

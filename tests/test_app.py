@@ -704,3 +704,35 @@ class TestWriting:
             assert isinstance(app.screen, EditorScreen)
             assert app.device.program_writes == []
             assert app.device.read_program(0) == original
+
+
+class TestTheSubtitleShowsTheChannel:
+    """The send channel is always in play and never asked about.
+
+    ``[`` and ``]`` move it silently, and a Bank Select plus Program Change
+    sent on the wrong channel is silent too, so it belongs somewhere always
+    visible -- the header, which is the one line every sibling uses for it.
+    """
+
+    async def test_the_channel_is_in_the_subtitle(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert "ch 1" in app.sub_title
+
+    async def test_moving_the_channel_moves_the_subtitle(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("]")
+            await pilot.pause()
+            assert "ch 2" in app.sub_title
+            await pilot.press("[")
+            await pilot.pause()
+            assert "ch 1" in app.sub_title
+
+    async def test_the_subtitle_names_the_bank(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert "General MIDI" in app.sub_title
+            app._fill("USER")
+            await pilot.pause()
+            assert "User" in app.sub_title
