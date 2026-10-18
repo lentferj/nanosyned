@@ -343,6 +343,13 @@ class NanosynedApp(App):
         #: as the view: the first ``_fill`` builds rows through
         #: ``_visible``, which applies it.
         self.rating_filter: RatingFilter | None = None
+        #: True while the startup restore is still settling: the queued
+        #: first highlight must not be allowed to refill a different bank or
+        #: file itself as the place the user was. Set and cleared in
+        #: ``on_mount`` / :meth:`_finish_restore`.
+        self._restoring = False
+        self._remembered_bank = self._current_bank
+        self._remembered_slot: int | None = None
         if self._config_path is not None:
             from nano import config as _cfg
 
@@ -453,7 +460,14 @@ class NanosynedApp(App):
         ):
             slots.add_column(label, key=key, width=width)
         # Open on the bank that was on screen last time: the left pane's
-        # cursor has to sit on it before anything else moves.
+        # cursor has to sit on it before anything else moves. The guard is
+        # set first, so the *queued* first highlight -- Textual posts one
+        # for the table's starting row and delivers it only after this
+        # returns -- cannot refill General MIDI over the restored bank and
+        # file row 0 as the place the user was.
+        self._restoring = True
+        self._remembered_bank = self._current_bank
+        self._remembered_slot = self._saved_slot_cursor
         table.move_cursor(row=self._bank_ids.index(self._current_bank))
         self._fill(self._current_bank)
         # The saved slot row, clamped to whatever this fill produced --
@@ -465,14 +479,11 @@ class NanosynedApp(App):
             slots.focus()
         else:
             table.focus()
-        # A focus change can reset the slot table's visual cursor, so the
-        # saved row is re-applied once the dust settles -- rxved's shape,
-        # and for the same reason. The handler's unchanged-bank guard is
-        # what makes the queued first highlight harmless: it either matches
-        # the bank already shown, or its refill lands and the next event
-        # puts the restored bank back.
-        if saved_slot_cursor is not None:
-            self.set_timer(0.1, lambda: self._restore_slot_cursor(saved_slot_cursor))
+        # A focus change can reset the slot table's visual cursor, and a
+        # queued highlight may have moved the bank, so the remembered bank,
+        # cursor and guard are all put right once the dust settles -- the
+        # shape rxved applies its cursor after, extended to the bank.
+        self.set_timer(0.1, self._finish_restore)
         printed = len(self.catalog)
         if printed and applied:
             self.notify_status(
@@ -495,19 +506,33 @@ class NanosynedApp(App):
         # timer rather than a branch here.
         self.set_timer(0.6, self._maybe_offer_scan)
 
-    def _restore_slot_cursor(self, cursor: int) -> None:
-        """Re-apply the saved slot row after focus changes have settled.
+    def _finish_restore(self) -> None:
+        """Put the remembered bank and row back once the dust settles.
 
-        Best-effort and one-shot: the row may not exist any more (a filter
-        was remembered with it), so a stale cursor is dropped rather than
-        raising out of a timer callback.
+        The first highlight a `DataTable` posts arrives after ``on_mount``
+        returns, and if nothing guards it it refills General MIDI over the
+        bank the restore just chose and records row 0 as the user's place.
+        So the guard is lifted here, and the bank and cursor are re-asserted
+        in the same callback: whatever the queued events did, this is the
+        last word, and it runs on the main thread with nothing racing it.
+
+        Best-effort by construction: the row may not exist any more (a
+        filter was remembered with it), and a timer callback must not raise.
         """
         try:
-            table = self.query_one("#slot-table", DataTable)
-        except LookupError:
+            bank_table = self.query_one("#bank-table", DataTable)
+            slot_table = self.query_one("#slot-table", DataTable)
+        except LookupError:  # pragma: no cover - the app is shutting down
+            self._restoring = False
             return
-        if self._current:
-            table.move_cursor(row=min(cursor, len(self._current) - 1))
+        if self._current_bank != self._remembered_bank:
+            self._fill(self._remembered_bank)
+            bank_table.move_cursor(row=self._bank_ids.index(self._remembered_bank))
+        if self._remembered_slot is not None and self._current:
+            slot_table.move_cursor(
+                row=min(self._remembered_slot, len(self._current) - 1)
+            )
+        self._restoring = False
 
     # --- filling ------------------------------------------------------------
 
@@ -955,8 +980,10 @@ class NanosynedApp(App):
                 # is already showing. Moving the cursor never triggers it
                 # for a row already shown, and a stale queued event for a
                 # bank that was showing a moment ago must not refill the
-                # pane over a newer fill.
-                if bank_id != self._current_bank:
+                # pane over a newer fill. While the startup restore is
+                # still settling, no highlight is trusted at all: the
+                # restore's own callback has the last word.
+                if bank_id != self._current_bank and not self._restoring:
                     self._fill(bank_id)
                     self._save_ui_state(bank_index=row)
         elif event.data_table.id == "slot-table":
@@ -964,8 +991,9 @@ class NanosynedApp(App):
             # Only save the slot cursor when the slot table is focused --
             # the user is actively navigating. Programmatic cursor moves
             # during startup (while the bank pane has focus) must not
-            # overwrite the saved position they are busy restoring.
-            if event.data_table.has_focus:
+            # overwrite the saved position they are busy restoring, and
+            # neither must a queued highlight while the restore settles.
+            if event.data_table.has_focus and not self._restoring:
                 self._save_ui_state(slot_cursor=event.cursor_row)
 
     def on_data_table_row_selected(self, event) -> None:
