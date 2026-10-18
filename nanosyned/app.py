@@ -457,6 +457,8 @@ class NanosynedApp(App):
             ("name", "name", None),
             ("★", "rating", 5),
             ("PC", "pc", None),
+            ("MSB", "msb", None),
+            ("LSB", "lsb", None),
         ):
             slots.add_column(label, key=key, width=width)
         # Open on the bank that was on screen last time: the left pane's
@@ -923,6 +925,8 @@ class NanosynedApp(App):
                     shown,
                     rating_cell(ratings.get(entry.key, 0)),
                     str(entry.program_change),
+                    str(entry.msb),
+                    str(entry.lsb),
                     key=entry.key,
                 )
         finally:
@@ -952,8 +956,9 @@ class NanosynedApp(App):
             )
         self.query_one("#detail", Static).update(
             f"[b]{entry.display}[/b]  {name}   [dim]{entry.category}[/dim]\n"
-            f"Bank Select (CC0) [b]{entry.bank.select}[/b] · Program Change "
-            f"[b]{entry.program_change}[/b] · {where} · {source}{silent}"
+            f"Bank Select (CC0) [b]{entry.msb}[/b] · LSB (CC32) "
+            f"[b]{entry.lsb}[/b] · PC [b]{entry.program_change}[/b] · "
+            f"{where} · {source}{silent}"
         )
 
     def notify_status(self, message: str, *, refused: bool = False) -> None:

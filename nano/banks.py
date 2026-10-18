@@ -109,6 +109,16 @@ class Slot:
         return self.bank.id
 
     @property
+    def msb(self) -> int:
+        """Bank Select MSB (Controller 0)."""
+        return self.bank.select
+
+    @property
+    def lsb(self) -> int:
+        """Bank Select LSB (Controller 32). This unit ignores it."""
+        return 0
+
+    @property
     def key(self) -> str:
         return f"{self.bank.id}:{self.number:03d}"
 
