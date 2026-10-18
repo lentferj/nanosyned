@@ -285,20 +285,25 @@ wrong shape. `v` has no such twin. rxved and p2ked made the same swap,
 and `tests/test_conformance.py` pins the whole divergence in two
 sentences, as the family asks.
 
-## 15. The catalog's key grammar: `offset=0` and `"n"` rows
+## 15. The catalog's key grammar: `offset=0`, and reading a legacy file
 
 vinsynlib keys the catalog on the *display* number (`BANK:NNN`). On this
 instrument the display number and the program change are the same number
-— both 0-based, equal on every slot — so the binding passes `offset=0`
-to `wire_to_display` and a `"pc"` row is never written. A `"pc"` row
-would come back one number higher.
+— both 0-based, equal on every slot — so the offset is 0. Its own
+`catalog.load` cannot be used for this file: it converts a `"pc"` row with
+`wire_to_display(pc, offset=1)`, i.e. `+1`, which is right for a tool whose
+first patch is number 1 and on this unit would shift every catalog written
+before the grammar changed by one slot. `nano.catalog.load` therefore reads
+the JSON itself and accepts **both** grammars at offset 0 — `"n"` (the
+display number the extractor now writes) and the older `"pc"` (the wire
+number) — taking each as the same integer. `tests/test_catalog.py` pins
+that a `"pc": 0` row lands on slot 0, not slot 1, which is the whole trap.
 
-The generated JSON keeps the row grammar the binding defines: each row
-carries the display number in `"n"` and the name — `{"n": 0, "name": …}`
-— never `"pc"`. `tests/test_extract.py` pins the grammar, the
-dump-beats-page precedence in the User bank, and that a manual line whose
-name is only whitespace is counted as malformed rather than stored as a
-name of one space.
+The extractor writes only `"n"` rows now: `{"n": 0, "name": …}`, never
+`"pc"`. `tests/test_extract.py` pins the grammar, the dump-beats-page
+precedence in the User bank, and that a manual line whose name is only
+whitespace is counted as malformed rather than stored as a name of one
+space.
 
 ## 16. Where the live-names sidecar lives
 

@@ -48,7 +48,9 @@ instrument whichever way it is done.
 
 from __future__ import annotations
 
+import json
 import os
+import sys
 
 from vinsynlib.catalog import (
     UNNAMED,
@@ -61,9 +63,6 @@ from vinsynlib.catalog import (
 )
 from vinsynlib.catalog import (
     Catalog as _Catalog,
-)
-from vinsynlib.catalog import (
-    load as _load,
 )
 
 __all__ = [
@@ -116,19 +115,91 @@ def empty() -> Catalog:
     return Catalog()
 
 
+def _row_number(row: dict) -> int:
+    """The 0-based slot number from a generated row, in either grammar.
+
+    This instrument counts from zero exactly as MIDI does, so the display
+    number and the program change are one number and neither carries an
+    offset. A row may hold it as ``"n"`` (what the current extractor writes)
+    or the older ``"pc"`` (the wire number); they are the same integer here,
+    which is why :func:`vinsynlib.catalog.load` must **not** be used to read
+    this file: it adds one to a ``"pc"`` row, right for a tool whose first
+    patch is number 1, and on this unit that would shift every catalog
+    written before the grammar changed by one slot -- silently, which is the
+    failure mode the whole module is written against.
+    """
+    if "n" in row:
+        return int(row["n"])
+    return int(row["pc"])
+
+
+def _entry_of(bank_id: str, row: object) -> Entry:
+    """One generated row as an :class:`Entry`, or raise for a bad one."""
+    if not isinstance(row, dict):
+        raise TypeError("row is not a dict")
+    name = row["name"]
+    kind = row.get("kind", "")
+    if not isinstance(name, str) or not isinstance(kind, str):
+        raise TypeError("name or kind is not a string")
+    return Entry(bank_id=bank_id, number=_row_number(row), name=name, kind=kind)
+
+
+def _entries_from_banks(banks: dict, target: str) -> list[Entry]:
+    """Every readable row, with the unreadable ones counted to stderr."""
+    entries: list[Entry] = []
+    skipped = 0
+    for bank_id, rows in banks.items():
+        if not isinstance(rows, list):
+            skipped += 1
+            continue
+        for row in rows:
+            try:
+                entries.append(_entry_of(bank_id, row))
+            except (KeyError, TypeError, ValueError):
+                skipped += 1
+    if skipped:
+        print(
+            f"warning: {target} has {skipped} unreadable row(s), skipped; "
+            f"regenerate it with tools/extract_catalog.py",
+            file=sys.stderr,
+        )
+    return entries
+
+
 def load(path: str | None = None) -> Catalog:
     """Load the generated catalog, or an empty one.
 
     A missing catalog is normal and not an error: nanosyned works without it,
     showing numbers only, and a connected unit can supply every name itself.
-    A file that exists but is not a catalog raises, because silently browsing
-    unnamed slots would be a poor way to find out the extractor broke. One
-    bad row costs one row, not the file: unreadable rows are counted to
-    stderr and skipped.
+    A file that cannot be read as a catalog is a warning and an empty
+    catalog, not a refusal to start -- names are a convenience, and the user
+    is told rather than left with "numbers only" and no reason. One bad row
+    costs one row, not the file.
     """
-    # The library builds the base class; hand its state to the subclass so
-    # the browser keeps disagreement() without a second copy of the layer.
-    base = _load(path or DEFAULT_PATH)
-    out = Catalog.__new__(Catalog)
-    out.__dict__.update(base.__dict__)
-    return out
+    target = path or DEFAULT_PATH
+    if not os.path.exists(target):
+        return empty()
+    try:
+        with open(target, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"warning: {target} could not be read as a catalog ({exc}); "
+            f"showing numbers only",
+            file=sys.stderr,
+        )
+        return empty()
+    banks = payload.get("banks", {}) if isinstance(payload, dict) else None
+    if not isinstance(banks, dict):
+        print(
+            f"warning: {target} is not a catalog; showing numbers only",
+            file=sys.stderr,
+        )
+        return empty()
+    source = payload.get("source", "")
+    generated = payload.get("generated", "")
+    return Catalog(
+        _entries_from_banks(banks, target),
+        source=source if isinstance(source, str) else "",
+        generated=generated if isinstance(generated, str) else "",
+    )
