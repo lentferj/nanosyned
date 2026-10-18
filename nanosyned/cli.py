@@ -15,17 +15,26 @@
 
 """``nanocli`` -- the same operations as the browser, one at a time.
 
-Everything here is read-only except ``select``, which is marked, and which
-is the only command that makes the instrument play.
+Reading is silent and needs no gate. ``select`` changes what plays. The
+write commands -- ``send``, ``set`` and ``backup restore`` -- replace
+something the unit keeps or move a parameter in its working copy, so they
+are behind the family's ``--allow-write`` and ``--yes`` together.
+``send`` and ``backup restore`` read the destination, back it up, write and
+read it back. ``set`` prints the frame it sends and reads the working copy
+where the unit can answer a dump; it stores nothing, so it has nothing to
+back up. ``dump`` writes only to this computer.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
+from dataclasses import dataclass
 from typing import Any
 
-from nano import banks, config, dumps
+from nano import backup as bk
+from nano import banks, config, dumps, params, verify
 from nano import catalog as cat
 from nano import favorites as favmod
 from nano import messages as m
@@ -191,6 +200,531 @@ def _cmd_mixes(device, _args) -> None:
     rows = [[f"{n:02d}", name.rstrip()] for n, name in sorted(names.items())]
     print(f"\n{len(names)} mix(es)\n")
     print(table(["#", "name"], rows, empty="(nothing)"))
+
+
+# --- records, on both sides of the wire -------------------------------------
+#
+# One table of sizes and one set of readers/writers, so a dump, a send and a
+# restore cannot disagree about what a mix is or how many bytes it has. The
+# sizes are the unpacked ones: what a dump carries and what the store
+# encoders pack again.
+
+#: The four record kinds the write commands speak, and the byte size of each.
+RECORD_BYTES = {
+    "program": rec.PROGRAM_BYTES,
+    "mix": rec.MIX_BYTES,
+    "effects": rec.EFFECTS_BYTES,
+    "global": rec.GLOBAL_BYTES,
+}
+
+#: What a person calls each kind, for a line that has to name one.
+RECORD_NAMES = {
+    "program": "user program",
+    "mix": "mix",
+    "effects": "effects patch",
+    "global": "global settings",
+}
+
+#: The numbered kinds, and the slots each has. Mix 100 is the edit buffer,
+#: not a slot and not readable, so it is outside the range a write may name.
+NUMBER_RANGES = {
+    "program": (0, 127),
+    "mix": (0, 99),
+    "effects": (0, 127),
+}
+
+
+@dataclass
+class _Write:
+    """One record to store, and what the destination held before it."""
+
+    kind: str
+    number: int | None
+    record: bytes
+    current: bytes = b""
+
+
+def _check_number(kind: str, number: int) -> None:
+    """Refuse a slot number the kind does not have, before anything opens."""
+    low, high = NUMBER_RANGES[kind]
+    if not low <= number <= high:
+        raise SystemExit(
+            f"error: {RECORD_NAMES[kind]} {number} is outside {low}-{high}"
+        )
+
+
+def _truncate(kind: str, data: bytes, what: str) -> bytes:
+    """A record at its documented size, or ``ProtocolError``.
+
+    A dump is padded to a whole packing group, so the tail is dropped. A
+    *short* record is refused: writing one would put whatever follows it in
+    the buffer into the slot.
+    """
+    size = RECORD_BYTES[kind]
+    rec.check_size(data, size, what)
+    return bytes(data[:size])
+
+
+def _record_name(kind: str, record: bytes) -> str:
+    """The name inside a record, or ``""`` for a kind that has none."""
+    if kind == "program":
+        return rec.program_name(record).rstrip()
+    if kind == "mix":
+        return rec.mix_name(record).rstrip()
+    return ""
+
+
+def _label(kind: str, number: int | None, name: str = "") -> str:
+    """One destination, by the name the unit itself uses for it."""
+    if kind == "global":
+        return "the global settings"
+    where = f"{RECORD_NAMES[kind]} {number:03d}"
+    return f"{where} {name!r}" if name else where
+
+
+def _read_effects(device, number: int) -> bytes:
+    """One effects patch, through whichever read the device offers.
+
+    ``nano.bridge`` has no ``read_effects``: the request/reply pair is the
+    same one ``read_program`` uses, so the bridge's own ``request`` serves
+    it without a second copy of the policy here. A device that cannot answer
+    -- the demo is one -- says so rather than inventing bytes.
+    """
+    reader = getattr(device, "read_effects", None)
+    if reader is not None:
+        return bytes(reader(number))
+    request = getattr(device, "request", None)
+    if request is None:
+        raise LookupError(
+            "this device cannot read an effects patch; only the MIDI bridge "
+            "answers that request"
+        )
+    packet = request(
+        m.effects_dump_request(number),
+        m.Function.USER_EFFECTS_DUMP,
+        number=number,
+    )
+    data = packet.data()
+    rec.check_size(data, rec.EFFECTS_BYTES, "an effects patch")
+    return bytes(data[: rec.EFFECTS_BYTES])
+
+
+def _read_record(device, kind: str, number: int | None) -> bytes:
+    """Read one record off the unit, by kind. Silent."""
+    if kind == "program":
+        return bytes(device.read_program(number))
+    if kind == "mix":
+        return bytes(device.read_mix(number))
+    if kind == "effects":
+        return _read_effects(device, number)  # type: ignore[arg-type]
+    return bytes(device.read_global())
+
+
+def _frame(kind: str, number: int | None, record: bytes) -> bytes:
+    """The Alesis message that carries ``record`` back to the unit."""
+    if kind == "program":
+        return m.program_dump(number, record)  # type: ignore[arg-type]
+    if kind == "mix":
+        return m.mix_dump(number, record)  # type: ignore[arg-type]
+    if kind == "effects":
+        return m.effects_dump(number, record)  # type: ignore[arg-type]
+    return m.global_dump(record)
+
+
+def _write_record(device, kind: str, number: int | None, record: bytes) -> None:
+    """Store one record. **The unit keeps this.**"""
+    if kind == "program":
+        device.write_program(number, record)
+    elif kind == "mix":
+        device.write_mix(number, record)
+    elif kind == "effects":
+        device.write_effects(number, record)
+    else:
+        device.write_global(record)
+
+
+def _backup(kind: str, number: int | None, record: bytes) -> str:
+    """Save the destination's current bytes before anything replaces them."""
+    name = _record_name(kind, record) or _label(kind, number)
+    slot = "GLOBAL" if number is None else f"{kind.upper()}:{number:03d}"
+    return bk.save(
+        slot,
+        kind=kind,
+        name=name,
+        blocks={kind: record},
+        source="nanocli (before write)",
+    )
+
+
+def _cmd_dump(device, args) -> None:
+    """Write one record off the unit as a valid Alesis ``.syx`` file. Silent.
+
+    One message, in the same frame the unit itself sends: the store
+    encoders share the dump's shape, and a file holding one is exactly what
+    a dump of that record would have been. Nothing is selected and nothing
+    plays.
+    """
+    kind = args.dump_command
+    number = getattr(args, "number", None)
+    if kind != "global":
+        if number is None:
+            raise SystemExit(f"error: `dump {kind}` needs a slot number")
+        _check_number(kind, number)
+    record = _truncate(
+        kind, _read_record(device, kind, number), f"the {RECORD_NAMES[kind]} dump"
+    )
+    message = _frame(kind, number, record)
+    try:
+        with open(args.file, "wb") as handle:
+            handle.write(message)
+    except OSError as exc:
+        raise SystemExit(f"error: cannot write {args.file}: {exc}") from None
+    name = _record_name(kind, record)
+    print(
+        f"wrote {len(message)} bytes ({len(record)}-byte {RECORD_NAMES[kind]}): "
+        f"{_label(kind, number, name)} -> {args.file}"
+    )
+
+
+def _send_plan(library: dumps.Library, args) -> list[_Write]:
+    """Every record in ``library``, with the slot it will replace.
+
+    The numbers come from the file. ``--program``, ``--mix`` and
+    ``--effects`` override one of them, and only mean anything for a file
+    holding exactly one record of that kind: one destination cannot stand
+    for two records, and picking one silently is how the wrong slot is
+    overwritten.
+    """
+    plan: list[_Write] = []
+    for kind, source in (
+        ("program", "programs"),
+        ("mix", "mixes"),
+        ("effects", "effects"),
+    ):
+        records = getattr(library, source)
+        override = getattr(args, kind)
+        what = f"the {RECORD_NAMES[kind]}"
+        if override is not None:
+            _check_number(kind, override)
+            if len(records) != 1:
+                raise SystemExit(
+                    f"error: --{kind} {override} names one destination, so "
+                    f"{args.file} must hold exactly one {RECORD_NAMES[kind]}; "
+                    f"it holds {len(records)}"
+                )
+            record = _truncate(kind, next(iter(records.values())), what)
+            plan.append(_Write(kind, override, record))
+            continue
+        for number, data in sorted(records.items()):
+            _check_number(kind, number)
+            plan.append(_Write(kind, number, _truncate(kind, data, what)))
+    if library.globals_ is not None:
+        plan.append(
+            _Write(
+                "global",
+                None,
+                _truncate("global", library.globals_, "the global dump"),
+            )
+        )
+    if not plan:
+        raise SystemExit(
+            f"error: {args.file} holds no program, mix, effects or global "
+            f"records; nothing sent"
+        )
+    return plan
+
+
+def _cmd_send(device, args) -> int:
+    """**Write** a ``.syx`` file into the unit. The destructive command.
+
+    The order is the app's and the family's, and every step is load-bearing:
+
+    1. read every destination in full -- a slot that cannot be read is not
+       written, because a write that cannot be undone is not performed;
+    2. say exactly what will be replaced, by the name the unit holds;
+    3. back every destination up;
+    4. send the stores;
+    5. read each back and compare, naming the bytes that differ.
+
+    The gate (``--allow-write`` and ``--yes``) is checked in :func:`main`
+    before a port is opened, so a refusal costs nothing.
+    """
+    try:
+        library = dumps.read_syx_file(args.file)
+    except OSError as exc:
+        raise SystemExit(f"error: cannot read {args.file}: {exc}") from None
+    plan = _send_plan(library, args)
+    for write in plan:
+        if write.kind == "program" and write.number == banks.SILENT_PROGRAM[1]:
+            raise SystemExit(
+                f"error: {_label(write.kind, write.number)} is hardwired "
+                f"silent and cannot be changed; nothing sent"
+            )
+    if library.foreign or library.skipped:
+        print(
+            f"note: {library.foreign + library.skipped} message(s) in "
+            f"{args.file} are not records this command writes; ignored",
+            file=sys.stderr,
+        )
+    # 1. Read every destination before writing any of them.
+    for write in plan:
+        write.current = _truncate(
+            write.kind,
+            _read_record(device, write.kind, write.number),
+            f"the {RECORD_NAMES[write.kind]} at {_label(write.kind, write.number)}",
+        )
+    # 2. Say exactly what will be replaced.
+    print(f"{args.file}: {len(plan)} record(s) to write")
+    for write in plan:
+        old = _record_name(write.kind, write.current)
+        new = _record_name(write.kind, write.record)
+        print(
+            f"  {_label(write.kind, write.number, old)}"
+            f" -> {_label(write.kind, write.number, new)}"
+        )
+    # 3. Back every destination up, before the first store.
+    paths = []
+    for write in plan:
+        path = _backup(write.kind, write.number, write.current)
+        paths.append(path)
+        print(f"  backup {path}")
+    # 4 and 5. Store, then read back.
+    failed = 0
+    for write, path in zip(plan, paths, strict=True):
+        _write_record(device, write.kind, write.number, write.record)
+        read_back = _truncate(
+            write.kind,
+            _read_record(device, write.kind, write.number),
+            f"the {RECORD_NAMES[write.kind]} at {_label(write.kind, write.number)}",
+        )
+        sentence = verify.describe(
+            write.record,
+            read_back,
+            what=_label(
+                write.kind,
+                write.number,
+                _record_name(write.kind, write.record),
+            ),
+        )
+        if verify.mismatches(write.record, read_back):
+            failed += 1
+            print(f"verify   MISMATCH: {sentence}; the backup is {path}")
+            continue
+        message = _frame(write.kind, write.number, write.record)
+        print(f"wrote    {len(message)} bytes to {_label(write.kind, write.number)}")
+        print(f"verify   {sentence}; the backup is {path}")
+    return 1 if failed else 0
+
+
+# --- backups ----------------------------------------------------------------
+
+
+def _when(saved: float) -> str:
+    """A backup's saved time, as a person reads it."""
+    if not saved:
+        return ""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(saved))
+
+
+def _backup_list() -> None:
+    """Backups on disk. Needs no unit, so it opens no port."""
+    directory = bk.backup_dir()
+    rows = []
+    for entry in bk.list_backups():
+        rows.append(
+            [
+                entry.kind,
+                entry.slot,
+                entry.name,
+                _when(entry.saved),
+                f"unreadable: {entry.error}" if entry.error else "",
+            ]
+        )
+    print(f"{directory}\n")
+    print(table(["kind", "slot", "name", "saved", ""], rows, empty="(no backups)"))
+
+
+def _restore_number(kind: str, backup: bk.Backup, override: int | None) -> int | None:
+    """The destination slot a backup names, or ``SystemExit``.
+
+    ``--number`` wins when given. Otherwise the envelope's ``slot`` is read:
+    this CLI writes ``PROGRAM:005`` and the app writes ``USER:005``, and
+    both are understood. A slot that is not a number is refused rather than
+    guessed at, because guessing writes to the wrong program.
+    """
+    if kind == "global":
+        return None
+    if override is not None:
+        _check_number(kind, override)
+        return override
+    text = backup.slot.strip()
+    if text:
+        text = text.rsplit(":", 1)[-1].strip()
+        try:
+            number = int(text)
+        except ValueError:
+            number = None
+        if number is not None:
+            _check_number(kind, number)
+            return number
+    raise SystemExit(
+        f"error: this {kind} backup does not name a slot number "
+        f"(slot {backup.slot!r}); give --number N"
+    )
+
+
+def _cmd_backup_restore(device, args) -> int:
+    """**Write** a backup back into the unit. Destructive, so guarded."""
+    try:
+        backup = bk.load(args.file)
+    except OSError as exc:
+        raise SystemExit(f"error: cannot read {args.file}: {exc}") from None
+    kind = backup.kind
+    if kind not in RECORD_BYTES:
+        raise SystemExit(
+            f"error: {args.file} holds a {kind!r} backup; this unit backs up "
+            f"{', '.join(sorted(RECORD_BYTES))}"
+        )
+    if kind not in backup.blocks:
+        raise SystemExit(
+            f"error: {args.file} is a {kind} backup with no {kind!r} block; "
+            f"nothing to restore"
+        )
+    record = _truncate(kind, backup.blocks[kind], f"the {RECORD_NAMES[kind]} backup")
+    number = _restore_number(kind, backup, getattr(args, "number", None))
+    if kind == "program" and number == banks.SILENT_PROGRAM[1]:
+        raise SystemExit(
+            f"error: user program {number} is hardwired silent and cannot be "
+            f"changed; nothing sent"
+        )
+    current = _truncate(
+        kind,
+        _read_record(device, kind, number),
+        f"the {RECORD_NAMES[kind]} at {_label(kind, number)}",
+    )
+    old = _record_name(kind, current)
+    new = _record_name(kind, record) or backup.name
+    print(f"{args.file}: {_label(kind, number, old)} -> {_label(kind, number, new)}")
+    path = _backup(kind, number, current)
+    print(f"  backup {path}")
+    _write_record(device, kind, number, record)
+    read_back = _truncate(
+        kind,
+        _read_record(device, kind, number),
+        f"the {RECORD_NAMES[kind]} at {_label(kind, number)}",
+    )
+    sentence = verify.describe(record, read_back, what=_label(kind, number, new))
+    if verify.mismatches(record, read_back):
+        print(f"verify   MISMATCH: {sentence}; the backup is {path}")
+        return 1
+    print(f"verify   {sentence}; the backup is {path}")
+    return 0
+
+
+def _cmd_backup(device, args) -> int | None:
+    """The ``backup`` group: list on disk, or restore one."""
+    if args.backup_command == "list":
+        _backup_list()
+        return None
+    return _cmd_backup_restore(device, args)
+
+
+# --- one parameter, through the direct edit ---------------------------------
+
+
+def _set_read_back(device, mode: str, param: params.Param | None, value: int) -> int:
+    """Read the working copy back where this mode has a request for it."""
+    if mode == "program":
+        record = device.read_edit_program()
+        where = "the edit buffer"
+    elif mode == "global":
+        record = device.read_global()
+        where = "the global dump"
+    else:
+        print(
+            "read-back  this mode has no dump request this command can make; "
+            "the edit was not verified (a MIDI Edit stores nothing)"
+        )
+        return 0
+    if param is None:
+        print(
+            f"read-back  {where} answered ({len(record)} bytes); the address "
+            f"is not in the transcribed table, so the value was not compared"
+        )
+        return 0
+    stored = rec.decode_bit_field(record, param)
+    if mode == "global":
+        # The global record is two's complement already; the message's value
+        # is the same bit pattern.
+        seen = stored
+        expected = value & ((1 << param.bits) - 1)
+    else:
+        # Program common and sound fields are offset binary.
+        seen = stored + param.offset
+        expected = value
+    if seen != expected:
+        print(
+            f"read-back  {param.label} reads {seen}, not {expected} -- the "
+            f"edit did not land in {where}"
+        )
+        return 1
+    print(f"read-back  {param.label} = {seen}")
+    return 0
+
+
+def _cmd_set(device, args) -> int:
+    """**Write** one parameter through the ``10`` MIDI Edit message.
+
+    Nothing is stored: the unit moves the parameter in its working copy,
+    and only a store keeps it. It does change what plays, so it is behind
+    the same gate as ``send``. There is no backup to take because there is
+    no stored record to replace; what proves the edit landed is the buffer
+    read back afterwards, in the two modes that can answer a dump.
+    """
+    mode = args.mode
+    channel = getattr(device, "channel", 0) or 0
+    number = params.MODE_NUMBERS[mode]
+    message = m.midi_edit(
+        number,
+        args.function,
+        args.page,
+        args.pot,
+        args.value,
+        sound=args.sound,
+        channel=channel,
+    )
+    param = params.at(
+        mode,
+        args.function,
+        args.page,
+        args.pot,
+        sound=args.sound,
+        channel=channel if mode == "mix" else None,
+    )
+    line = " ".join(f"{byte:02X}" for byte in message)
+    print(f"frame    {line}  ({len(message)} bytes)")
+    if param is None:
+        print(
+            f"address  mode {mode}, function {args.function}, page "
+            f"{args.page}, pot {args.pot} (not in the transcribed table)"
+        )
+    else:
+        print(
+            f"address  {param.label} (mode {mode}, function "
+            f"{args.function}, page {args.page}, pot {args.pot})"
+        )
+    print(f"channel  {channel + 1}, sound {args.sound}, value {args.value}")
+    device.midi_edit(
+        number,
+        args.function,
+        args.page,
+        args.pot,
+        args.value,
+        sound=args.sound,
+        channel=channel,
+    )
+    print("sent     the working copy, not stored; the unit's memory is unchanged")
+    return _set_read_back(device, mode, param, args.value)
 
 
 def _cmd_select(device, args) -> int:
@@ -439,10 +973,54 @@ def _cmd_tags(_device, args) -> None:
 OFFLINE = {"ports", "banks", "list", "syx", "find", "fav", "favorites", "tags"}
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _needs_device(args) -> bool:
+    """Whether this invocation must open the unit.
+
+    ``backup list`` is the one command inside a group that needs nothing:
+    judging by the group's name alone would open a port to list files on
+    disk.
+    """
+    listing = (
+        args.command == "backup" and getattr(args, "backup_command", None) == "list"
+    )
+    return args.command not in OFFLINE and not listing
+
+
+def _writes(args) -> bool:
+    """True for the commands that change the unit or what it plays."""
+    if args.command in ("send", "set"):
+        return True
+    return (
+        args.command == "backup" and getattr(args, "backup_command", None) == "restore"
+    )
+
+
+def _require_write(args) -> None:
+    """The gate, before a port is opened. Both halves are required."""
+    if not _writes(args):
+        return
+    missing = [
+        flag
+        for flag, given in (
+            ("--allow-write", args.allow_write),
+            ("--yes", args.yes),
+        )
+        if not given
+    ]
+    if not missing:
+        return
+    what = "backup restore" if args.command == "backup" else args.command
+    raise SystemExit(
+        f"error: `{what}` writes to the unit; add {' and '.join(missing)} "
+        f"if that is what you want"
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per command
     parser = make_parser(
         "nanocli",
-        "Browse an Alesis NanoSynth. Everything is read-only except `select`.",
+        "Browse an Alesis NanoSynth. Reading is silent; `send`, `set` and "
+        "`backup restore` write, and need --allow-write and --yes.",
         distribution="nanosyned",
     )
     # Every flag's help text is the family's, from vinsynlib.spec. This tool
@@ -459,29 +1037,45 @@ def build_parser() -> argparse.ArgumentParser:
         demo=True,
         favorites=True,
         yes=True,
+        allow_write=True,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def _store_flag(sp: argparse.ArgumentParser) -> None:
-        """Let ``--favorites`` follow the subcommand as well as precede it.
+    def _inherit(sp: argparse.ArgumentParser, dest: str) -> None:
+        """Let a family option follow the subcommand as well as precede it.
 
         argparse only accepts a parent parser's option *before* the
-        subcommand, and ``nanocli tags --favorites x`` is the shape people
+        subcommand, and ``nanocli send x.syx --yes`` is the shape people
         actually type. Re-declaring the option keeps the family's own help
         text, taken from the action just added. ``SUPPRESS`` is the load-
-        bearing part: without it the subparser's default (``None``) would
-        overwrite a path given before the subcommand.
+        bearing part: without it the subparser's default would overwrite a
+        value given before the subcommand.
         """
         for action in parser._actions:
-            if action.dest == "favorites":
-                sp.add_argument(
-                    *action.option_strings,
-                    dest=action.dest,
-                    metavar=action.metavar,
-                    default=argparse.SUPPRESS,
-                    help=action.help,
-                )
-                return
+            if action.dest != dest:
+                continue
+            extra: dict[str, Any] = {
+                "dest": action.dest,
+                "default": argparse.SUPPRESS,
+                "help": action.help,
+            }
+            # A switch must stay a switch: re-declaring --yes as a value
+            # option is how ``send x.syx --yes`` came to want an argument.
+            if action.nargs == 0:
+                extra["action"] = "store_true" if action.const else "store_false"
+            else:
+                extra["type"] = action.type
+                extra["metavar"] = action.metavar
+            sp.add_argument(*action.option_strings, **extra)
+            return
+
+    def _store_flag(sp: argparse.ArgumentParser) -> None:
+        _inherit(sp, "favorites")
+
+    def _write_flags(sp: argparse.ArgumentParser) -> None:
+        """The two halves of the write gate, either side of the command."""
+        _inherit(sp, "allow_write")
+        _inherit(sp, "yes")
 
     sub.add_parser("ports", help="list MIDI ports (opens nothing)")
     sub.add_parser("banks", help="the five banks, and what each allows")
@@ -491,6 +1085,83 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("current", help="what the unit is playing (silent)")
     sub.add_parser("read", help="read the User bank's names (silent)")
     sub.add_parser("mixes", help="read the mix names (silent)")
+    sp = sub.add_parser(
+        "dump", help="write one record off the unit to a .syx file (silent)"
+    )
+    dsub = sp.add_subparsers(dest="dump_command", required=True)
+    for kind in ("program", "mix", "effects"):
+        dp = dsub.add_parser(
+            kind, help=f"read one {RECORD_NAMES[kind]} and write it as .syx"
+        )
+        dp.add_argument("number", type=int)
+        dp.add_argument("--file", required=True, metavar="PATH")
+    dp = dsub.add_parser("global", help="read the global settings as .syx")
+    dp.add_argument("--file", required=True, metavar="PATH")
+    sp = sub.add_parser(
+        "send",
+        help="WRITE a .syx file into the unit (backs up, then verifies)",
+    )
+    sp.add_argument("file", metavar="FILE")
+    sp.add_argument(
+        "--program",
+        type=int,
+        default=None,
+        metavar="N",
+        help="store the file's one program in this slot, not its own number",
+    )
+    sp.add_argument(
+        "--mix",
+        type=int,
+        default=None,
+        metavar="N",
+        help="store the file's one mix in this slot, not its own number",
+    )
+    sp.add_argument(
+        "--effects",
+        type=int,
+        default=None,
+        metavar="N",
+        help="store the file's one effects patch in this slot, not its own",
+    )
+    _write_flags(sp)
+    sp = sub.add_parser(
+        "backup", help="backups on disk, and restoring one (restore WRITES)"
+    )
+    bsub = sp.add_subparsers(dest="backup_command", required=True)
+    bsub.add_parser("list", help="backups found on disk (no unit needed)")
+    bp = bsub.add_parser(
+        "restore", help="write a backup back into the unit (DESTRUCTIVE)"
+    )
+    bp.add_argument("file", metavar="PATH")
+    bp.add_argument(
+        "--number",
+        type=int,
+        default=None,
+        metavar="N",
+        help="destination slot, when the backup itself does not name one",
+    )
+    _write_flags(bp)
+    sp = sub.add_parser(
+        "set",
+        help="WRITE one parameter through the MIDI Edit message (not stored)",
+    )
+    sp.add_argument("mode", choices=["global", "mix", "program", "effects"])
+    sp.add_argument("function", type=int, help="0-16")
+    sp.add_argument("page", type=int, help="0-23")
+    sp.add_argument("pot", type=int, help="0-3")
+    sp.add_argument("value", type=int, help="-128 to 127")
+    sp.add_argument(
+        "--sound",
+        type=int,
+        default=0,
+        metavar="N",
+        help="program sound or effects bus, 0-3",
+    )
+    # --channel is both the send channel and the message's `cccc` field;
+    # re-declaring it here lets it follow the command, which is the shape
+    # people type. main() subtracts one and the device carries the 0-15 form.
+    _inherit(sp, "channel")
+    _write_flags(sp)
     sp = sub.add_parser("select", help="select a program ON THE UNIT")
     sp.add_argument("bank", choices=banks.bank_ids())
     sp.add_argument("number", type=int)
@@ -555,6 +1226,10 @@ COMMANDS = {
     "current": _cmd_current,
     "read": _cmd_read,
     "mixes": _cmd_mixes,
+    "dump": _cmd_dump,
+    "send": _cmd_send,
+    "backup": _cmd_backup,
+    "set": _cmd_set,
     "select": _cmd_select,
     "syx": _cmd_syx,
     "find": _cmd_find,
@@ -570,6 +1245,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # The family's range checks, before anything is opened.
     validate_common(args)
+    # ...and the write gate, also before a port is opened: a store that was
+    # not asked for twice must not even cost a probe.
+    _require_write(args)
     # channel_of subtracts one: --channel is 1-16 on every command line in
     # this family and 0-15 on the wire.
     channel = channel_of(args, default=config.load_channel(config_path)) or 0
@@ -577,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
     #: DemoDevice and NanoBridge are structurally interchangeable; the
     #: local is untyped for the same reason as in nanosyned.app.main.
     device: Any = None
-    if args.command not in OFFLINE:
+    if _needs_device(args):
         if args.demo:
             from nanosyned.demo import DemoDevice
 

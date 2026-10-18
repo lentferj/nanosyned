@@ -162,6 +162,23 @@ class TestManualSource:
             "USER": [{"n": 4, "name": "Glass Drone"}],
         }
 
+    def test_a_whitespace_only_name_is_malformed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # "USER 000" followed by trailing spaces: the greedy separator used
+        # to leave one space for the name group, so this parsed as a name
+        # and was stored silently. It is a blank name and is counted, not
+        # stored.
+        source = tmp_path / "invented.ins"
+        source.write_text("GM 0 Tin Bell\nUSER 000    \n", encoding="utf-8")
+        out = tmp_path / "catalog.json"
+        assert extract.main(["--manual", str(source), "--output", str(out)]) == 0
+
+        err = capsys.readouterr().err
+        assert f"{source}: 1 line(s) did not parse and were skipped" in err
+        payload = json.loads(out.read_text(encoding="utf-8"))
+        assert payload["banks"] == {"GM": [{"n": 0, "name": "Tin Bell"}]}
+
     def test_it_refuses_to_run_without_a_source(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit):
             extract.main(["--output", str(tmp_path / "catalog.json")])

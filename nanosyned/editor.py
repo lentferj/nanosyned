@@ -40,11 +40,21 @@ make the caller's next move deliberate.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
 from nano import messages as m
+from nano import params as p
 from nano import records as rec
 
-__all__ = ["EditGate", "EditRecord", "ProgramEditor"]
+__all__ = [
+    "EditGate",
+    "EditRecord",
+    "GlobalEditRecord",
+    "GlobalEditor",
+    "GlobalRow",
+    "MixEditRecord",
+    "ProgramEditor",
+]
 
 #: The refusal a locked gate gives. One sentence, and it names the gate and
 #: the key that opens it -- the family's rule: a refusal that does not say
@@ -174,3 +184,174 @@ class EditRecord:
     def label(self) -> str:
         """What the undo history calls this edit."""
         return f"user program {self.number:03d}"
+
+
+@dataclass(frozen=True, slots=True)
+class MixEditRecord:
+    """One completed mix store, carrying enough to put the mix back.
+
+    The mix counterpart of :class:`EditRecord`: the mix number, the 138
+    bytes that were there immediately before the write, and the name those
+    bytes spell. ``z`` re-sends them with ``write_mix``; nothing here
+    reaches the wire itself.
+    """
+
+    number: int
+    previous: bytes
+    name: str = ""
+
+    @property
+    def label(self) -> str:
+        """What the undo history calls this edit."""
+        return f"mix {self.number:03d}"
+
+
+@dataclass(frozen=True, slots=True)
+class GlobalEditRecord:
+    """One completed global store: the whole set, as it was.
+
+    There is one global set and no number to name it by, so this carries
+    the previous record and nothing else. ``z`` re-sends it with
+    ``write_global``.
+    """
+
+    previous: bytes
+
+    @property
+    def label(self) -> str:
+        """What the undo history calls this edit."""
+        return "the global settings"
+
+
+#: The global rows a store must not present as editable, and the model the
+#: spec names beside each one. The NanoSynth is a QS-family member (7) and
+#: is not named in the specification at all, so "documented for the QS6/7/8
+#: only" means this unit is not among the models it was written for. Writing
+#: one of these and reporting success would be a claim nothing supports.
+_MODEL_ONLY: Final[tuple[tuple[str, str], ...]] = (
+    ("(QS6,7,8 only)", "QS6/7/8"),
+    ("(QS7,8,R only)", "QS7/8/R"),
+    ("(QSR only)", "QSR"),
+)
+
+_GLOBAL_BY_LABEL: Final[dict[str, p.Param]] = {
+    param.label: param for param in p.GLOBAL_PARAMS
+}
+
+
+@dataclass(frozen=True, slots=True)
+class GlobalRow:
+    """One global parameter as the editor shows it.
+
+    ``refusal`` is why a store must leave the row alone, or ``None`` when it
+    is writable; ``value`` is ``None`` when this dump does not carry the
+    row (dumps from software before 2.00 hold seventeen of the twenty
+    bytes). A row that is not written is still *shown*, with its value and
+    the reason -- hiding it would teach that the instrument does not have
+    it.
+    """
+
+    param: p.Param
+    value: int | None
+    refusal: str | None
+
+    @property
+    def writable(self) -> bool:
+        """Whether a store may change this row."""
+        return self.refusal is None
+
+
+class GlobalEditor:
+    """The one global record, and which of its rows a store may change.
+
+    **Table-driven and small**: the rows are :data:`nano.params.GLOBAL_PARAMS`,
+    the widths and ranges are theirs, and the only policy here is which
+    rows a whole-record store must not pretend to change. The values are
+    two's complement (the spec's own convention for Global), so a signed
+    row is sign-extended on the way out of the record and complemented on
+    the way back in -- :func:`nano.records.global_record_bytes` does the
+    first, :func:`nano.records.encode_bit_field` the second.
+
+    The instrument is silent about whether it kept a global store, exactly
+    as it is about a program, so the app reads the record back and compares
+    it; this class holds no device and sends nothing.
+    """
+
+    def __init__(self, record: bytes) -> None:
+        """Wrap the global dump as it was read."""
+        rec.check_size(record, 1, "the global settings")
+        self._original = bytes(record)
+        self._working = bytearray(self._original)
+
+    @property
+    def original(self) -> bytes:
+        """The record as it was read, untouched -- what a backup preserves."""
+        return self._original
+
+    @property
+    def size(self) -> int:
+        """How many bytes the dump carries (17 on a pre-2.00 unit)."""
+        return len(self._original)
+
+    def record(self) -> bytes:
+        """The working copy, ready to send."""
+        return bytes(self._working)
+
+    @property
+    def dirty(self) -> bool:
+        """Whether anything has been changed since the record was read."""
+        return self._working != self._original
+
+    def reset(self) -> None:
+        """Discard the edits; the working copy becomes the record again."""
+        self._working[:] = self._original
+
+    def value(self, param: p.Param) -> int | None:
+        """One row's current value, sign-extended, or ``None`` if absent."""
+        return rec.global_record_bytes(self._working).get(param.label)
+
+    def refusal(self, param: p.Param) -> str | None:
+        """Why a store must leave ``param`` alone, or ``None``."""
+        for marker, model in _MODEL_ONLY:
+            if marker in param.label:
+                return f"the spec documents this row for the {model} only"
+        if "deleted parameter" in param.label:
+            return "a deleted parameter the spec keeps only as a spare"
+        if param.function < 0:
+            return "the spec gives this row no direct-edit address"
+        last_bit = param.bit_address + param.bits - 1
+        if last_bit >> 3 >= len(self._original):
+            return "not in this dump: it predates the row"
+        return None
+
+    def rows(self) -> list[GlobalRow]:
+        """Every documented global parameter, in the spec's order."""
+        values = rec.global_record_bytes(self._working)
+        return [
+            GlobalRow(
+                param=param,
+                value=values.get(param.label),
+                refusal=self.refusal(param),
+            )
+            for param in p.GLOBAL_PARAMS
+        ]
+
+    def set_value(self, label: str, value: int) -> str | None:
+        """Set one row on the working copy; return the refusal, or ``None``.
+
+        The value is clamped to the row's documented range first (the
+        spec's own rule for the ``10`` message, reused here) and then
+        stored two's-complement, which is how a Global record carries a
+        negative number. A refused row is refused here too, so a caller
+        that reaches past the screen's own check still cannot write one.
+        """
+        param = _GLOBAL_BY_LABEL.get(label)
+        if param is None:
+            return f"{label!r} is not a global parameter"
+        refusal = self.refusal(param)
+        if refusal is not None:
+            return f"{param.label} was not written: {refusal}"
+        clamped = param.clamp(value)
+        stored = clamped if clamped >= 0 else clamped + (1 << param.bits)
+        rec.encode_bit_field(self._working, param, stored)
+        return None

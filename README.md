@@ -68,10 +68,6 @@ Stripe, so bank and tax details are never handed to the person paying.
 
 ---
 
----
-
-
-
 ## AI assistance & human authorship
 
 nanosyned was built by its human author together with AI assistance. The
@@ -86,7 +82,7 @@ Full account in [DISCLAIMER.md](DISCLAIMER.md).
 ---
 ## ⚠️ Use at your own risk — back up first
 
- is provided **as is, with absolutely no warranty and no liability**
+**nanosyned** is provided **as is, with absolutely no warranty and no liability**
 for data loss or **hardware damage**. You assume all risk. Full terms:
 [DISCLAIMER.md](DISCLAIMER.md).
 
@@ -106,6 +102,8 @@ all** — the manual says so plainly — and the unit has no way to tell you
 what any of them are called. nanosyned selects them by Bank Select and
 Program Change, reads back the names of the one bank that can be read,
 and keeps your favourites.
+
+![The browser: the five banks, and the User bank with names read off the unit](docs/screenshots/browser.png)
 
 ## What it knows, and how it knows it
 
@@ -154,20 +152,100 @@ this environment only: `.venv/bin/pip install --no-deps -e ../vinsynlib`.
 
 ## Running it
 
+The install puts two commands on `PATH` — `nanosyned` for the browser and
+`nanocli` for the command line — or run the modules from a checkout:
+
 ```
-python -m nanosyned.app --demo      # a NanoSynth that is not there
-python -m nanosyned.app             # find the real one
-python -m nanosyned.cli banks       # the five banks
-python -m nanosyned.cli read        # the User bank's names (silent)
-python -m nanosyned.cli syx FILE    # read a .syx dump, no hardware
+nanosyned --demo                   # a NanoSynth that is not there
+nanosyned                          # find the real one
+nanocli banks                      # the five banks
+nanocli read                       # the User bank's names (silent)
+nanocli syx FILE                   # read a .syx dump, no hardware
 ```
 
 `--demo` opens no MIDI port and constructs no bridge, so it is safe to run
 beside a session that is driving the hardware.
 
-Keys: `↑↓` move (never sends anything), `⏎` select on the unit, `r` read
-names, `/` search, `[` `]` channel, `c` set channel, `f` favourite, `F`
-favourites view, `t` tags, `n` note, `i` device, `?` help, `q` quit.
+## The browser
+
+| key | |
+|---|---|
+| `↑↓` | move the cursor — this sends nothing, ever |
+| `⏎` | select this slot **on the unit** — it will sound |
+| `tab` | switch pane (banks ↔ slots) |
+| `S` | scan the unit: read the User bank's names, with progress, cancellable |
+| `r` | read the User bank's names again (silent) |
+| `/` | search names, tags and notes |
+| `[` / `]` / `c` | previous / next send channel, or type one |
+| `f` | favourite this slot |
+| `v` | cycle the view: all slots → this bank's favourites → every favourite |
+| `t` / `n` / `*` | tags / note / rating, 0–5 stars (on a favourite) |
+| `V` | filter by rating — exactly that many, or that many and up |
+| `e` | edit the User program under the cursor — **only while the gate is armed** |
+| `m` | edit a mix: its sixteen channels |
+| `M` | set the sound mode, Program or Mix — **a write, and it changes what plays** |
+| `g` | edit the global record |
+| `w` | arm / lock the write gate |
+| `z` / `Z` | undo / undo all — put back what a store replaced |
+| `i` / `?` / `q` | device identity / help / quit |
+
+The cursor never sends a byte, `⏎` is the one key that makes the instrument
+play, and every write key is inert until `w` has armed the gate — see
+[Writing to the instrument](#writing-to-the-instrument) for the whole fence.
+
+  ![Favourites view](docs/screenshots/favourites.png)
+  ![Search](docs/screenshots/search.png)
+
+## Command line
+
+`nanocli` is the same operations one at a time. Everything is read-only
+except `select`, which is marked, and the write commands, which are gated:
+
+```
+nanocli ports                      # MIDI ports (opens nothing)
+nanocli banks                      # the five banks, and what each allows
+nanocli list USER                  # every slot in a bank, with known names
+nanocli status                     # ask the unit who it is (silent)
+nanocli current                    # what the unit is playing (silent)
+nanocli read                       # the User bank's names (silent)
+nanocli mixes                      # the mix names (silent)
+nanocli dump program 12 --file p.syx   # one record off the unit, as .syx
+nanocli dump global --file g.syx       # the global settings, the same way
+nanocli select USER 12             # select it ON THE UNIT — plays; asks first
+nanocli syx FILE                   # read a .syx file (no hardware)
+nanocli find "bass"                # search known names (no hardware)
+nanocli fav                        # the favourites database (no hardware)
+nanocli tags                       # tags in use, with counts (no hardware)
+
+nanocli send FILE --allow-write --yes
+                                   # WRITE a .syx into the unit: reads and
+                                   #   backs up every destination, verifies
+nanocli set program 8 0 0 42 --allow-write --yes
+                                   # write one parameter (MIDI Edit; the
+                                   #   working copy moves, nothing is stored)
+nanocli backup list                # backups on disk (no unit needed)
+nanocli backup restore FILE --allow-write --yes
+                                   # write a backup back — DESTRUCTIVE
+```
+
+Global options go **before** the subcommand — `nanocli --demo banks` — and
+mean the same here as in the browser: `--port` names one port and asks
+nothing, `--scan` probes every port, `--demo` opens none. `--favorites`,
+`--yes` and `--allow-write` also work *after* the subcommand, which is the
+shape people type.
+
+`ports`, `banks`, `list`, `syx`, `find`, `fav`, `tags` and `backup list`
+construct no bridge and open no port — they work on a headless box and while
+somebody else is using the hardware. `select` asks before it plays unless
+`--yes`. `send`, `set` and `backup restore` refuse to run without **both**
+`--allow-write` and `--yes`, and the check happens before a port is opened,
+so a refusal costs nothing. Each names what it is about to replace — by the
+name the unit holds — backs it up, sends, and reads it back.
+
+`nanocli fav USER 12 --add --rate 4 --tags "bass" --note "for the intro"`
+favourites that slot; `--remove` un-favourites it, `--rate` alone rates one
+you already have, and `--tag` / `--search` / `--rating-at-least` / `--order`
+filter the listing. `favorites` is an alias.
 
 ## The name catalog
 
@@ -181,6 +259,138 @@ python3 tools/extract_catalog.py --manual my-transcription.txt
 ```
 
 nanosyned runs without it.
+
+## Memory / live names
+
+Names read off the unit are kept in a sidecar beside the catalog —
+`live-names.json`, next to `catalog.json` in `nano/data/` by default — and
+they survive a restart. The browser loads them at startup, so it shows the
+right names *before* anything has talked to the unit; the next read confirms
+them and saves them back, so the following start is right again without one.
+Point the browser at another catalog (`--catalog`) and the sidecar travels
+with it, because the names were read against that catalog's bank layout.
+
+The sidecar is deliberately **not** inside the catalog file. The catalog is
+a transcription of the manual; the sidecar is one instrument's current
+contents, and the printed-versus-live disagreement is the whole point of
+having two sources — the browser marks which name came from where, and
+overwriting one with the other would destroy that. A missing sidecar means
+nothing has been read yet; a corrupt one earns a warning rather than a
+refusal to open, because names are a convenience.
+
+## Backups
+
+Every write is preceded by an unconditional backup: the destination is read
+in full and that read is written to a file **before** a byte goes out, and if
+the read fails, nothing is written — a write that cannot be undone is not
+performed.
+
+The files live in nanosyned's per-platform settings directory, with
+`backups/` beneath it — beside `config.toml`, and **not** in the checkout,
+which `git clean` empties. Each backup is one record's blocks base64-encoded
+in the family's JSON envelope, version-checked before it is trusted; the
+kinds are `program`, `mix`, `effects` and `global`. A filename never
+overwrites one already there, so the restore points accumulate. `nanocli
+backup list` shows them newest first, and a backup that cannot be read is
+listed with its error rather than dropped — a restore point you cannot read
+is exactly the thing to be told about.
+
+## Writing to the instrument
+
+Writing here is destructive and **unacknowledged**: the unit answers a store
+with silence whether it took it or not. So the fence exists, and it is the
+family's arm-then-fire shape, not a suggestion:
+
+- **The gate decides, and sends nothing.** `w` arms it (or `--allow-write`
+  at launch); while it is locked, the write keys are inert and a refusal
+  names the gate. The check happens on the main thread before a worker
+  exists, so a refused action sends no message at all — not a store, not a
+  read, nothing.
+- **Back up first, unconditionally.** The destination is read in full before
+  a byte is written, and that read is the backup.
+- **Say what is about to be destroyed, by name.** "Program 12" means
+  nothing; the name it is about to replace means everything.
+- **Verify by reading back, and name what did not match.** The store is
+  compared byte for byte against what the unit holds afterwards, because
+  silence cannot be taken for success. Only an agreed read-back is recorded
+  for undo, so `z` can never "restore" a write the unit refused.
+
+**User program 127 is hardwired silent** and cannot be changed; the editor,
+`nanocli send` and `nanocli backup restore` all refuse it outright.
+
+What can be written: a User program's name (the editor sends the whole
+350-byte record; the sound blocks travel through untouched), a mix's sixteen
+channels, and the global record — whole-record stores behind `w` — plus
+single parameters through the MIDI Edit message (`nanocli set`), which moves
+the unit's working copy and is not stored, and the Program/Mix sound mode
+(`M`, the `0D` Mode Select), which changes what the unit plays. The store
+opcodes are the QS specification's — `00` program, `06` effects, `0E` mix,
+`0A` global, `10` parameter edit, `0D` mode select — transcribed from it and
+confirmed against the instrument on the read side;
+`docs/RESOLUTION_NOTES.md` records which is which.
+
+  ![The program editor](docs/screenshots/editor.png)
+
+## The bench, real hardware
+
+`make test-hardware` drives a real NanoSynth. It is **not** part of `make
+check`, and nothing runs it unless you ask: without `--hardware`, every test
+in `tests/test_hardware.py` *skips* — a skip with a reason, never a pass, so
+"the synth was off" and "the offsets are wrong" cannot look the same. It asks
+read-only questions — identity, all 128 User program names, the mix and
+global record sizes, the edit buffer — and its one write, a User program
+renamed and put back, sits behind a third gate (`NANOSYNED_HW_WRITE=1`) and
+restores the original bytes in a `finally` with a read-back assertion, so a
+failed check leaves the unit as it found it.
+
+One session at a time: the suite opens MIDI ports, so it never runs beside
+another session that is driving the unit. `tools/measure_send_gap.py`
+measures the two timing constants (`SEND_GAP`, `SELECT_GAP`) against the
+unit — see [Honest limits](#honest-limits). The demo path (`--demo`) is the
+synthetic stand-in everywhere else, and a demo agrees with whatever nanosyned
+believes, which is why the bench exists.
+
+  ![Device identity](docs/screenshots/device.png)
+  ![Help](docs/screenshots/help.png)
+
+## Honest limits
+
+- **`SEND_GAP` and `SELECT_GAP` are still guesses** — 0.010 s and 0.005 s,
+  the siblings' conservative defaults, labelled as such at the point of use.
+  Alesis documents no inter-message timing for this unit, and until
+  `tools/measure_send_gap.py` is run against it, those numbers are not
+  measurements.
+- **Only the User bank can be read.** The other four are ROM and the
+  protocol has no request for them, so their names come from a catalog you
+  generate from your own transcription. General MIDI is the easy half — the
+  bank is in GM order, so a standard name list fits it exactly — and the
+  three preset banks are not; those names are yours to type, and they are
+  not this project's to redistribute.
+- **The parameter tables are transcribed, not bench-verified.** The record
+  sizes are pinned on the unit (program 350, mix 138, effects 65, global 20
+  bytes) and one rename has been written, read back and restored on the
+  bench; the parameter *rows* in `nano/params.py` are the QS specification's,
+  and which of them this firmware honors is not established. The global
+  editor shows rows the spec documents for another model — and will not write
+  them, because a store writes the whole record and reporting success over a
+  value the unit is documented to ignore would be a lie.
+- **Mixes are decoded, not catalogued.** Their names come off the unit
+  (`nanocli mixes`, `m` in the browser); the manual never mentions them, and
+  they live outside the catalog like every other live read.
+- **User 127 is hardwired silent** — the one slot no write can touch, in the
+  editor and on the command line alike.
+
+## Screenshots
+
+The frames in this README live in `docs/screenshots/`, each as a `.png` with
+its `.svg` source beside it: `browser` (the five banks and the slot pane),
+`detail` (the row under the cursor), `favourites` (the `v` views), `search`
+(`/`), `scan-offer` (the `S` scan), `editor`, `device` (the `i` report) and
+`help` (`?`). They are captured from `--demo` with invented names, so no real
+unit's contents appear in them.
+
+  ![The detail line](docs/screenshots/detail.png)
+  ![The scan offer](docs/screenshots/scan-offer.png)
 
 ## Development checks
 
@@ -197,6 +407,7 @@ make check        # everything below, in order; stops at the first failure
 | `make format` | `ruff check --fix` and `ruff format` — **the only target that edits your code** |
 | `make typecheck` | `mypy` |
 | `make test` | `pytest`, with coverage and a `term-missing` report |
+| `make test-hardware` | the same, against a real NanoSynth — opens MIDI ports, so **not** part of `check` |
 | `make audit` | `pip-audit`, `vulture`, `deptry`, `detect-secrets` |
 
 All configuration lives in `pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`,

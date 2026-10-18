@@ -227,3 +227,90 @@ Arrived with the code and did not have to be rediscovered:
   the platform data directory.
 * The manufacturer's names are not committed: the catalog is generated
   and gitignored, and every fixture is invented.
+
+## 12. The write opcodes and what a store does
+
+Transcribed from the QS specification, confirmed against the unit on the
+read side:
+
+| opcode | store | record size |
+|---|---|---|
+| `00` | User Program Dump | 350 bytes |
+| `06` | User Effects Dump | 65 bytes |
+| `0E` | Mix Dump | 138 bytes |
+| `0A` | Global Dump | 20 bytes |
+| `10` | MIDI Edit — one parameter, the working copy | not stored |
+| `0D` | Mode Select — Program/Mix, one byte | changes what plays |
+
+The store semantics are the specification's: a dump sent *to* the unit
+stores it in the slot it names, and a store to a *user* slot is permanent.
+The unit answers a store with **silence either way** — it took it or it
+did not — which is why a store without a read-back verify is not
+considered landed, and why the verify is byte-for-byte rather than
+name-only.
+
+What is bench-verified: one write, in `tests/test_hardware.py` — a User
+program renamed, read back across all 350 bytes, and restored in a
+`finally` with a second read-back assertion. What is spec-transcribed:
+the opcode set above and every parameter table in `nano/params.py`. The
+record *sizes* the hardware suite pins on the read side (program 350,
+mix 138, global 20) are the one place transcription and bench agree
+without either being quoted for the other.
+
+## 13. The parameter tables
+
+`nano/params.py` is transcribed from the QS specification's parameter
+tables — program common and sound, mix common and channel, effects,
+global — keyed by (mode, function, page, pot) with the spec's ranges,
+named choices and bit addresses. The global table is the spec's twenty
+rows verbatim, including the two deleted parameters and the rows the spec
+marks `(QS6,7,8 only)` or `(QSR only)`; `records.GLOBAL_BYTES` is 20 to
+match the spec's own figure, whose dump description says the data
+"corresponds to 20 bytes" and that versions before 2.00 omit the last
+three.
+
+**Transcribed, not bench-verified.** Which rows this firmware honours is
+not established, and the editors treat that honestly: the global editor
+shows a row the spec documents for another model and will not write it,
+because a store writes the whole record and reporting success over a
+value the unit is documented to ignore would be a lie about what happened.
+
+## 14. Why `v` is the favourites view and not `F`
+
+The family's shift-pair is `f` set / `F` view. Here `f` writes the
+favourites database and `F` does not, so the pair left a write one slip
+away from a read — and in a tool whose whole discipline is "the cursor
+sends nothing", a shift-pair that puts a write next to a read is the
+wrong shape. `v` has no such twin. rxved and p2ked made the same swap,
+and `tests/test_conformance.py` pins the whole divergence in two
+sentences, as the family asks.
+
+## 15. The catalog's key grammar: `offset=0` and `"n"` rows
+
+vinsynlib keys the catalog on the *display* number (`BANK:NNN`). On this
+instrument the display number and the program change are the same number
+— both 0-based, equal on every slot — so the binding passes `offset=0`
+to `wire_to_display` and a `"pc"` row is never written. A `"pc"` row
+would come back one number higher.
+
+The generated JSON keeps the row grammar the binding defines: each row
+carries the display number in `"n"` and the name — `{"n": 0, "name": …}`
+— never `"pc"`. `tests/test_extract.py` pins the grammar, the
+dump-beats-page precedence in the User bank, and that a manual line whose
+name is only whitespace is counted as malformed rather than stored as a
+name of one space.
+
+## 16. Where the live-names sidecar lives
+
+`live-names.json`, beside the catalog file — `nano/data/live-names.json`
+by default, and beside whatever `--catalog` points at, because the names
+were read against that catalog's bank layout and the two travel together.
+Loaded at startup, so the browser shows the right names *before* anything
+has talked to the unit; re-saved after every read, so the next start is
+right again without one. A missing file means nothing has been read yet;
+a corrupt one earns a warning rather than a refusal to open.
+
+It is deliberately not inside the catalog file. The catalog is a
+transcription of the manual; the sidecar is one instrument's current
+contents; the printed-versus-live disagreement is the whole point of
+having two sources, and overwriting one with the other would destroy it.

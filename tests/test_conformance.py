@@ -52,6 +52,7 @@ def test_the_cli_flags_match_the_family() -> None:
             "catalog",
             "favorites",
             "yes",
+            "allow-write",
         ),
     )
 

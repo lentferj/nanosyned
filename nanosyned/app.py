@@ -64,9 +64,23 @@ from nano import catalog as cat
 from nano import records as rec
 from nano.config import UNSET
 from nano.favorites import rating_cell
-from nanosyned.editor import EditGate, EditRecord, ProgramEditor
+from nanosyned.editor import (
+    EditGate,
+    EditRecord,
+    GlobalEditor,
+    GlobalEditRecord,
+    MixEditRecord,
+    ProgramEditor,
+)
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
-from nanosyned.screens import EditorScreen, KeyHints, PromptScreen, ReportScreen
+from nanosyned.screens import (
+    EditorScreen,
+    GlobalScreen,
+    KeyHints,
+    MixScreen,
+    PromptScreen,
+    ReportScreen,
+)
 from nanosyned.text import literal
 from vinsynlib import keys
 from vinsynlib.build import build_of
@@ -144,13 +158,16 @@ def _view_key(blocks: tuple[str, ...]) -> tuple[str, ...]:
 #: to be a tuple of its own, in its own order. ``keys.legend`` puts this
 #: tool's own hints in the one place the family leaves for them -- after
 #: `n note`, before `i device` -- and this tool's are the scan key, the two
-#: rating keys, and the four the write path adds (edit, gate, undo, undo
-#: all). ``w``/``z``/``Z`` are the family's canonical editor keys, spelled
-#: the family's way; this browser legend has no editor tier, so they are
-#: carried here as this tool's hints. `v` apart, every other key it binds is
-#: a shared one, which `_view_key` renames.
+#: rating keys, and the ones the write path adds (edit program, mix, global,
+#: mode select, gate, undo, undo all). ``w``/``z``/``Z`` are the family's
+#: canonical editor keys, spelled the family's way; this browser legend has
+#: no editor tier, so they are carried here as this tool's hints. `v` apart,
+#: every other key it binds is a shared one, which `_view_key` renames.
 WRITE_HINTS: tuple[str, ...] = (
     "e edit program",
+    "m mix",
+    "M program/mix mode",
+    "g global",
     "w write gate",
     "z undo",
     "Z undo all",
@@ -224,9 +241,14 @@ class NanosynedApp(App):
         Binding("V", "rating_filter", "Rating filter"),
         Binding("slash", "search", "Search"),
         # The write path. `e` opens the editor only while the gate is armed;
-        # `w` is the family's canonical gate key, and `z`/`Z` re-send what a
-        # store replaced. Every one of them is inert until `w`.
+        # `m` opens the mix picker/editor and `g` the global editor under the
+        # same rule; `M` sends Mode Select, which changes what plays and
+        # stores nothing. `w` is the family's canonical gate key, and `z`/`Z`
+        # re-send what a store replaced. Every one of them is inert until `w`.
         Binding("e", "edit_program", "Edit program"),
+        Binding("m", "open_mix", "Mix"),
+        Binding("M", "mode_select", "Program/Mix mode"),
+        Binding("g", "edit_global", "Global"),
         Binding("w", "toggle_write_gate", "Write gate"),
         Binding("z", "undo", "Undo"),
         Binding("Z", "undo_all", "Undo all"),
@@ -297,6 +319,16 @@ class NanosynedApp(App):
         #: read is what makes the write undoable and what fails the write if
         #: the slot cannot be read -- but the file is written once.
         self._backed_up: set[str] = set()
+        #: Which of the 100 mixes `m` offers first. Restored below when a
+        #: config path was injected, so the second visit to a mix is one
+        #: keystroke rather than a number typed again.
+        self._mix_number = 0
+        #: The mode the last Mode Select asked for, or ``None`` before one
+        #: has been sent. **Not a reading of the unit**: this protocol has
+        #: no request that reports the current mode, so this only
+        #: pre-selects an entry in the mode dialog and is never displayed as
+        #: the unit's state.
+        self._last_mode_sent: bool | None = None
         #: Restore the remembered browser state: which bank the left pane
         #: was on, which row the right pane's cursor was on, and where the
         #: cycling ``v`` view stood. Loaded here, not in ``on_mount``,
@@ -329,6 +361,9 @@ class NanosynedApp(App):
                 self._saved_slot_cursor = _cfg.load_ui_int(
                     "slot_cursor", self._config_path
                 )
+                saved_mix = _cfg.load_ui_int("mix_number", self._config_path)
+                if saved_mix is not None and 0 <= saved_mix < banks.MIXES:
+                    self._mix_number = saved_mix
                 # The rating filter, likewise clamped rather than trusted:
                 # a hand-edited 9 stars is not a filter, it is a typo.
                 saved_stars = _cfg.load_ui_int("rating_stars", self._config_path)
@@ -574,6 +609,7 @@ class NanosynedApp(App):
         bank_index: Any = UNSET,
         slot_cursor: Any = UNSET,
         view_mode: Any = UNSET,
+        mix_number: Any = UNSET,
         rating_stars: Any = UNSET,
         rating_at_least: Any = UNSET,
         scan_offer_dismissed: Any = UNSET,
@@ -601,6 +637,7 @@ class NanosynedApp(App):
                 ("bank_index", bank_index),
                 ("slot_cursor", slot_cursor),
                 ("view_mode", view_mode),
+                ("mix_number", mix_number),
                 ("rating_stars", rating_stars),
                 ("rating_at_least", rating_at_least),
                 ("scan_offer_dismissed", scan_offer_dismissed),
@@ -1136,6 +1173,23 @@ class NanosynedApp(App):
             return
         self._undo_worker(taken)
 
+    def _rewrite(self, edit: EditRecord | MixEditRecord | GlobalEditRecord) -> bytes:
+        """Re-send one edit's previous bytes; return what the unit read back.
+
+        Three kinds, one door: a program store names a user slot, a mix
+        names one of the hundred mixes, and the global set has no number.
+        The worker below reads back through the same kind it wrote, so an
+        undo of a mix can never be verified against a program slot.
+        """
+        if isinstance(edit, MixEditRecord):
+            self.device.write_mix(edit.number, edit.previous)
+            return self.device.read_mix(edit.number)
+        if isinstance(edit, GlobalEditRecord):
+            self.device.write_global(edit.previous)
+            return self.device.read_global()
+        self.device.write_program(edit.number, edit.previous)
+        return self.device.read_program(edit.number)
+
     @work(thread=True)
     def _undo_worker(self, records: list[Record]) -> None:
         """**MIDI only.** Re-send each previous record and read it back.
@@ -1150,13 +1204,14 @@ class NanosynedApp(App):
             with self._busy_gate, self._lock:
                 for record in records:
                     edit = record.payload
-                    if not isinstance(edit, EditRecord):
+                    if not isinstance(
+                        edit, (EditRecord, MixEditRecord, GlobalEditRecord)
+                    ):
                         results.append(False)
                         sentences.append(f"{record.label}: not an edit record")
                         continue
                     try:
-                        self.device.write_program(edit.number, edit.previous)
-                        read_back = self.device.read_program(edit.number)
+                        read_back = self._rewrite(edit)
                     except _BRIDGE_ERRORS as exc:
                         results.append(False)
                         sentences.append(f"{edit.label}: {exc}")
@@ -1168,7 +1223,7 @@ class NanosynedApp(App):
                             verify.describe(
                                 edit.previous,
                                 read_back,
-                                what=f"user program {edit.number:03d}",
+                                what=edit.label,
                             )
                         )
         finally:
@@ -1390,6 +1445,417 @@ class NanosynedApp(App):
             f"stored {entry.display} as {literal(new_name) or '(blank)'}; "
             f"{sentence}{where}"
         )
+
+    # --- mixes, the global set, and the mode ---------------------------------
+
+    @staticmethod
+    def _mix_key(number: int) -> str:
+        """What a mix is called in the backup set and the undo history.
+
+        One spelling, used by the backup's once-per-session set, the file's
+        slot label and the undo entry, so a reader of any of the three can
+        match them up.
+        """
+        return f"mix:{number:03d}"
+
+    def action_open_mix(self) -> None:
+        """Pick one of the hundred mixes, read it, and open the mix editor.
+
+        The gate is asked **first**, before the picker is opened: a locked
+        gate means the key sends and reads nothing at all, and the refusal
+        names the gate. The browser's banks are programs, so there is no
+        mix "under the cursor" to open -- the picker takes a number, with
+        the one used last (0 the first time) already filled in, and the
+        mix is read on a worker exactly as a program is.
+        """
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self.push_screen(
+            PromptScreen(f"Mix (0-{banks.MIXES - 1}):", str(self._mix_number)),
+            self._mix_chosen,
+        )
+
+    def _mix_chosen(self, text: str | None) -> None:
+        """The picker's answer, on the main thread. Sends nothing yet."""
+        if text is None:
+            return
+        text = text.strip()
+        try:
+            number = int(text)
+        except ValueError:
+            self.notify_status(f"{literal(text)!r} is not a number", refused=True)
+            return
+        if not 0 <= number < banks.MIXES:
+            self.notify_status(f"mixes are 0-{banks.MIXES - 1}", refused=True)
+            return
+        # Asked again, and not only at `m`: the gate can be locked while the
+        # prompt is open, and the last answer is the one that decides.
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._mix_number = number
+        self._save_ui_state(mix_number=number)
+        self._mix_read_worker(number)
+
+    @work(thread=True)
+    def _mix_read_worker(self, number: int) -> None:
+        """**MIDI only.** One mix read; the modal opens on the main thread.
+
+        The caller claimed the exchange; this frees it.
+        """
+        failure: BaseException | None = None
+        record: bytes | None = None
+        try:
+            with self._busy_gate, self._lock:
+                record = self.device.read_mix(number)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(self.notify_status, f"mix: {failure}", refused=True)
+            return
+        if record is None:  # pragma: no cover -- the failure path caught it
+            return
+        self.call_from_thread(self._open_mix, number, record)
+
+    def _open_mix(self, number: int, record: bytes) -> None:
+        """Show the mix modal. Main thread; sends nothing."""
+        self.push_screen(
+            MixScreen(
+                record,
+                number=number,
+                replaced=rec.mix_name(record).rstrip(),
+            ),
+            lambda new: self._mix_edited(number, new),
+        )
+
+    def _mix_edited(self, number: int, record: bytes | None) -> None:
+        """A fired mix editor's record, on the main thread. Sends nothing yet."""
+        if record is None:
+            return
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._mix_store_worker(number, record)
+
+    @work(thread=True)
+    def _mix_store_worker(self, number: int, record: bytes) -> None:
+        """**MIDI only**, plus one backup file, in the program store's order.
+
+        1. read the mix in full -- unreadable means no store, because a
+           write that cannot be undone is not performed;
+        2. save what was there, once per mix per session, and name the file;
+        3. send the store;
+        4. read the mix back and compare it byte for byte;
+        5. hand the previous bytes to the main thread, which records them
+           for undo only if step 4 agreed.
+
+        ``stage`` says where a failure happened, so a failed backup is never
+        reported as a failed write.
+        """
+        from nano import backup as bk
+
+        key = self._mix_key(number)
+        previous: bytes | None = None
+        read_back: bytes | None = None
+        path: str | None = None
+        failure: BaseException | None = None
+        stage = "read"
+        try:
+            with self._busy_gate, self._lock:
+                previous = self.device.read_mix(number)
+                if key not in self._backed_up:
+                    stage = "backup"
+                    name = rec.mix_name(previous).rstrip()
+                    path = bk.save(
+                        key,
+                        kind="mix",
+                        name=name,
+                        blocks={"mix": previous},
+                    )
+                    self._backed_up.add(key)
+                stage = "write"
+                self.device.write_mix(number, record)
+                stage = "read back"
+                read_back = self.device.read_mix(number)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        self.call_from_thread(
+            self._mix_store_done,
+            number,
+            record,
+            previous,
+            path,
+            read_back,
+            failure,
+            stage,
+        )
+
+    def _mix_store_done(  # noqa: PLR0913, PLR0917 -- one argument per worker fact
+        self,
+        number: int,
+        record: bytes,
+        previous: bytes | None,
+        path: str | None,
+        read_back: bytes | None,
+        failure: BaseException | None,
+        stage: str,
+    ) -> None:
+        """Main thread: report what happened, and log only what read back."""
+        key = self._mix_key(number)
+        if failure is not None:
+            if stage in ("read", "backup"):
+                self.notify_status(
+                    f"{stage}: {failure} — nothing was written", refused=True
+                )
+            else:
+                self.notify_status(f"store: {failure}", refused=True)
+            return
+        if previous is None or read_back is None:  # pragma: no cover
+            self.notify_status("store: no read-back; nothing was logged", refused=True)
+            return
+        where = f"; what was there is in {literal(path)}" if path else ""
+        sentence = verify.describe(record, read_back, what=f"mix {number:03d}")
+        if verify.mismatches(record, read_back):
+            self.notify_status(f"{key}: {sentence}{where}", refused=True)
+            return
+        old_name = rec.mix_name(previous).rstrip()
+        self._undo_log.push(
+            Record(
+                f"{key}: {old_name}",
+                MixEditRecord(number=number, previous=previous, name=old_name),
+            )
+        )
+        new_name = rec.mix_name(record).rstrip()
+        self.notify_status(
+            f"stored mix {number:03d} as {literal(new_name) or '(blank)'}; "
+            f"{sentence}{where}"
+        )
+
+    def action_mode_select(self) -> None:
+        """Put the unit in Program or Mix mode. **Changes what plays.**
+
+        Not a store: nothing is written to memory, so there is nothing to
+        back up and nothing to undo -- and the unit does not answer a Mode
+        Select, so nothing here claims the switch happened. The dialog is
+        where the second decision is made: `M` alone sends nothing, and
+        the list names both modes because the message carries one rather
+        than a yes/no. The current *unit* mode cannot be read back over
+        this protocol; the pre-selected entry is only the one last asked
+        for, and the dialog says so.
+        """
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        current = 1 if self._last_mode_sent is None else int(self._last_mode_sent)
+        self.push_screen(
+            ChoiceScreen(
+                "Mode select — this changes what plays and stores nothing",
+                ["program mode", "mix mode"],
+                current,
+                status_message=(
+                    "the unit does not report its current mode; Esc sends nothing"
+                ),
+            ),
+            self._mode_chosen,
+        )
+
+    def _mode_chosen(self, choice: int | None) -> None:
+        if choice is None:
+            return
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        mix_mode = choice == 1
+        self._last_mode_sent = mix_mode
+        self._mode_worker(mix_mode)
+
+    @work(thread=True)
+    def _mode_worker(self, mix_mode: bool) -> None:
+        """**MIDI only.** One Mode Select; nothing is stored or read back."""
+        failure: BaseException | None = None
+        try:
+            with self._busy_gate, self._lock:
+                self.device.mode_select(mix_mode)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(self.notify_status, f"mode: {failure}", refused=True)
+            return
+        mode = "mix" if mix_mode else "program"
+        self.call_from_thread(
+            self.notify_status,
+            f"sent Mode Select: {mode} mode — the unit does not acknowledge it, "
+            f"and nothing was stored",
+        )
+
+    def action_edit_global(self) -> None:
+        """Read the global set, then open its table-driven editor.
+
+        The gate is asked first, as it is for `e` and `m`: a locked gate
+        means the unit sees no traffic at all. A global read is one dump,
+        so there is no slot to choose.
+        """
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._global_read_worker()
+
+    @work(thread=True)
+    def _global_read_worker(self) -> None:
+        """**MIDI only.** One global dump; the modal opens on the main thread."""
+        failure: BaseException | None = None
+        record: bytes | None = None
+        try:
+            with self._busy_gate, self._lock:
+                record = self.device.read_global()
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(
+                self.notify_status, f"global: {failure}", refused=True
+            )
+            return
+        if record is None:  # pragma: no cover -- the failure path caught it
+            return
+        self.call_from_thread(self._open_global, record)
+
+    def _open_global(self, record: bytes) -> None:
+        """Show the global modal. Main thread; sends nothing."""
+        self.push_screen(
+            GlobalScreen(GlobalEditor(record)),
+            self._global_edited,
+        )
+
+    def _global_edited(self, record: bytes | None) -> None:
+        """A fired global editor's record, on the main thread."""
+        if record is None:
+            return
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._global_store_worker(record)
+
+    @work(thread=True)
+    def _global_store_worker(self, record: bytes) -> None:
+        """**MIDI only**, plus one backup file, in the program store's order.
+
+        The global set has no number, so the backup's slot is the word
+        ``global``; there is one set, and a session writes one file for it.
+        """
+        from nano import backup as bk
+
+        key = "global"
+        previous: bytes | None = None
+        read_back: bytes | None = None
+        path: str | None = None
+        failure: BaseException | None = None
+        stage = "read"
+        try:
+            with self._busy_gate, self._lock:
+                previous = self.device.read_global()
+                if key not in self._backed_up:
+                    stage = "backup"
+                    path = bk.save(
+                        key,
+                        kind="global",
+                        name="global settings",
+                        blocks={"global": previous},
+                    )
+                    self._backed_up.add(key)
+                stage = "write"
+                self.device.write_global(record)
+                stage = "read back"
+                read_back = self.device.read_global()
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        self.call_from_thread(
+            self._global_store_done, record, previous, path, read_back, failure, stage
+        )
+
+    def _global_store_done(  # noqa: PLR0913, PLR0917 -- one argument per worker fact
+        self,
+        record: bytes,
+        previous: bytes | None,
+        path: str | None,
+        read_back: bytes | None,
+        failure: BaseException | None,
+        stage: str,
+    ) -> None:
+        """Main thread: report what happened, and log only what read back."""
+        if failure is not None:
+            if stage in ("read", "backup"):
+                self.notify_status(
+                    f"{stage}: {failure} — nothing was written", refused=True
+                )
+            else:
+                self.notify_status(f"store: {failure}", refused=True)
+            return
+        if previous is None or read_back is None:  # pragma: no cover
+            self.notify_status("store: no read-back; nothing was logged", refused=True)
+            return
+        where = f"; what was there is in {literal(path)}" if path else ""
+        sentence = verify.describe(record, read_back, what="the global settings")
+        if verify.mismatches(record, read_back):
+            self.notify_status(f"global: {sentence}{where}", refused=True)
+            return
+        self._undo_log.push(
+            Record("global settings", GlobalEditRecord(previous=previous))
+        )
+        self.notify_status(f"stored the global settings; {sentence}{where}")
 
     # --- scanning -----------------------------------------------------------
 
@@ -1723,6 +2189,9 @@ Keys
   *         rate the slot under the cursor, 0-5
   V         show only slots at/above a star rating
   e         edit the User program under the cursor
+  m         edit one of the hundred mixes (asks which first)
+  M         send Mode Select: program mode or mix mode
+  g         edit the global settings
   w         arm or lock the write gate
   z Z       undo / undo all of this session's stores
   i         what the unit says it is
@@ -1738,6 +2207,15 @@ the store the record is read back and compared, and the result is reported
 byte for byte -- this unit answers a store with silence whether it took it or
 not, so the read-back is the only evidence there is. Only a store that reads
 back is remembered for undo.
+
+Mixes and the global set go through the same five steps. A mix is 138 bytes
+and sixteen channels; the editor stages a channel's program, volume or pan in
+a working copy and sends nothing until armed. The global set is one record
+and one store: rows the specification documents for another model, the
+deleted parameters and rows an older dump does not carry are shown but not
+written, because writing a value the unit is documented to ignore and
+reporting success would be a lie. `M` is not a store: it changes what plays
+and writes no memory, so it is gated and confirmed but cannot be undone.
 """
 
 

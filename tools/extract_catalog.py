@@ -63,7 +63,10 @@ DEFAULT_OUTPUT = os.path.join(
 #: A manual line: a bank id, a number and a name.
 #:    USER 000 Some Name
 #:    P1   12  Another
-LINE = re.compile(r"^\s*([A-Za-z0-9]+)\s+(\d{1,3})\s+(.+?)\s*$")
+#: The name must begin with a non-space character. ``\s+`` before the group
+#: is greedy, so without the ``\S`` a line whose name is only whitespace --
+#: "USER 000   " -- leaves one space for the group and parses as a name.
+LINE = re.compile(r"^\s*([A-Za-z0-9]+)\s+(\d{1,3})\s+(\S.*?)\s*$")
 
 
 def from_syx(path):

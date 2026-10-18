@@ -5,7 +5,8 @@
 
 What `make check` runs, and what was switched off to get it passing on the
 existing tree. Recorded on branch `parity` on 2026-10-18: `make check` is
-clean on the whole tree (133 tests, ruff clean, mypy clean, vulture 0 findings,
+clean on the whole tree (285 tests pass and the 7 hardware tests skip, by
+design, without `--hardware`; ruff clean, mypy clean, vulture 0 findings,
 deptry 0 findings, pip-audit "No known vulnerabilities found", detect-secrets
 clean).
 
@@ -46,10 +47,11 @@ make venv             # create .venv and install runtime + dev deps
 
 `make check` is `lint typecheck test audit` and stops at the first failure.
 
-The parity plan adds further targets that do not exist on this branch yet:
-`format-check`, `coverage`, `test-hardware`, `ci`, `pre-commit-run`, `clean`
-and `secrets-update` (see `docs/PROMPT-PARITY.md` T6.6). The two that matter
-for the checks ledger are called out below.
+The parity plan's further targets — `format-check`, `coverage`,
+`test-hardware`, `ci`, `pre-commit-run`, `clean` and `secrets-update` (see
+`docs/PROMPT-PARITY.md` T6.6) — now exist in the `Makefile`, alongside
+`install` and `install-hooks`. The two that matter for the checks ledger are
+called out below.
 
 ## What each tool is doing
 
@@ -64,9 +66,10 @@ for the checks ledger are called out below.
 | `deptry` | `make audit-deps` | declared vs imported, `extend_exclude = [".venv"]` | nothing; 0 findings |
 | `detect-secrets` | `make audit-secrets` | `detect-secrets-hook --baseline .secrets.baseline` over `$(PYFILES)` plus `Makefile README.md pyproject.toml requirements-dev.txt` | nothing; `.secrets.baseline` has an empty `results` |
 
-`ruff format --check` runs as part of `make lint` rather than as a named
-`format-check` target. The named target is added by the parity work
-(`docs/PROMPT-PARITY.md` T6.6); until then, `make lint` is the format check.
+`ruff format --check` runs both as the second half of `make lint` and as the
+named `format-check` target added by the parity work
+(`docs/PROMPT-PARITY.md` T6.6). The two are the same command over the same
+`$(PYFILES)`, so they cannot drift.
 
 `pip-audit` deliberately does not audit the whole environment. The venv
 inherits the host's site-packages (`make venv` creates it with
@@ -116,11 +119,12 @@ removed from it; a new module is welcome to opt in once it qualifies. The
 > turns the whole project strict and raises pre-existing errors. These are the
 > individual checks that `strict` would enable, listed explicitly.
 
-The `typecheck-strict` target itself is **introduced by the parity work** (see
+The `typecheck-strict` target is **added by the parity work** (see
 `docs/PROMPT-PARITY.md` T6.9, "strict-mypy expansion + `typecheck-strict`") and
-does not exist in the `Makefile` on this branch yet. Until then, the two opt-in
-modules are **`nano.banks`** and **`nano.catalog`**, held to the individual
-checks `strict` would enable — `disallow_untyped_defs`,
+lands alongside this ledger; as of this writing the `Makefile` carries
+`make typecheck` (plain `mypy`) and the strict loop below is the whole of it.
+The two opt-in modules are **`nano.banks`** and **`nano.catalog`**, held to the
+individual checks `strict` would enable — `disallow_untyped_defs`,
 `disallow_incomplete_defs`, `check_untyped_defs`, `no_implicit_reexport`,
 `strict_equality`, `warn_return_any` — rather than to a bare `strict = true`.
 
@@ -131,11 +135,14 @@ checks `strict` would enable — `disallow_untyped_defs`,
   synthetically: `nanosyned/demo.py` and `--demo` never construct a bridge and
   open no ports.
 - **`make test-hardware` opens MIDI ports, runs one process at a time, and is
-  never part of `make check`.** It is an opt-in suite. It is introduced by the
-  parity work (see `docs/PROMPT-PARITY.md` T6.5); it does not exist in the
-  `Makefile` on this branch yet, and `make check` contains no hardware step
-  today. When it exists, it runs serially — never two at once, never while
-  another session drives the unit.
+  never part of `make check`.** It is an opt-in suite: it runs
+  `pytest tests/test_hardware.py --hardware`, and without that flag every
+  test in the file skips — a skip with a reason, never a pass, so "the unit
+  was off" and "the offsets are wrong" cannot look the same green. Its one
+  write (a User program renamed and put back) sits behind a third gate,
+  `NANOSYNED_HW_WRITE=1`. `make check` contains no hardware step, so CI never
+  drives the unit. It runs serially — never two at once, never while another
+  session drives the unit.
 - The demo path (`--demo`) is the synthetic stand-in everywhere else.
 
 ## The detect-secrets trap

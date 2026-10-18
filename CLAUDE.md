@@ -64,7 +64,9 @@ rule the siblings apply to their instruments' ROM contents.
 4. **Only the User bank can be read.** The other four are ROM and the
    protocol has no request for them. Four fifths of what the browser
    shows comes from a catalog and one fifth from the instrument; the two
-   are marked differently on purpose and must stay so.
+   are marked differently on purpose and must stay so. Writes follow the
+   same line: a program store names a User slot, and the editor refuses
+   a ROM bank — there is nothing there to read back and verify.
 
 ## Two numbering traps
 
@@ -83,19 +85,37 @@ rule the siblings apply to their instruments' ROM contents.
   or send SysEx if another session may be using the hardware. Develop and
   test **synthetically**: `nanosyned/demo.py` and `--demo`, which never
   construct a bridge and open no ports.
-- **nanosyned does not write to the instrument's memory at all.** Reading
-  and selecting is the whole of it. Adding a write is a decision to make
-  deliberately, and it takes the siblings' arm-then-fire shape — see
-  TODO.md item 6, which spells out all five parts.
-- **User program 127 is hardwired silent** and cannot be changed. Any
-  write path must refuse it outright.
+- **Writes are behind the `w` gate, and the gate is the whole fence.**
+  Locked by default (`--allow-write` arms it at launch), checked on the
+  main thread before a worker exists — a refused action sends no message
+  at all, not a store and not a read. Opening an editor sends nothing,
+  arming sends nothing, firing is a different key and works only while
+  armed, and moving the cursor disarms. Never one keystroke from the
+  browser. The editors are `e` (a User program's name; the whole
+  350-byte record travels, the sound blocks untouched), `m` (a mix's
+  channels) and `g` (the global record); `nanocli set` moves one
+  parameter in the working copy without storing, and `M` is the `0D`
+  Mode Select.
+- **Every write is preceded by an unconditional backup.** The destination
+  is read in full and that read is written to a file before a byte goes
+  out; if the read fails, nothing is written, because a write that cannot
+  be undone is not performed. Backups live in the per-platform settings
+  directory under `backups/` and never overwrite one another.
+- **Every store is verified by read-back.** The unit answers a store with
+  silence whether it took it or not, so a store is compared byte for byte
+  against what the unit holds afterwards, and what did not match is named
+  rather than claimed as success. Only an agreed read-back is recorded for
+  undo, so `z` can never "restore" a write the unit refused.
+- **User program 127 is hardwired silent** and cannot be changed; the
+  editor, `nanocli send` and `nanocli backup restore` all refuse it
+  outright.
 - `select()` is the only thing here that makes a sound, it is bound to
   Enter and nothing else, and `tests/test_app.py`'s `TestCursorIsSilent`
   enforces that moving the cursor never sends MIDI. That test matters
   more than any other in the suite.
 - `SEND_GAP` and `SELECT_GAP` in `nano/bridge.py` are **guesses** and are
   labelled as such at the point of use. Do not quote them as
-  measurements. Measuring them is a TODO item.
+  measurements; `tools/measure_send_gap.py` measures them on the bench.
 
 ## Workers do MIDI; the main thread does everything else
 

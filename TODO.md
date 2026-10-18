@@ -12,17 +12,25 @@ Built against the instrument in one sitting. The protocol is confirmed:
 identity, all 128 user programs, the edit buffer, effects, mixes and
 global all answer, and the names decode. 82 tests, all synthetic.
 
+The `parity` branch has since landed the family shape on top of that:
+vinsynlib 0.4.2, ratings, scan, live names, the write path and its fence,
+the tooling tier and the hardware suite. What is left is the bench work
+and the owner's transcription.
+
 ## 1. `SEND_GAP` and `SELECT_GAP` are guesses
 
-**Status:** open, blocked on wanting to measure them.
+**Status:** open, blocked on the bench run.
 
 Neither has been measured. Alesis documents no inter-message timing for
 this unit because Alesis documents no System Exclusive for it at all. The
 values are the sibling projects' conservative defaults.
 
-Worth measuring together with the question below, in one bench session.
+The tool now exists — `tools/measure_send_gap.py` reads the unit at a
+conservative reference gap, then re-reads at candidate gaps and compares
+the names, which is the only way to see a gap that is too short. What
+remains is running it.
 
-**Blocked on:** a measurement.
+**Blocked on:** one bench session.
 
 ## 2. Reading the User bank is 128 round trips
 
@@ -57,56 +65,57 @@ those names are Alesis's and are not committed here.
 
 ## 4. Mix mode is read-only here, and unmentioned by the manual
 
-**Status:** open, deliberate for now.
+**Status:** closed by the `parity` branch — mixes are browsable and
+editable now, behind the write fence.
 
 The unit has 100 mixes and answers dump requests for all of them. Its
 manual never mentions mixes; its front panel cannot reach them. `nanocli
-mixes` lists their names and nothing else uses them.
+mixes` lists their names, and `m` in the browser edits one — its sixteen
+channels — reading it first and storing it behind the same gate, backup
+and read-back as every other write.
 
 A mix assigns a program to each of the 16 MIDI channels, which is
-genuinely useful on a box that receives on all 16 at once. Browsing them
-properly means decoding the 8-byte channel blocks, and *selecting* one
-means `Mode Select` (`0D`) — which changes what the instrument plays, so
-it belongs behind the same care as any other sounding action.
+genuinely useful on a box that receives on all 16 at once. The question
+this item was really asking — should the program grow a second pane — was
+answered with a modal screen instead, which keeps the browser's one-pane
+shape.
 
-**Blocked on:** deciding whether this program should grow a second pane.
+**Blocked on:** nothing.
 
 ## 5. The global record is not decoded
 
-**Status:** open, low value.
+**Status:** closed by transcription, and the question behind it is closed
+by the same rule.
 
-20 bytes whose contents Alesis lists but whose offsets were not pinned
-down. Pinning them means writing to the instrument to see what moves,
-which is not a thing to do to find out what a byte means.
+The record is 20 bytes, and the QS specification publishes the table of
+its rows. `nano/params.py` now carries that table, addresses included, and
+`g` edits it row by row. Rows the spec documents for another model — the
+`(QS6,7,8 only)` and `(QSR only)` rows, the deleted parameters — are
+shown and are not editable: a store writes the whole record, and writing
+a value the unit is documented to ignore while reporting success would be
+a lie about what happened.
 
-`nanocli status` reports the identity instead, which answers the question
-people actually ask.
+Which rows this firmware honours was never going to be settled by writing
+to the unit to see what moves; that was this item's original objection and
+it stands. What is transcribed is labelled as transcribed.
 
-## 6. Writing is not implemented, and should not be added casually
+**Blocked on:** nothing.
 
-**Status:** open, and the fence is the point.
+## 6. Writing is implemented, behind the arm-then-fire fence
 
-nanosyned reads and selects. The protocol can write: a User Program Dump
-sent *to* the unit stores it, and there are FLASH sector commands as
-well.
+**Status:** closed by the `parity` branch.
 
-If that is ever added it takes the siblings' shape, which is not a
-suggestion:
+nanosyned reads, selects, and now writes: a User program's name in the
+browser (`e`), a mix's channels (`m`), the global record (`g`), whole
+records through `nanocli send`, one parameter through `nanocli set`, and
+a backup restore. The shape is the family's: the `w` gate checked before
+a worker exists, an unconditional backup before a byte goes out, a
+read-back verify that names what did not match, User 127 refused, and an
+undo log that records only an agreed read-back.
 
-1. A modal arm-then-fire screen. Opening it sends nothing; arming sends
-   nothing; firing is a different key and works only while armed, and
-   moving the cursor disarms.
-2. Never one keystroke from the browser.
-3. Back up first, unconditionally: read the destination in full and write
-   it to a file before a byte goes out. If that read fails, nothing is
-   written.
-4. Say what is about to be destroyed, **by name**. "Program 12" means
-   nothing; the name it is about to replace means everything.
-5. Verify by reading back and comparing, and report what did not match
-   rather than claiming success.
-
-Note that User program 127 is hardwired silent and cannot be changed, so
-it is the one slot where a write must be refused outright.
+**Blocked on:** nothing. *How* each part was established — the opcodes,
+the store semantics, the parameter tables — is in
+`docs/RESOLUTION_NOTES.md`.
 
 ## 7. The MidiQuest `.sqs` format is unread — across all the projects
 

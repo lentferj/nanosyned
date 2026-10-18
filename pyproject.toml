@@ -123,13 +123,13 @@ warn_unused_configs = true
 warn_redundant_casts = true
 no_implicit_optional = true
 
-# These two modules are fully annotated and already pass --strict, so they
+# These modules are fully annotated and already pass --strict, so they
 # are held to it. A new module should be added here once it qualifies.
 # `strict = true` cannot be used per-module: mypy expands it globally, which
 # turns the whole project strict and raises pre-existing errors. These are
 # the individual checks that `strict` would enable, listed explicitly.
 [[tool.mypy.overrides]]
-module = ["nano.banks", "nano.catalog"]
+module = ["nano.banks", "nano.catalog", "nano.backup", "nano.verify", "nanosyned.text"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true

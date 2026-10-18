@@ -117,7 +117,7 @@ class TestOfflineCommands:
                 pass
 
         monkeypatch.setattr(
-            b.NanoBridge, "connect", classmethod(lambda cls, **kw: Fake())
+            b.NanoBridge, "connect", classmethod(lambda cls, **_kw: Fake())
         )
         code, _out, err = run(capsys, "--config", config_path, "current")
         assert code == 0
@@ -163,3 +163,50 @@ class TestDemoCommands:
         )
         assert code == 1
         assert "nothing sent" in out
+
+
+class TestWriteSurfaceParser:
+    """The write commands' shape, before any of them runs."""
+
+    def test_write_flags_may_follow_the_subcommand(self):
+        args = cli.build_parser().parse_args(
+            ["send", "x.syx", "--allow-write", "--yes"]
+        )
+        assert args.allow_write is True
+        assert args.yes is True
+
+    def test_write_flags_still_work_before_the_subcommand(self):
+        args = cli.build_parser().parse_args(
+            ["--allow-write", "--yes", "send", "x.syx"]
+        )
+        assert args.allow_write is True
+        assert args.yes is True
+
+    def test_a_flag_before_the_subcommand_is_not_overwritten(self):
+        args = cli.build_parser().parse_args(
+            ["--channel", "5", "set", "program", "0", "0", "0", "5"]
+        )
+        assert args.channel == 5
+
+    def test_dump_names_a_number_and_a_file(self):
+        args = cli.build_parser().parse_args(["dump", "mix", "7", "--file", "m.syx"])
+        assert args.dump_command == "mix"
+        assert args.number == 7
+        assert args.file == "m.syx"
+
+    def test_a_global_dump_has_no_number(self):
+        args = cli.build_parser().parse_args(["dump", "global", "--file", "g.syx"])
+        assert args.dump_command == "global"
+        assert not hasattr(args, "number")
+
+    def test_backup_list_needs_no_destination(self):
+        args = cli.build_parser().parse_args(["backup", "list"])
+        assert args.backup_command == "list"
+        assert not hasattr(args, "number")
+
+    def test_backup_restore_takes_a_file_and_an_optional_number(self):
+        args = cli.build_parser().parse_args(
+            ["backup", "restore", "b.json", "--number", "5"]
+        )
+        assert args.backup_command == "restore"
+        assert args.number == 5

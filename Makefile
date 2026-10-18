@@ -16,9 +16,13 @@ BIN ?= .venv/bin
 PYFILES := $(shell git ls-files --cached --others --exclude-standard '*.py')
 
 .DEFAULT_GOAL := help
+# Get strict module names from pyproject.toml's [[tool.mypy.overrides]] entries.
+STRICT_MODULES := $(shell $(PY) tools/get_strict_modules.py)
+
 .PHONY: help check lint format typecheck test audit audit-vulns \
         audit-deadcode audit-deps audit-secrets venv install install-hooks \
-        format-check coverage test-hardware ci pre-commit-run clean secrets-update
+        format-check coverage test-hardware ci pre-commit-run clean \
+        typecheck-strict
 
 help:
 	@echo "make check        everything below, in order; stops on first failure"
@@ -37,6 +41,8 @@ help:
 	@echo "make pre-commit-run run every pre-commit hook against all files"
 	@echo "make clean        remove caches and coverage output"
 	@echo "make secrets-update regenerate .secrets.baseline"
+	@echo ""
+	@echo "make typecheck-strict  mypy with per-module strict overrides"
 
 check: lint typecheck test audit
 	@echo "all checks passed"
@@ -54,6 +60,15 @@ format:
 typecheck:
 	@echo "== mypy =="
 	$(PY) -m mypy
+
+typecheck-strict:
+	@echo "== mypy strict =="
+	@if [ -n "$(STRICT_MODULES)" ]; then \
+		$(PY) -m mypy --strict $(STRICT_MODULES); \
+	else \
+		echo "No strict modules configured."; \
+	fi
+	@echo "Strict modules checked: $(words $(STRICT_MODULES))"
 
 test:
 	@echo "== pytest =="
