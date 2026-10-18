@@ -10,6 +10,14 @@ requires-python = ">=3.11"
 license = { text = "GPL-2.0-or-later" }
 dependencies = ["textual>=0.40", "python-rtmidi>=1.4", "vinsynlib>=0.4.2"]
 
+# What the development tools need beyond the runtime. Optional on purpose:
+# the browser never imports these, and a user should not install a renderer
+# to browse patches. `tools/capture_screenshots.py` needs cairosvg for the
+# PNG half; without it the tool still writes the SVGs and says so. Install
+# with `pip install -e '.[tools]'`.
+[project.optional-dependencies]
+tools = ["cairosvg>=2.7.0"]
+
 [project.scripts]
 nanosyned = "nanosyned.entry:app"
 nanocli = "nanosyned.entry:cli"

@@ -20,15 +20,19 @@ import os
 import threading
 
 import pytest
+from textual.widgets import Input
 
-from nano import banks
+from nano import banks, verify
 from nano import catalog as cat
 from nano import config as cfg
 from nano import favorites as fav
+from nano import records as rec
 from nanosyned.app import VIEW_ALL_FAVOURITES, NanosynedApp
 from nanosyned.demo import DemoDevice
 from nanosyned.scan import ScanOfferScreen, ScanScreen
+from nanosyned.screens import EditorScreen
 from vinsynlib.ui.modals import RatingFilter
+from vinsynlib.ui.prompt import PromptScreen
 
 
 @pytest.fixture
@@ -514,3 +518,189 @@ class TestScan:
                     break
             assert app.catalog.live_name("USER", 0) is not None
             assert app.device.selected_log == []
+
+
+class TestWriting:
+    """T4.5 + T5.1: the gate, the store sequence, and undo.
+
+    The assertions are on the demo's ``program_writes`` log and on the
+    record the demo holds, not on status sentences: the log is what actually
+    crossed the wire, and a sentence can claim anything. The backup is
+    redirected into ``tmp_path`` so a test never writes a restore point into
+    the user's real settings directory.
+    """
+
+    @staticmethod
+    def _backup_into(monkeypatch, tmp_path, saved):
+        """Replace ``nano.backup.save`` with a recorder.
+
+        The app imports the module inside its worker and calls ``bk.save``,
+        so patching the attribute is enough -- and it keeps the test's
+        backup in ``tmp_path`` rather than in ``~/.config/nanosyned``.
+        """
+        from nano import backup as bk
+
+        def save(slot, *, kind, name, blocks, **kwargs):
+            saved.append(
+                {"slot": slot, "kind": kind, "name": name, "blocks": dict(blocks)}
+            )
+            return str(tmp_path / "program.backup.json")
+
+        monkeypatch.setattr(bk, "save", save)
+
+    @staticmethod
+    async def _wait(pilot, predicate, tries=160):
+        """Pause until ``predicate()`` holds; the work runs on a worker."""
+        for _ in range(tries):
+            await pilot.pause()
+            if predicate():
+                return
+        assert predicate(), "the worker never finished"
+
+    async def _open_editor(self, pilot, app, row=0):
+        app._fill("USER")
+        await pilot.pause()
+        table = app.query_one("#slot-table")
+        table.focus()
+        if row:
+            table.move_cursor(row=row)
+        await pilot.pause()
+        await pilot.press("e")
+        await self._wait(pilot, lambda: isinstance(app.screen, EditorScreen))
+
+    async def _name_and_store(self, pilot, app, name="Fresh Name"):
+        await pilot.press("n")
+        await self._wait(pilot, lambda: isinstance(app.screen, PromptScreen))
+        app.screen.query_one(Input).value = name
+        await pilot.press("enter")
+        await self._wait(pilot, lambda: isinstance(app.screen, EditorScreen))
+        await pilot.press("a")
+        await pilot.pause()
+        assert app.screen.armed is True
+        await pilot.press("w")
+        await self._wait(pilot, lambda: len(app._undo_log) == 1)
+
+    async def test_e_while_locked_refuses_and_sends_nothing(self):
+        """The gate is asked before the read, so the unit sees no traffic."""
+        reads = []
+
+        class CountingDevice(DemoDevice):
+            def read_program(self, number, *, timeout=None):
+                reads.append(number)
+                return super().read_program(number, timeout=timeout)
+
+        app = NanosynedApp(CountingDevice(), catalog=cat.empty())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._fill("USER")
+            await pilot.pause()
+            app.query_one("#slot-table").focus()
+            await pilot.press("e")
+            for _ in range(8):
+                await pilot.pause()
+            assert not isinstance(app.screen, EditorScreen)
+            assert reads == []
+            assert app.device.program_writes == []
+            assert "write gate" in str(app.query_one("#status").content)
+
+    async def test_an_armed_edit_stores_once_and_reads_back(
+        self, monkeypatch, tmp_path
+    ):
+        saved = []
+        self._backup_into(monkeypatch, tmp_path, saved)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            original = app.device.read_program(0)
+            await self._open_editor(pilot, app)
+            await self._name_and_store(pilot, app)
+
+            assert len(app.device.program_writes) == 1
+            number, written = app.device.program_writes[0]
+            assert number == 0
+            assert rec.program_name(written).rstrip() == "Fresh Name"
+            read_back = app.device.read_program(0)
+            assert verify.mismatches(written, read_back) == []
+            # Backed up, once, with what the slot held before the store.
+            assert len(saved) == 1
+            assert saved[0]["slot"] == "USER:000"
+            assert saved[0]["kind"] == "program"
+            assert saved[0]["blocks"]["program"] == original
+            assert saved[0]["name"] == rec.program_name(original).rstrip()
+            # Only an agreed read-back is undoable.
+            assert len(app._undo_log) == 1
+
+    async def test_user_127_is_refused_and_nothing_is_sent(self, monkeypatch, tmp_path):
+        saved = []
+        self._backup_into(monkeypatch, tmp_path, saved)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._fill("USER")
+            await pilot.pause()
+            table = app.query_one("#slot-table")
+            table.focus()
+            table.move_cursor(row=banks.SILENT_PROGRAM[1])
+            await pilot.pause()
+            await pilot.press("e")
+            for _ in range(10):
+                await pilot.pause()
+            assert not isinstance(app.screen, EditorScreen)
+            assert app.device.program_writes == []
+            assert saved == []
+
+    async def test_undo_re_sends_the_previous_record(self, monkeypatch, tmp_path):
+        saved = []
+        self._backup_into(monkeypatch, tmp_path, saved)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            original = app.device.read_program(0)
+            await self._open_editor(pilot, app)
+            await self._name_and_store(pilot, app)
+            assert app.device.program_writes[0][1] != original
+
+            await pilot.press("z")
+            await self._wait(pilot, lambda: len(app.device.program_writes) == 2)
+            for _ in range(10):
+                await pilot.pause()
+            assert app.device.program_writes[-1] == (0, original)
+            assert app.device.read_program(0) == original
+
+    async def test_store_is_never_one_keystroke(self, monkeypatch, tmp_path):
+        """`w` without `a` sends nothing; typing disarms an armed screen."""
+        saved = []
+        self._backup_into(monkeypatch, tmp_path, saved)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            original = app.device.read_program(0)
+            await self._open_editor(pilot, app)
+
+            # A name alone does not store: the fire key does nothing unarmed.
+            await pilot.press("n")
+            await self._wait(pilot, lambda: isinstance(app.screen, PromptScreen))
+            app.screen.query_one(Input).value = "Fresh Name"
+            await pilot.press("enter")
+            await self._wait(pilot, lambda: isinstance(app.screen, EditorScreen))
+            await pilot.press("w")
+            for _ in range(6):
+                await pilot.pause()
+            assert isinstance(app.screen, EditorScreen)
+            assert app.device.program_writes == []
+
+            # Arming, then typing, disarms -- so a second `w` still refuses.
+            await pilot.press("a")
+            await pilot.pause()
+            assert app.screen.armed is True
+            await pilot.press("n")
+            await self._wait(pilot, lambda: isinstance(app.screen, PromptScreen))
+            await pilot.press("escape")
+            await self._wait(pilot, lambda: isinstance(app.screen, EditorScreen))
+            assert app.screen.armed is False
+            await pilot.press("w")
+            for _ in range(6):
+                await pilot.pause()
+            assert isinstance(app.screen, EditorScreen)
+            assert app.device.program_writes == []
+            assert app.device.read_program(0) == original

@@ -23,7 +23,7 @@ that nobody had a second copy to compare against.
 
 from nano.terms import TERMS
 from nanosyned import cli
-from nanosyned.app import KEY_HINTS, NanosynedApp, build_parser
+from nanosyned.app import KEY_HINTS, WRITE_HINTS, NanosynedApp, build_parser
 from vinsynlib import conformance
 
 
@@ -93,7 +93,8 @@ def test_the_legend_matches_the_family() -> None:
     # family's gap after `n note` and are checked for order like every
     # shared hint. test_favorites.py checks that every binding appears.
     problems = conformance.check_legend(
-        KEY_HINTS, extras=("S scan device", "* rating", "V rating filter")
+        KEY_HINTS,
+        extras=("S scan device", "* rating", "V rating filter", *WRITE_HINTS),
     )
     assert set(problems) == {
         "the legend is missing 'F favourites view'",

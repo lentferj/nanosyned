@@ -59,12 +59,14 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Header, Static
 
-from nano import banks, livenames
+from nano import banks, livenames, verify
 from nano import catalog as cat
+from nano import records as rec
 from nano.config import UNSET
 from nano.favorites import rating_cell
+from nanosyned.editor import EditGate, EditRecord, ProgramEditor
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
-from nanosyned.screens import KeyHints, PromptScreen, ReportScreen
+from nanosyned.screens import EditorScreen, KeyHints, PromptScreen, ReportScreen
 from nanosyned.text import literal
 from vinsynlib import keys
 from vinsynlib.build import build_of
@@ -77,6 +79,7 @@ from vinsynlib.ui.modals import (
     SearchScreen,
 )
 from vinsynlib.ui.work import QUIET_BRIDGE_ERRORS, BusyGate, close_when_idle
+from vinsynlib.undo import Record, UndoLog
 
 __all__ = ["KEY_HINTS", "NanosynedApp", "build_parser", "main", "wrap_blocks"]
 
@@ -140,12 +143,20 @@ def _view_key(blocks: tuple[str, ...]) -> tuple[str, ...]:
 #: Built from the family's shared legend rather than hand-written: it used
 #: to be a tuple of its own, in its own order. ``keys.legend`` puts this
 #: tool's own hints in the one place the family leaves for them -- after
-#: `n note`, before `i device` -- and this tool has three: the scan key
-#: and the two rating keys, none of which another browser in the family
-#: shares yet. `v` apart, every other key it binds is a shared one, which
-#: `_view_key` renames.
+#: `n note`, before `i device` -- and this tool's are the scan key, the two
+#: rating keys, and the four the write path adds (edit, gate, undo, undo
+#: all). ``w``/``z``/``Z`` are the family's canonical editor keys, spelled
+#: the family's way; this browser legend has no editor tier, so they are
+#: carried here as this tool's hints. `v` apart, every other key it binds is
+#: a shared one, which `_view_key` renames.
+WRITE_HINTS: tuple[str, ...] = (
+    "e edit program",
+    "w write gate",
+    "z undo",
+    "Z undo all",
+)
 KEY_HINTS = _view_key(
-    keys.legend(extras=("S scan device", "* rating", "V rating filter"))
+    keys.legend(extras=("S scan device", "* rating", "V rating filter", *WRITE_HINTS))
 )
 
 
@@ -212,13 +223,20 @@ class NanosynedApp(App):
         Binding("asterisk", "edit_rating", "Rating"),
         Binding("V", "rating_filter", "Rating filter"),
         Binding("slash", "search", "Search"),
+        # The write path. `e` opens the editor only while the gate is armed;
+        # `w` is the family's canonical gate key, and `z`/`Z` re-send what a
+        # store replaced. Every one of them is inert until `w`.
+        Binding("e", "edit_program", "Edit program"),
+        Binding("w", "toggle_write_gate", "Write gate"),
+        Binding("z", "undo", "Undo"),
+        Binding("Z", "undo_all", "Undo all"),
         Binding("i", "device_info", "Device"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 -- one keyword per injection point
         self,
         device,
         *,
@@ -226,6 +244,7 @@ class NanosynedApp(App):
         favorites=None,
         config_path: str | None = None,
         catalog_path: str | None = None,
+        allow_write: bool = False,
     ) -> None:
         super().__init__()
         self.device = device
@@ -258,6 +277,26 @@ class NanosynedApp(App):
         #: find neither signal set and start a second worker. ``_busy``
         #: reads this claim as the third signal.
         self._exchange = threading.Lock()
+        #: The write fence, over everything that changes the unit's memory.
+        #: Locked at startup unless ``--allow-write`` said otherwise; every
+        #: write action asks :meth:`EditGate.check` on the main thread
+        #: before a worker exists, so a locked gate sends nothing at all.
+        self._write_gate = EditGate(armed=allow_write)
+        #: The family's undo log. ``plan``/``settle`` are the doors used
+        #: here: the re-send runs on a worker, so the entries leave the log
+        #: as the plan is taken, on the main thread, and ``settle`` reports
+        #: what actually landed.
+        self._undo_log = UndoLog(
+            apply_hook=self._undo_apply,
+            gate_hook=self._undo_gate,
+            status_hook=self._undo_status,
+        )
+        #: Slots whose pre-first-write contents have a backup file this
+        #: session. A set, not a boolean: the rule is once per slot. The
+        #: destination is still read in full before *every* store -- the
+        #: read is what makes the write undoable and what fails the write if
+        #: the slot cannot be read -- but the file is written once.
+        self._backed_up: set[str] = set()
         #: Restore the remembered browser state: which bank the left pane
         #: was on, which row the right pane's cursor was on, and where the
         #: cycling ``v`` view stood. Loaded here, not in ``on_mount``,
@@ -1026,6 +1065,332 @@ class NanosynedApp(App):
             + (f"; {differing} differ from the catalog" if differing else "")
         )
 
+    # --- the write path -----------------------------------------------------
+    #
+    # Four rules, each the family's and each the reason a step here exists:
+    #
+    # * the gate decides whether anything is sent, and it is asked on the
+    #   main thread before a worker exists;
+    # * the destination is read in full before a byte is written, and that
+    #   read is the backup -- if it fails, nothing is written;
+    # * the store is verified by reading the record back and comparing it,
+    #   because this unit answers a store with silence either way;
+    # * only an agreed read-back is recorded for undo, so `z` can never
+    #   "restore" a write the unit refused.
+
+    def action_toggle_write_gate(self) -> None:
+        """Arm or lock the fence in front of every write. Sends nothing."""
+        self._write_gate.toggle()
+        self.notify_status(self._write_gate.describe())
+
+    def _undo_gate(self) -> str | None:
+        """Refuse undo while an exchange is in flight, in one word."""
+        return "busy" if self._busy else None
+
+    def _undo_status(self, message: str) -> None:
+        """The undo log's sentence for the status bar."""
+        self.notify_status(message)
+
+    def _undo_apply(self, record: Record) -> bool:
+        """The synchronous door, deliberately not used.
+
+        :meth:`_undo` takes the ``plan``/``settle`` door because the re-send
+        belongs on a worker: doing it here would block the interface for a
+        round trip. The hook is still passed to :class:`UndoLog` because the
+        library refuses to undo a non-empty log without one -- and if some
+        future caller reaches ``undo()`` instead, raising is the honest
+        answer: nothing was sent, so the entry must stay on the log.
+        """
+        raise RuntimeError(
+            "undo runs on a worker here; use action_undo, not UndoLog.undo"
+        )
+
+    def action_undo(self) -> None:
+        self._undo(1)
+
+    def action_undo_all(self) -> None:
+        self._undo(None)
+
+    def _undo(self, count: int | None) -> None:
+        """Take a plan on the main thread, then re-send it on a worker."""
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        wanted = len(self._undo_log) if count is None else count
+        taken = self._undo_log.plan(wanted)
+        if not taken:
+            refusal = self._undo_log.last_refusal
+            if refusal is not None:
+                self.notify_status(refusal, refused=True)
+            else:
+                self.notify_status("nothing to undo")
+            return
+        # Claimed on the main thread, before the worker exists, as every
+        # other MIDI action is. If the claim loses a race the plan is put
+        # back: nothing was sent, so the entries are still what the unit
+        # holds.
+        if not self._exchange.acquire(blocking=False):
+            for record in reversed(taken):
+                self._undo_log.push(record)
+            self.notify_status("busy", refused=True)
+            return
+        self._undo_worker(taken)
+
+    @work(thread=True)
+    def _undo_worker(self, records: list[Record]) -> None:
+        """**MIDI only.** Re-send each previous record and read it back.
+
+        A record that cannot be re-sent, or whose read-back disagrees, is a
+        ``False`` in the results; ``_undo_done`` puts it back on the log so
+        the next `z` can try again rather than pretending it is restored.
+        """
+        results: list[bool] = []
+        sentences: list[str] = []
+        try:
+            with self._busy_gate, self._lock:
+                for record in records:
+                    edit = record.payload
+                    if not isinstance(edit, EditRecord):
+                        results.append(False)
+                        sentences.append(f"{record.label}: not an edit record")
+                        continue
+                    try:
+                        self.device.write_program(edit.number, edit.previous)
+                        read_back = self.device.read_program(edit.number)
+                    except _BRIDGE_ERRORS as exc:
+                        results.append(False)
+                        sentences.append(f"{edit.label}: {exc}")
+                        continue
+                    agreed = not verify.mismatches(edit.previous, read_back)
+                    results.append(agreed)
+                    if not agreed:
+                        sentences.append(
+                            verify.describe(
+                                edit.previous,
+                                read_back,
+                                what=f"user program {edit.number:03d}",
+                            )
+                        )
+        finally:
+            self._exchange.release()
+        self.call_from_thread(self._undo_done, records, results, sentences)
+
+    def _undo_done(
+        self,
+        records: list[Record],
+        results: list[bool],
+        sentences: list[str],
+    ) -> None:
+        """Report the batch on the main thread, and keep what did not land."""
+        summary = self._undo_log.settle(results)
+        failed = [record for record, ok in zip(records, results, strict=True) if not ok]
+        # Oldest first again, so the log still describes the order the
+        # changes happened in -- not the newest-first order they were tried.
+        for record in reversed(failed):
+            self._undo_log.push(record)
+        if failed:
+            detail = "; ".join(sentences) if sentences else "the unit refused it"
+            self.notify_status(f"{summary}; {detail}", refused=True)
+            return
+        for record in records:
+            edit = record.payload
+            if isinstance(edit, EditRecord):
+                self.catalog.set_live_name("USER", edit.number, edit.name)
+        if self._current_bank == "USER":
+            self._refill_keeping_place()
+
+    def action_edit_program(self) -> None:
+        """Read the User program under the cursor, then open the editor.
+
+        The gate is asked **first**, before the cursor is even read: a
+        locked gate means the key does nothing at all, and the refusal names
+        the gate. Program 127 is refused next -- it is hardwired silent and
+        the unit will not take a store for it -- and a ROM bank after that,
+        since only the User bank can be read back.
+        """
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        entry = self._cursor_entry()
+        if entry is None:
+            return
+        if (entry.bank_id, entry.number) == banks.SILENT_PROGRAM:
+            self.notify_status(
+                f"{entry.display} is the hardwired silent program and "
+                f"cannot be changed",
+                refused=True,
+            )
+            return
+        if not entry.bank.readable:
+            self.notify_status(
+                f"{entry.display} is ROM; only the User bank can be edited",
+                refused=True,
+            )
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._edit_worker(entry)
+
+    @work(thread=True)
+    def _edit_worker(self, entry: banks.Slot) -> None:
+        """**MIDI only.** One program read; the modal is opened on the main
+        thread. The caller claimed the exchange; this frees it."""
+        failure: BaseException | None = None
+        record: bytes | None = None
+        try:
+            with self._busy_gate, self._lock:
+                record = self.device.read_program(entry.number)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(self.notify_status, f"edit: {failure}", refused=True)
+            return
+        if record is None:  # pragma: no cover -- the failure path caught it
+            return
+        self.call_from_thread(self._open_editor, entry, record)
+
+    def _open_editor(self, entry: banks.Slot, record: bytes) -> None:
+        """Show the modal. Main thread; sends nothing."""
+        editor = ProgramEditor(entry.number, record)
+        self.push_screen(
+            EditorScreen(
+                editor,
+                slot=entry.display,
+                replaced=rec.program_name(editor.original).rstrip(),
+            ),
+            lambda new: self._edited(entry, new),
+        )
+
+    def _edited(self, entry: banks.Slot, record: bytes | None) -> None:
+        """A fired editor's record, on the main thread. Sends nothing yet."""
+        if record is None:
+            return
+        # Asked again, and not only at `e`: the gate can be locked while the
+        # modal is open, and the last answer is the one that decides.
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if (entry.bank_id, entry.number) == banks.SILENT_PROGRAM:
+            self.notify_status(
+                f"{entry.display} is the hardwired silent program and "
+                f"cannot be changed",
+                refused=True,
+            )
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._store_worker(entry, record)
+
+    @work(thread=True)
+    def _store_worker(self, entry: banks.Slot, record: bytes) -> None:
+        """**MIDI only**, plus one backup file, which is the point of it.
+
+        The five steps are the family's and the order is not negotiable:
+
+        1. read the destination in full -- if it cannot be read, no store is
+           sent, because a write that cannot be undone is not performed;
+        2. save what was there, once per slot per session, and name the file;
+        3. send the store;
+        4. read the record back and compare it byte for byte;
+        5. hand the previous bytes to the main thread, which records them
+           for undo only if step 4 agreed.
+
+        ``stage`` says where a failure happened: before the store it means
+        nothing was written, and saying "nothing was written" is what keeps
+        a failed backup from looking like a failed write.
+        """
+        from nano import backup as bk
+
+        previous: bytes | None = None
+        read_back: bytes | None = None
+        path: str | None = None
+        failure: BaseException | None = None
+        stage = "read"
+        try:
+            with self._busy_gate, self._lock:
+                previous = self.device.read_program(entry.number)
+                if entry.key not in self._backed_up:
+                    stage = "backup"
+                    name = rec.program_name(previous).rstrip()
+                    path = bk.save(
+                        entry.key,
+                        kind="program",
+                        name=name,
+                        blocks={"program": previous},
+                    )
+                    self._backed_up.add(entry.key)
+                stage = "write"
+                self.device.write_program(entry.number, record)
+                stage = "read back"
+                read_back = self.device.read_program(entry.number)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        self.call_from_thread(
+            self._store_done, entry, record, previous, path, read_back, failure, stage
+        )
+
+    def _store_done(  # noqa: PLR0913, PLR0917 -- one argument per worker fact
+        self,
+        entry: banks.Slot,
+        record: bytes,
+        previous: bytes | None,
+        path: str | None,
+        read_back: bytes | None,
+        failure: BaseException | None,
+        stage: str,
+    ) -> None:
+        """Main thread: report what happened, and log only what read back."""
+        if failure is not None:
+            if stage in ("read", "backup"):
+                self.notify_status(
+                    f"{stage}: {failure} — nothing was written", refused=True
+                )
+            else:
+                self.notify_status(f"store: {failure}", refused=True)
+            return
+        if previous is None or read_back is None:  # pragma: no cover
+            self.notify_status("store: no read-back; nothing was logged", refused=True)
+            return
+        where = f"; what was there is in {literal(path)}" if path else ""
+        sentence = verify.describe(
+            record, read_back, what=f"user program {entry.number:03d}"
+        )
+        if verify.mismatches(record, read_back):
+            self.notify_status(f"{entry.display}: {sentence}{where}", refused=True)
+            return
+        # Agreed: the slot now holds what was sent, so the previous bytes are
+        # a real undo entry rather than a guess about a write that "probably"
+        # landed. The log lives on the main thread; this is that thread.
+        old_name = rec.program_name(previous).rstrip()
+        self._undo_log.push(
+            Record(
+                f"{entry.key}: {old_name}",
+                EditRecord(number=entry.number, previous=previous, name=old_name),
+            )
+        )
+        new_name = rec.program_name(record).rstrip()
+        self.catalog.set_live_name(entry.bank_id, entry.number, new_name)
+        if entry.bank_id == self._current_bank:
+            self._refill_keeping_place()
+        self.notify_status(
+            f"stored {entry.display} as {literal(new_name) or '(blank)'}; "
+            f"{sentence}{where}"
+        )
+
     # --- scanning -----------------------------------------------------------
 
     def _maybe_offer_scan(self) -> None:
@@ -1357,8 +1722,22 @@ Keys
   t n       tags, note
   *         rate the slot under the cursor, 0-5
   V         show only slots at/above a star rating
+  e         edit the User program under the cursor
+  w         arm or lock the write gate
+  z Z       undo / undo all of this session's stores
   i         what the unit says it is
   q         quit
+
+Writing
+
+The write gate starts locked and `e` refuses until `w` arms it. A store is
+never one keystroke: `a` arms it, naming the slot and the program it is about
+to replace, and `w` fires only while armed. The destination is read in full
+and backed up to a file first; if that read fails, nothing is written. After
+the store the record is read back and compared, and the result is reported
+byte for byte -- this unit answers a store with silence whether it took it or
+not, so the read-back is the only evidence there is. Only a store that reads
+back is remembered for undo.
 """
 
 
@@ -1419,6 +1798,9 @@ def build_parser() -> argparse.ArgumentParser:
         catalog=True,
         config=True,
         favorites=True,
+        # The write path is opt-in: without `--allow-write` the gate starts
+        # locked and the only way to arm it is `w`, deliberately.
+        allow_write=True,
     )
     return parser
 
@@ -1505,6 +1887,7 @@ def main(argv: list[str] | None = None) -> int:
         favorites=store,
         config_path=config_path,
         catalog_path=args.catalog or cat.DEFAULT_PATH,
+        allow_write=args.allow_write,
     )
     try:
         app.run()
