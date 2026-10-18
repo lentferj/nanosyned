@@ -122,6 +122,7 @@ class TestTheLegendIsComplete:
         "right_square_bracket": "]",
         "slash": "/",
         "question_mark": "?",
+        "asterisk": "*",
     }
     IMPLIED: ClassVar[set[str]] = {"enter", "tab"}
 

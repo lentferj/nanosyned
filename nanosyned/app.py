@@ -62,12 +62,20 @@ from textual.widgets import DataTable, Header, Static
 from nano import banks, livenames
 from nano import catalog as cat
 from nano.config import UNSET
+from nano.favorites import rating_cell
+from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
 from nanosyned.screens import KeyHints, PromptScreen, ReportScreen
 from nanosyned.text import literal
 from vinsynlib import keys
 from vinsynlib.build import build_of
 from vinsynlib.cli import add_common_arguments, make_parser, validate_common
 from vinsynlib.keys import wrap_blocks as _wrap_blocks
+from vinsynlib.ui.modals import (
+    ChoiceScreen,
+    RatingFilter,
+    RatingFilterScreen,
+    SearchScreen,
+)
 from vinsynlib.ui.work import QUIET_BRIDGE_ERRORS, BusyGate, close_when_idle
 
 __all__ = ["KEY_HINTS", "NanosynedApp", "build_parser", "main", "wrap_blocks"]
@@ -86,6 +94,18 @@ _BRIDGE_ERRORS: tuple[type[BaseException], ...] = (
     RuntimeError,
     SystemError,
 )
+
+
+class _ScanCancelled(Exception):
+    """Stop a User-bank read between two requests.
+
+    ``read_program_names`` reports progress after each program has come
+    back, so raising from its callback is the one place a cancel can land
+    without interrupting a message already on the wire. The alternative --
+    checking a flag only after all 128 requests -- is a Cancel button that
+    does nothing for as long as the read takes.
+    """
+
 
 #: What `F` steps through. The same three the sibling rxved and p2ked use,
 #: so the key means the same thing across these projects.
@@ -120,9 +140,13 @@ def _view_key(blocks: tuple[str, ...]) -> tuple[str, ...]:
 #: Built from the family's shared legend rather than hand-written: it used
 #: to be a tuple of its own, in its own order. ``keys.legend`` puts this
 #: tool's own hints in the one place the family leaves for them -- after
-#: `n note`, before `i device` -- and this tool has no extras: every key it
-#: binds is a shared one, `v` apart, which `_view_key` renames.
-KEY_HINTS = _view_key(keys.legend())
+#: `n note`, before `i device` -- and this tool has three: the scan key
+#: and the two rating keys, none of which another browser in the family
+#: shares yet. `v` apart, every other key it binds is a shared one, which
+#: `_view_key` renames.
+KEY_HINTS = _view_key(
+    keys.legend(extras=("S scan device", "* rating", "V rating filter"))
+)
 
 
 def wrap_blocks(blocks, width: int, sep: str = _SEP) -> str:
@@ -167,6 +191,13 @@ class NanosynedApp(App):
         # Enter is NOT bound here: a focused DataTable consumes it for its
         # own row selection, so it arrives as RowSelected instead.
         Binding("r", "read_names", "Read names"),
+        # There is no `R` rebuild key, deliberately: on this instrument
+        # only the User bank can be dumped, and "rebuild" would have to
+        # mean re-reading the printed catalog for the other four. That
+        # catalog is a transcription of the manual (tools/extract_catalog.py),
+        # not a question the unit can answer, so a key for it would send
+        # nothing and change nothing.
+        Binding("S", "scan_device", "Scan device"),
         Binding("left_square_bracket", "channel_down", "Channel -"),
         Binding("right_square_bracket", "channel_up", "Channel +"),
         Binding("c", "pick_channel", "Set channel"),
@@ -178,6 +209,8 @@ class NanosynedApp(App):
         Binding("v", "cycle_favorites", "Favourites view"),
         Binding("t", "edit_tags", "Tags"),
         Binding("n", "edit_note", "Note"),
+        Binding("asterisk", "edit_rating", "Rating"),
+        Binding("V", "rating_filter", "Rating filter"),
         Binding("slash", "search", "Search"),
         Binding("i", "device_info", "Device"),
         Binding("question_mark", "help", "Help"),
@@ -234,6 +267,11 @@ class NanosynedApp(App):
         #: means a test that asked for silence and gets it. The cursor is
         #: clamped to whatever the first fill produced, in ``on_mount``.
         self._saved_slot_cursor: int | None = None
+        #: The remembered rating filter, or None for "show everything".
+        #: Restored here rather than in ``on_mount`` for the same reason
+        #: as the view: the first ``_fill`` builds rows through
+        #: ``_visible``, which applies it.
+        self.rating_filter: RatingFilter | None = None
         if self._config_path is not None:
             from nano import config as _cfg
 
@@ -252,6 +290,16 @@ class NanosynedApp(App):
                 self._saved_slot_cursor = _cfg.load_ui_int(
                     "slot_cursor", self._config_path
                 )
+                # The rating filter, likewise clamped rather than trusted:
+                # a hand-edited 9 stars is not a filter, it is a typo.
+                saved_stars = _cfg.load_ui_int("rating_stars", self._config_path)
+                if saved_stars is not None and 0 <= saved_stars <= 5:
+                    saved_at_least = _cfg.load_ui_bool(
+                        "rating_at_least", self._config_path
+                    )
+                    self.rating_filter = RatingFilter(
+                        stars=saved_stars, at_least=bool(saved_at_least)
+                    )
             except Exception:
                 # The cache is best-effort; a bad read is a default
                 # startup.
@@ -315,8 +363,21 @@ class NanosynedApp(App):
         # The favourite marker leads the row rather than trailing it: it is
         # a gutter mark the eye runs down, and gluing it to the name would
         # carry it into anything that sorts or searches.
-        for label, key in ("♥", "fav"), ("#", "num"), ("name", "name"), ("PC", "pc"):
-            slots.add_column(label, key=key)
+        #
+        # The rating column is pinned to five rather than fitted to its
+        # content (rxved's reasoning): fitted, it is five wide in a bank
+        # somebody has rated and one wide in a bank they have not, so the
+        # column changes shape over data that has nothing to do with it and
+        # a row jumps sideways the moment it is rated. Five is
+        # ``rating_cell``'s full width -- ``★★★★★``.
+        for label, key, width in (
+            ("♥", "fav", None),
+            ("#", "num", None),
+            ("name", "name", None),
+            ("★", "rating", 5),
+            ("PC", "pc", None),
+        ):
+            slots.add_column(label, key=key, width=width)
         # Open on the bank that was on screen last time: the left pane's
         # cursor has to sit on it before anything else moves.
         table.move_cursor(row=self._bank_ids.index(self._current_bank))
@@ -354,6 +415,11 @@ class NanosynedApp(App):
             )
         else:
             self.notify_status("no names yet -- press r to read the User bank")
+        # Offering to scan is deferred: the panes should paint first, and a
+        # dialog over a half-drawn screen reads as a fault. The check
+        # itself also runs when the sidecar was full, which is why it is a
+        # timer rather than a branch here.
+        self.set_timer(0.6, self._maybe_offer_scan)
 
     def _restore_slot_cursor(self, cursor: int) -> None:
         """Re-apply the saved slot row after focus changes have settled.
@@ -398,12 +464,34 @@ class NanosynedApp(App):
 
     def _visible(self, bank_id: str) -> list[banks.Slot]:
         if self.view_mode == VIEW_ALL_FAVOURITES:
-            return self._all_favourites()
-        entries = banks.slots(bank_id)
-        if self.view_mode == VIEW_BANK_FAVOURITES:
-            marked = self._favorite_keys(bank_id)
-            entries = [e for e in entries if e.program_change in marked]
-        return entries
+            entries = self._all_favourites()
+        else:
+            entries = banks.slots(bank_id)
+            if self.view_mode == VIEW_BANK_FAVOURITES:
+                marked = self._favorite_keys(bank_id)
+                entries = [e for e in entries if e.program_change in marked]
+        return self._by_rating(entries)
+
+    def _by_rating(self, entries: list[banks.Slot]) -> list[banks.Slot]:
+        """Keep the slots whose stored rating matches the filter.
+
+        A slot nobody has favourited has rating 0, which is why the
+        ``at_least`` form needs no special case: "at least 1" already
+        excludes the unrated ones. ``stars == 0`` is the family's
+        spelling of "any", though, so it disables the filter whatever
+        ``at_least`` says -- and that is also the value the
+        rating-filter dialog produces when it is cleared.
+        """
+        flt = self.rating_filter
+        if flt is None or flt.stars == 0 or self.favorites is None:
+            return entries
+        out: list[banks.Slot] = []
+        for entry in entries:
+            favourite = self.favorites.get(entry.bank_id, entry.program_change)
+            rating = favourite.rating if favourite is not None else 0
+            if (rating >= flt.stars) if flt.at_least else (rating == flt.stars):
+                out.append(entry)
+        return out
 
     def _cursor_entry(self):
         """The row under the cursor, or None."""
@@ -441,20 +529,24 @@ class NanosynedApp(App):
         except OSError:
             pass
 
-    def _save_ui_state(
+    def _save_ui_state(  # noqa: PLR0913 -- keyword-only switches, one per key
         self,
         *,
         bank_index: Any = UNSET,
         slot_cursor: Any = UNSET,
         view_mode: Any = UNSET,
+        rating_stars: Any = UNSET,
+        rating_at_least: Any = UNSET,
+        scan_offer_dismissed: Any = UNSET,
     ) -> None:
-        """Persist where the user was (bank, slot cursor, cycling view).
+        """Persist where the user was and what the browser remembers.
 
         :data:`UNSET` forwards nothing, so saving the cursor leaves the
         bank position alone: the keys are saved individually and only the
         ones named matter this time. ``None`` is the family's "remove the
-        key", and this helper never has a reason to spell it -- the
-        browser remembers where the user was, it does not forget.
+        key", and the rating filter spells a cleared filter that way --
+        a stored ``0`` would be indistinguishable from "exactly zero
+        stars" to the next reader.
 
         Only :class:`OSError` is swallowed -- a read-only directory or a
         full disk, where forgetting the position beats refusing to run. A
@@ -470,6 +562,9 @@ class NanosynedApp(App):
                 ("bank_index", bank_index),
                 ("slot_cursor", slot_cursor),
                 ("view_mode", view_mode),
+                ("rating_stars", rating_stars),
+                ("rating_at_least", rating_at_least),
+                ("scan_offer_dismissed", scan_offer_dismissed),
             ):
                 if value is UNSET:
                     continue
@@ -577,6 +672,85 @@ class NanosynedApp(App):
 
         self.push_screen(PromptScreen("Note:", existing.note), apply)
 
+    def action_edit_rating(self) -> None:
+        """Rate the slot under the cursor, 0 to 5.
+
+        ``Favorites.set_rating`` routes through ``add``, so it *creates*
+        the favourite when the slot is not one -- the library documents
+        that and pins it with a test. This is therefore the one
+        annotation key that does not ask for `f` first: the user asked to
+        rate, and the row becomes a favourite as the documented
+        consequence of rating it.
+
+        The rating is looked up even when no row is favourited yet, so
+        the dialog opens on 0 rather than refusing.
+        """
+        if self.favorites is None:
+            self.notify_status("no favourites database")
+            return
+        entry = self._cursor_entry()
+        if entry is None:
+            return
+        existing = self.favorites.get(entry.bank_id, entry.program_change)
+        current = existing.rating if existing is not None else 0
+        # The family's choice UI rather than a typed number: 0-5 is a
+        # short closed list, and `*` is never used for stars here -- it
+        # already means "the name disagrees with the catalog".
+        choices = ["no rating" if stars == 0 else "★" * stars for stars in range(6)]
+
+        def apply(value: int | None) -> None:
+            if value is None:
+                return
+            self.favorites.set_rating(entry.bank_id, entry.program_change, value)
+            self._refill_keeping_place()
+            self.notify_status(
+                f"{entry.display} rated {value}"
+                if value
+                else f"{entry.display} rating cleared"
+            )
+
+        self.push_screen(
+            ChoiceScreen(f"Rating for {entry.display}", choices, current), apply
+        )
+
+    def action_rating_filter(self) -> None:
+        """Choose which star ratings the slot pane shows. Sends no MIDI."""
+        if self.favorites is None:
+            self.notify_status("no favourites database")
+            return
+        current = self.rating_filter or RatingFilter(stars=0, at_least=False)
+
+        def apply(value: RatingFilter | None) -> None:
+            if value is None:
+                return
+            # ``(0, at_least=True)`` is the dialog's own "cleared": the
+            # family spells that as a filter of any stars, and so does
+            # ``_by_rating``. Storing None keeps a cleared filter out of
+            # the ui-state file instead of writing a 0 that a reader
+            # would have to interpret.
+            if value.stars == 0 and value.at_least:
+                self.rating_filter = None
+            else:
+                self.rating_filter = value
+            self._save_rating_filter()
+            self._refill_keeping_place()
+            flt = self.rating_filter
+            if flt is None:
+                self.notify_status("rating filter cleared")
+            else:
+                how = "at least" if flt.at_least else "exactly"
+                self.notify_status(f"rating filter: {how} {flt.stars} star(s)")
+
+        self.push_screen(RatingFilterScreen(current), apply)
+
+    def _save_rating_filter(self) -> None:
+        """Remember the filter, or remove both keys when it is cleared."""
+        flt = self.rating_filter
+        self._save_ui_state(
+            rating_stars=None if flt is None else flt.stars,
+            rating_at_least=None if flt is None else bool(flt.at_least),
+        )
+
     def action_cycle_favorites(self) -> None:
         """Step: all slots -> this bank's favourites -> every favourite.
 
@@ -615,7 +789,14 @@ class NanosynedApp(App):
         table = self.query_one("#slot-table", DataTable)
         self._current_bank = bank_id
         self._current = self._visible(bank_id)
-        marked = self._favorite_keys(bank_id)
+        # One query for the heart set and the ratings together, rather
+        # than a `keys_for_bank()` and a `get()` per row: a bank is over a
+        # hundred rows, and the store is behind a lock. Membership in the
+        # whole set is also the right question in the all-favourites view,
+        # where the rows come from every bank while the pane sits on one.
+        everything = self.favorites.all() if self.favorites is not None else []
+        favorited = {favourite.key for favourite in everything}
+        ratings = {favourite.key: favourite.rating for favourite in everything}
         self._filling = True
         try:
             table.clear()
@@ -634,15 +815,11 @@ class NanosynedApp(App):
                     shown = f"[b]{name}[/b]"
                 else:
                     shown = name
-                here = (
-                    self._favorite_keys(entry.bank_id)
-                    if self.view_mode == VIEW_ALL_FAVOURITES
-                    else marked
-                )
                 table.add_row(
-                    "[b]♥[/b]" if entry.program_change in here else "",
+                    "[b]♥[/b]" if entry.key in favorited else "",
                     entry.display,
                     shown,
+                    rating_cell(ratings.get(entry.key, 0)),
                     str(entry.program_change),
                     key=entry.key,
                 )
@@ -849,34 +1026,207 @@ class NanosynedApp(App):
             + (f"; {differing} differ from the catalog" if differing else "")
         )
 
+    # --- scanning -----------------------------------------------------------
+
+    def _maybe_offer_scan(self) -> None:
+        """Offer a scan when there is nothing to start from.
+
+        "Nothing" means neither layer: no printed catalog *and* no names
+        already read from the unit and kept in the sidecar. Offering while
+        the sidecar is full is how the offer came back on every launch.
+
+        An injected ``None`` config path means a test asked for no disk
+        access at all, so there is nowhere to remember "never" and nothing
+        to offer against; the real launch always has a path.
+        """
+        if self._config_path is None or self._busy:
+            return
+        if self.catalog or self._has_live_names():
+            return
+        from nano import config as _cfg
+
+        try:
+            if _cfg.load_ui_bool(
+                "scan_offer_dismissed", self._config_path, default=False
+            ):
+                return
+        except Exception:
+            pass
+        self.push_screen(ScanOfferScreen(SCAN_OFFER), self._scan_offer_answered)
+
+    def _has_live_names(self) -> bool:
+        """Whether any slot carries a name read off the unit."""
+        return any(
+            self.catalog.is_live(bank_id, number)
+            for bank_id in self._bank_ids
+            for number in range(banks.PROGRAMS_PER_BANK)
+        )
+
+    def _scan_offer_answered(self, answer: str | None) -> None:
+        if answer == "never":
+            self._save_ui_state(scan_offer_dismissed=True)
+            return
+        if answer == "scan":
+            self.action_scan_device()
+
+    def action_scan_device(self) -> None:
+        """Read the names this unit will answer for, with progress.
+
+        That is **one bank**, not five: only the User bank has a dump
+        request in this protocol. The General MIDI and preset banks are
+        ROM, and their names can only come from the printed catalog
+        (``tools/extract_catalog.py``). A "scan" here is therefore the
+        same 128 silent requests as `r`, given a progress bar and a
+        Cancel button -- and it is the whole of what the unit can answer.
+        """
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        # Claimed on the main thread, before the screen's worker exists;
+        # ``_scan_read`` releases it in a ``finally``.
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        screen = ScanScreen(
+            self._scan_read,
+            title="Reading the User bank's names",
+            total=banks.PROGRAMS_PER_BANK,
+        )
+        self.push_screen(screen, lambda names: self._scan_done(screen, names))
+
+    def _scan_read(self, on_progress, cancel) -> dict[int, str] | None:
+        """**MIDI only.** The body of a scan, on the scan screen's thread.
+
+        ``read_program_names`` is the one request-at-a-time loop the
+        bridge and the demo both honour -- keeping its pacing rather than
+        writing a second loop here matters, because 128 requests
+        back-to-back is what draws "data format error" from this unit.
+        Cancel is honoured at the only safe boundary it has: the callback
+        that runs once per program, after that program's reply has landed.
+        """
+
+        def report(done: int, total: int) -> None:
+            if cancel.is_set():
+                raise _ScanCancelled
+            on_progress(done, total)
+
+        try:
+            with self._busy_gate, self._lock:
+                return self.device.read_program_names(on_progress=report)
+        except _ScanCancelled:
+            return None
+        finally:
+            self._exchange.release()
+
+    def _scan_done(self, screen: ScanScreen, names: dict[int, str] | None) -> None:
+        """Adopt the names, or say why there are none.
+
+        The screen only knows "no result"; the exception it caught is
+        handed back here so a bridge fault is reported as one and a
+        programming error still raises out of the app rather than being
+        dressed up as a device fault.
+        """
+        if screen.error is not None:
+            failure = screen.error
+            if isinstance(failure, _BRIDGE_ERRORS):
+                self.notify_status(f"scan: {failure}", refused=True)
+                return
+            raise failure
+        if names is None:
+            self.notify_status("scan cancelled; nothing read")
+            return
+        self._adopt("USER", names)
+
     def action_search(self) -> None:
-        def done(text) -> None:
-            if not text:
+        """Search names, tags and notes, with the family's field picker."""
+
+        def done(result: tuple[str, dict[str, bool]] | None) -> None:
+            if result is None:
                 return
-            hits = self.catalog.search(text)
-            if not hits:
+            needle, fields = result
+            needed = needle.strip()
+            if not needed:
+                return
+            rows = self._search_rows(needed, fields)
+            if not rows:
                 # literal on the typed text too: whatever came back from
-                # the prompt goes into a markup widget, and the prompt is
-                # where a bracket the user typed is most at home.
-                self.notify_status(f"nothing matching {literal(text)!r}")
+                # the search form goes into a markup widget, and the form
+                # is where a bracket the user typed is most at home.
+                self.notify_status(f"nothing matching {literal(needed)!r}")
                 return
-            lines = [f"{len(hits)} match(es) for {literal(text)!r}", ""]
-            for bank_id, _kind, number, name in hits[:400]:
-                try:
-                    entry = banks.slot(bank_id, number)
-                except LookupError:
-                    continue
-                shown = literal(name.rstrip()) + (
-                    " *" if self.catalog.differs(bank_id, number) else ""
-                )
-                lines.append(
-                    f"{entry.display:<6} {shown:<12} PC {entry.program_change:>3}"
-                )
-            if len(hits) > 400:
-                lines.append(f"... and {len(hits) - 400} more")
+            lines = [f"{len(rows)} match(es) for {literal(needed)!r}", ""]
+            shown, more = self._search_lines(rows)
+            lines.extend(shown)
+            if more:
+                lines.append(f"... and {more} more (narrow the search)")
             self.push_screen(ReportScreen("Search", "\n".join(lines)))
 
-        self.push_screen(PromptScreen("Search names:"), done)
+        self.push_screen(SearchScreen("Search"), done)
+
+    def _search_rows(
+        self, needle: str, fields: dict[str, bool]
+    ) -> dict[tuple[str, int], list[str]]:
+        """Gather hits by slot, with what matched beside each one.
+
+        The catalog holds only names, so tags and notes come from the
+        favourites store: ``with_tag`` for an exact tag -- a substring
+        match would make "pad" find "padded" and "lead" find "misleading"
+        -- and ``search`` narrowed to the note column for notes. The
+        annotations are rendered here, through ``literal()``, because all
+        three kinds of text are user-supplied and the report is a markup
+        widget.
+        """
+        rows: dict[tuple[str, int], list[str]] = {}
+        if fields.get("names"):
+            for bank_id, _kind, number, _name in self.catalog.search(needle):
+                rows.setdefault((bank_id, number), [])
+        if self.favorites is None:
+            return rows
+        if fields.get("tags"):
+            for favourite in self.favorites.with_tag(needle):
+                rows.setdefault((favourite.bank_id, favourite.number), []).append(
+                    f"tags {literal(favourite.tags)}"
+                )
+        if fields.get("notes"):
+            lower = needle.lower()
+            for favourite in self.favorites.search(needle):
+                if not favourite.note or lower not in favourite.note.lower():
+                    continue
+                rows.setdefault((favourite.bank_id, favourite.number), []).append(
+                    f"note {literal(favourite.note)}"
+                )
+        return rows
+
+    def _search_lines(
+        self, rows: dict[tuple[str, int], list[str]]
+    ) -> tuple[list[str], int]:
+        """Render the hits in bank order, and how many spilled past 400."""
+        order = {bank_id: index for index, bank_id in enumerate(self._bank_ids)}
+        lines: list[str] = []
+        for bank_id, number in sorted(
+            rows, key=lambda where: (order.get(where[0], len(order)), where[1])
+        ):
+            try:
+                entry = banks.slot(bank_id, number)
+            except LookupError:
+                # A favourite naming a bank this build does not know is
+                # skipped, as _all_favourites does.
+                continue
+            shown = literal(
+                self.catalog.display_name(bank_id, entry.program_change).rstrip()
+            )
+            if self.catalog.differs(bank_id, entry.program_change):
+                shown += " *"
+            detail = rows[(bank_id, number)]
+            suffix = "  " + "; ".join(detail) if detail else ""
+            lines.append(
+                f"{entry.display:<6} {shown:<12} PC {entry.program_change:>3}{suffix}"
+            )
+            if len(lines) >= 400:
+                # Count the ones that were skipped as unrenderable too,
+                # so "and N more" is a count of hits, not of drawn lines.
+                return lines, len(rows) - len(lines)
+        return lines, 0
 
     def action_device_info(self) -> None:
         """Busy-guarded like every other MIDI action.
@@ -998,12 +1348,15 @@ Keys
   tab       switch pane
   ⏎         select on the unit -- Bank Select then Program Change
   r         read the User bank's names (silent; 128 requests)
-  /         search the names
+  S         the same read with a progress bar and a Cancel button
+  /         search names, tags or notes
   [ ]       previous / next MIDI channel
   c         set the MIDI channel
   f         favourite the slot under the cursor
   v         all slots / favourites here / every favourite
   t n       tags, note
+  *         rate the slot under the cursor, 0-5
+  V         show only slots at/above a star rating
   i         what the unit says it is
   q         quit
 """

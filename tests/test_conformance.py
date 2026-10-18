@@ -86,7 +86,15 @@ def test_the_legend_matches_the_family() -> None:
     # promises `F`, which is exactly why the family asks a tool to say why
     # rather than to stay quiet -- anything else appearing here is a real
     # drift and must be fixed rather than added to the set.
-    problems = conformance.check_legend(KEY_HINTS)
+    #
+    # The two rating hints are this tool's own, and so is `S scan device`
+    # -- the family has no scan key and this instrument has one readable
+    # bank. They are passed as extras on both sides, so they sit in the
+    # family's gap after `n note` and are checked for order like every
+    # shared hint. test_favorites.py checks that every binding appears.
+    problems = conformance.check_legend(
+        KEY_HINTS, extras=("S scan device", "* rating", "V rating filter")
+    )
     assert set(problems) == {
         "the legend is missing 'F favourites view'",
         "the legend shows 'v favourites view', which is not in the family's",

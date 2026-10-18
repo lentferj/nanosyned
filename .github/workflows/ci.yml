@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-FileCopyrightText: Copyright (C) 2026  nanosyned contributors
+#
+# nanosyned's checks on all three platforms the README claims support for.
+#
+# `make check` is the single entry point: CI runs exactly what a developer
+# runs locally (README, "Development checks"), so a green run here means the
+# same thing a green run on a laptop means. Nothing in this file re-implements
+# a check -- it only installs the pinned tools and calls make.
+
+name: checks
+
+on:
+  push:
+  pull_request:
+
+# Least privilege. Nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+# A new push supersedes the run it replaces.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # One broken platform should not hide the others' results.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 3.11 is the floor in pyproject.toml and 3.12 is the next one up.
+        # 3.13 is deliberately absent: python-rtmidi publishes wheels for
+        # cp38-cp312 only, so `pip install` there falls back to a source
+        # build needing ALSA headers (Linux), Xcode CLT (macOS) and a C
+        # toolchain (Windows). Wheels cover every interpreter in this
+        # matrix on all three runners, so no system packages are installed
+        # for python-rtmidi here. If a Python version is ever added to this
+        # matrix, expect to add its build dependencies alongside it.
+        python: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      # GitHub's Windows images do not ship GNU make, and `make check` is
+      # the one entry point CI and developers share. SHELL is pointed at
+      # Git Bash because the recipes in the Makefile are POSIX sh, not
+      # cmd.exe.
+      - name: Install make (Windows)
+        if: runner.os == 'Windows'
+        run: choco install make --no-progress -y
+
+      - name: Point make at a POSIX shell (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "SHELL=C:/Program Files/Git/usr/bin/bash.exe" >> "$GITHUB_ENV"
+          make --version
+
+      # A clean venv, not the --system-site-packages one the README
+      # recommends for local development. python-rtmidi ships wheels for
+      # every interpreter in this matrix on all three platforms (as do
+      # textual and vinsynlib), so nothing needs to be borrowed from the
+      # host -- in particular no ALSA headers.
+      - name: Create the virtualenv
+        run: python -m venv .venv
+
+      # shell: bash explicitly -- the default is PowerShell on Windows and
+      # would not understand the `[ -x ... ]` test below.
+      - name: Install nanosyned and the checks
+        shell: bash
+        run: |
+          if [ -x .venv/Scripts/python.exe ]; then PY=.venv/Scripts/python.exe; else PY=.venv/bin/python; fi
+          # Upgrade pip and setuptools before anything else. A venv seeded
+          # from an older interpreter carries older copies of both, and
+          # pip-audit audits the whole venv -- so without this the audit
+          # reports the packaging tools' own advisories rather than
+          # anything about nanosyned.
+          "$PY" -m pip install --upgrade pip setuptools
+          # This project has no [dev] extra: the dev dependencies live in
+          # requirements-dev.txt, pinned exactly (see the header of that
+          # file). The runtime -- textual, python-rtmidi, vinsynlib -- comes
+          # from pyproject.toml via `-e .`.
+          "$PY" -m pip install -e . -r requirements-dev.txt
+
+      # The whole pipeline, exactly as a developer runs it locally. The
+      # hardware suite is deliberately NOT part of this: `make check`
+      # never opens MIDI ports, and `make test-hardware` remains a target
+      # for a developer with a real synth attached. There is no instrument
+      # in CI.
+      #
+      # On Windows the venv keeps its interpreter and console scripts in
+      # .venv/Scripts, not .venv/bin, and the Makefile's PY/BIN defaults
+      # assume the POSIX layout -- so the overrides are passed explicitly
+      # there. Same entry point, same checks either way.
+      - name: make check
+        shell: bash
+        run: |
+          if [ -x .venv/Scripts/python.exe ]; then
+            make check PY=.venv/Scripts/python.exe BIN=.venv/Scripts
+          else
+            make check
+          fi
+
+  # The hooks are a separate promise from the pipeline: a change to
+  # .pre-commit-config.yaml can break commits on every platform while
+  # `make check` stays green.
+  pre-commit:
+    name: pre-commit hooks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      # The mypy hook is a local one that runs the project's own .venv (see
+      # .pre-commit-config.yaml): the venv has to exist before the hooks run.
+      # 3.11 matches `default_language_version: python` in
+      # .pre-commit-config.yaml.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Create the virtualenv the mypy hook runs in
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip setuptools
+          .venv/bin/python -m pip install -e . -r requirements-dev.txt
+
+      # `pre-commit autoupdate` is deliberately not run here. It rewrites
+      # the pinned revisions, and a hook that upgrades itself between the
+      # commit that pins it and the next run of that commit is not pinned.
+      - name: Run every hook over every file
+        run: .venv/bin/pre-commit run --all-files

@@ -17,14 +17,18 @@
 
 import ast
 import os
+import threading
 
 import pytest
 
 from nano import banks
 from nano import catalog as cat
+from nano import config as cfg
 from nano import favorites as fav
 from nanosyned.app import VIEW_ALL_FAVOURITES, NanosynedApp
 from nanosyned.demo import DemoDevice
+from nanosyned.scan import ScanOfferScreen, ScanScreen
+from vinsynlib.ui.modals import RatingFilter
 
 
 @pytest.fixture
@@ -243,11 +247,12 @@ class TestTheLegendIsComplete:
 
 
 class TestSearch:
-    """The search callback takes the four-tuples Catalog.search returns.
+    """The search form returns ``(needle, {field: enabled})``.
 
-    It used to unpack three, so any search that found a match raised
-    ValueError instead of showing the match -- the bug was invisible
-    because nothing exercised the callback.
+    It used to be a name-only prompt, and the callback used to unpack the
+    catalog's four-tuples as three, so any search that found a match
+    raised ValueError instead of showing the match -- the bug was
+    invisible because nothing exercised the callback.
     """
 
     async def test_a_match_is_shown(self):
@@ -257,6 +262,255 @@ class TestSearch:
             await pilot.pause()
             app.action_search()
             await pilot.pause()
-            app.screen.dismiss("Invented")
+            app.screen.dismiss(
+                ("Invented", {"names": True, "tags": True, "notes": True})
+            )
             await pilot.pause()
             assert "Invented Name" in app.screen.body
+
+    def test_each_field_scopes_its_own_source(self, tmp_path):
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        store.add("GM", 3, name="Invented", tags="warm, pad", note="a soft pad")
+        catalog = cat.Catalog([cat.Entry("GM", 0, "Invented Name")])
+        app = NanosynedApp(DemoDevice(), catalog=catalog, favorites=store)
+        names_only = app._search_rows(
+            "Invented", {"names": True, "tags": False, "notes": False}
+        )
+        assert ("GM", 0) in names_only
+        tags_only = app._search_rows(
+            "warm", {"names": False, "tags": True, "notes": False}
+        )
+        assert tags_only == {("GM", 3): ["tags warm, pad"]}
+        notes_only = app._search_rows(
+            "soft", {"names": False, "tags": False, "notes": True}
+        )
+        assert notes_only == {("GM", 3): ["note a soft pad"]}
+        store.close()
+
+    def test_tags_and_notes_are_escaped(self, tmp_path):
+        """Both are user-supplied text rendered into a markup widget."""
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        store.add("GM", 3, name="Invented", tags="[b]pad", note="[i]soft")
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
+        rows = app._search_rows(
+            "[b]pad", {"names": False, "tags": True, "notes": False}
+        )
+        assert rows[("GM", 3)] == ["tags [[b]pad"]
+        rows = app._search_rows("soft", {"names": False, "tags": False, "notes": True})
+        assert rows[("GM", 3)] == ["note [[i]soft"]
+        store.close()
+
+
+class TestRatings:
+    async def test_the_slot_table_has_a_five_wide_rating_column(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            column = app.query_one("#slot-table").columns["rating"]
+            assert column.width == 5
+
+    async def test_rating_creates_the_favourite(self, tmp_path):
+        """``set_rating`` routes through ``add``; the library pins that."""
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#slot-table").focus()
+            app.action_edit_rating()
+            await pilot.pause()
+            app.screen.dismiss(4)
+            for _ in range(4):
+                await pilot.pause()
+            favourite = store.get("GM", 0)
+            assert favourite is not None
+            assert favourite.rating == 4
+            assert "rated 4" in str(app.query_one("#status").content)
+        store.close()
+
+    async def test_the_cell_shows_the_rating(self, tmp_path):
+        from nano.favorites import rating_cell
+
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        store.add("GM", 0, name="Invented", rating=3)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._fill("GM")
+            await pilot.pause()
+            table = app.query_one("#slot-table")
+            assert table.get_cell("GM:000", "rating") == rating_cell(3)
+        store.close()
+
+    async def test_the_filter_is_exactly_or_at_least(self, tmp_path):
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        store.add("GM", 0, rating=1)
+        store.add("GM", 2, rating=3)
+        store.add("GM", 4, rating=5)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.rating_filter = RatingFilter(stars=3, at_least=False)
+            app._fill("GM")
+            await pilot.pause()
+            assert [entry.number for entry in app._current] == [2]
+            app.rating_filter = RatingFilter(stars=3, at_least=True)
+            app._fill("GM")
+            await pilot.pause()
+            assert [entry.number for entry in app._current] == [2, 4]
+            # Zero means "any", not "the unrated ones": it is the value
+            # the dialog produces when the filter is cleared.
+            app.rating_filter = RatingFilter(stars=0, at_least=False)
+            app._fill("GM")
+            await pilot.pause()
+            assert len(app._current) == banks.PROGRAMS_PER_BANK
+            # Unfavourited slots have rating 0, and "exactly 0" is a real
+            # question with those 125 as its answer.
+            app.rating_filter = RatingFilter(stars=0, at_least=True)
+            app._fill("GM")
+            await pilot.pause()
+            assert len(app._current) == banks.PROGRAMS_PER_BANK
+        store.close()
+
+    def test_the_filter_is_remembered_and_forgotten(self, tmp_path):
+        path = str(tmp_path / "config.toml")
+        store = fav.Favorites(str(tmp_path / "f.db"))
+
+        def open_app():
+            return NanosynedApp(
+                DemoDevice(),
+                catalog=cat.empty(),
+                favorites=store,
+                config_path=path,
+            )
+
+        app = open_app()
+        app.rating_filter = RatingFilter(stars=3, at_least=True)
+        app._save_rating_filter()
+        again = open_app()
+        assert again.rating_filter == RatingFilter(stars=3, at_least=True)
+        assert cfg.load_ui_int("rating_stars", path) == 3
+        assert cfg.load_ui_bool("rating_at_least", path) is True
+
+        again.rating_filter = None
+        again._save_rating_filter()
+        third = open_app()
+        assert third.rating_filter is None
+        assert cfg.load_ui_int("rating_stars", path) is None
+        assert cfg.load_ui_bool("rating_at_least", path) is None
+        store.close()
+
+
+class TestScan:
+    async def test_the_offer_has_three_answers(self):
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(ScanOfferScreen())
+            await pilot.pause()
+            ids = {button.id for button in app.screen.query("Button")}
+            assert ids == {"scan", "later", "never"}
+
+    async def test_an_empty_browser_offers_a_scan(self, tmp_path):
+        path = str(tmp_path / "config.toml")
+        app = NanosynedApp(
+            DemoDevice(),
+            catalog=cat.empty(),
+            config_path=path,
+            # A sidecar beside a catalog of its own: the checkout's real
+            # live-names file would otherwise make this browser look full.
+            catalog_path=str(tmp_path / "catalog.json"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._maybe_offer_scan()
+            await pilot.pause()
+            assert isinstance(app.screen, ScanOfferScreen)
+
+    async def test_a_full_catalog_is_not_offered(self, tmp_path):
+        app = NanosynedApp(
+            DemoDevice(),
+            catalog=cat.Catalog([cat.Entry("GM", 0, "Invented Name")]),
+            config_path=str(tmp_path / "config.toml"),
+            catalog_path=str(tmp_path / "catalog.json"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._maybe_offer_scan()
+            await pilot.pause()
+            assert not isinstance(app.screen, ScanOfferScreen)
+
+    async def test_never_is_remembered(self, tmp_path):
+        path = str(tmp_path / "config.toml")
+        app = NanosynedApp(
+            DemoDevice(),
+            catalog=cat.empty(),
+            config_path=path,
+            catalog_path=str(tmp_path / "catalog.json"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._maybe_offer_scan()
+            await pilot.pause()
+            app.screen.dismiss("never")
+            await pilot.pause()
+            app._maybe_offer_scan()
+            await pilot.pause()
+            assert not isinstance(app.screen, ScanOfferScreen)
+            assert cfg.load_ui_bool("scan_offer_dismissed", path, default=False) is True
+
+    async def test_the_scan_screen_returns_the_names(self):
+        def read(on_progress, cancel):
+            on_progress(1, 2)
+            on_progress(2, 2)
+            return {0: "Invented"}
+
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty())
+        seen = []
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(ScanScreen(read, total=2), seen.append)
+            for _ in range(40):
+                await pilot.pause()
+                if seen:
+                    break
+            assert seen == [{0: "Invented"}]
+
+    async def test_cancel_stops_the_scan(self):
+        started = threading.Event()
+
+        def read(on_progress, cancel):
+            on_progress(1, 2)
+            started.set()
+            while not cancel.wait(0.01):
+                pass
+            return {0: "never"}
+
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty())
+        seen = []
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(ScanScreen(read, total=2), seen.append)
+            await pilot.pause()
+            assert started.wait(1)
+            await pilot.press("escape")
+            for _ in range(60):
+                await pilot.pause()
+                if seen:
+                    break
+            assert seen == [None]
+
+    async def test_scanning_reads_the_user_bank_and_makes_no_sound(self, tmp_path):
+        app = NanosynedApp(
+            DemoDevice(),
+            catalog=cat.empty(),
+            catalog_path=str(tmp_path / "catalog.json"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.catalog.live_name("USER", 0) is None
+            app.action_scan_device()
+            for _ in range(200):
+                await pilot.pause()
+                if app.catalog.live_name("USER", 0) is not None:
+                    break
+            assert app.catalog.live_name("USER", 0) is not None
+            assert app.device.selected_log == []
