@@ -58,6 +58,7 @@ __all__ = [
     "SOUND_BYTES",
     "check_size",
     "decode_bit_field",
+    "effects_record_bytes",
     "encode_bit_field",
     "global_fields",
     "global_record_bytes",
@@ -257,6 +258,32 @@ def global_record_bytes(record: Sequence[int]) -> dict[str, int]:
 
     values: dict[str, int] = {}
     for param in params.GLOBAL_PARAMS:
+        last_bit = param.bit_address + param.bits - 1
+        if last_bit >> 3 >= len(record):
+            continue
+        value = decode_bit_field(record, param)
+        if param.low < 0 and value >= 1 << (param.bits - 1):
+            value -= 1 << param.bits
+        values[param.label] = value
+    return values
+
+
+def effects_record_bytes(record: Sequence[int]) -> dict[str, int]:
+    """Every Effects parameter that fits in ``record``, label to value.
+
+    The Effects record is bit-packed; each parameter is read by its
+    ``bit_address`` and ``bits`` from the spec. Signed parameters are stored
+    in offset binary (the spec's convention for packed records), so a
+    parameter whose ``low`` is negative is adjusted here rather than
+    returned as its unsigned bit pattern.
+
+    "That fits" matters: dumps from earlier software may carry fewer bytes,
+    and a field past the end is skipped rather than raising.
+    """
+    from nano import params  # deferred: params imports this module's sizes
+
+    values: dict[str, int] = {}
+    for param in params.EFFECT_PARAMS:
         last_bit = param.bit_address + param.bits - 1
         if last_bit >> 3 >= len(record):
             continue

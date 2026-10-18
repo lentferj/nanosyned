@@ -67,6 +67,8 @@ from nano.favorites import rating_cell
 from nanosyned.editor import (
     EditGate,
     EditRecord,
+    EffectsEditor,
+    EffectsEditRecord,
     GlobalEditor,
     GlobalEditRecord,
     MixEditRecord,
@@ -75,6 +77,7 @@ from nanosyned.editor import (
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
 from nanosyned.screens import (
     EditorScreen,
+    EffectsScreen,
     GlobalScreen,
     KeyHints,
     MixScreen,
@@ -165,6 +168,7 @@ def _view_key(blocks: tuple[str, ...]) -> tuple[str, ...]:
 #: every other key it binds is a shared one, which `_view_key` renames.
 WRITE_HINTS: tuple[str, ...] = (
     "e edit program",
+    "x effects",
     "m mix",
     "M program/mix mode",
     "g global",
@@ -246,6 +250,7 @@ class NanosynedApp(App):
         # stores nothing. `w` is the family's canonical gate key, and `z`/`Z`
         # re-send what a store replaced. Every one of them is inert until `w`.
         Binding("e", "edit_program", "Edit program"),
+        Binding("x", "edit_effects", "Effects"),
         Binding("m", "open_mix", "Mix"),
         Binding("M", "mode_select", "Program/Mix mode"),
         Binding("g", "edit_global", "Global"),
@@ -1936,6 +1941,141 @@ class NanosynedApp(App):
             Record("global settings", GlobalEditRecord(previous=previous))
         )
         self.notify_status(f"stored the global settings; {sentence}{where}")
+
+    # --- effects ------------------------------------------------------------
+
+    def action_edit_effects(self) -> None:
+        """Read the effects set, then open its table-driven editor.
+
+        The gate is asked first, as it is for `e` and `g`: a locked gate
+        means the unit sees no traffic at all. An effects read is one dump,
+        so there is no slot to choose.
+        """
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._effects_read_worker()
+
+    @work(thread=True)
+    def _effects_read_worker(self) -> None:
+        """**MIDI only.** One effects dump; the modal opens on the main thread."""
+        failure: BaseException | None = None
+        record: bytes | None = None
+        try:
+            with self._busy_gate, self._lock:
+                record = self.device.read_effects(0)  # User effects bank, slot 0
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(
+                self.notify_status, f"effects: {failure}", refused=True
+            )
+            return
+        if record is None:  # pragma: no cover -- the failure path caught it
+            return
+        self.call_from_thread(self._open_effects, record)
+
+    def _open_effects(self, record: bytes) -> None:
+        """Show the effects modal. Main thread; sends nothing."""
+        self.push_screen(
+            EffectsScreen(EffectsEditor(record)),
+            self._effects_edited,
+        )
+
+    def _effects_edited(self, record: bytes | None) -> None:
+        """A fired effects editor's record, on the main thread."""
+        if record is None:
+            return
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._effects_store_worker(record)
+
+    @work(thread=True)
+    def _effects_store_worker(self, record: bytes) -> None:
+        """**MIDI only**, plus one backup file.
+
+        The effects set has no number, so the backup's slot is the word
+        ``effects``; there is one set, and a session writes one file for it.
+        """
+        from nano import backup as bk
+
+        key = "effects"
+        previous: bytes | None = None
+        read_back: bytes | None = None
+        path: str | None = None
+        failure: BaseException | None = None
+        stage = "read"
+        try:
+            with self._busy_gate, self._lock:
+                previous = self.device.read_effects(0)  # User effects, slot 0
+                if key not in self._backed_up:
+                    stage = "backup"
+                    path = bk.save(
+                        key,
+                        kind="effects",
+                        name="effects settings",
+                        blocks={"effects": previous},
+                    )
+                    self._backed_up.add(key)
+                stage = "write"
+                self.device.write_effects(0, record)
+                stage = "read back"
+                read_back = self.device.read_effects(0)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        self.call_from_thread(
+            self._effects_store_done, record, previous, path, read_back, failure, stage
+        )
+
+    def _effects_store_done(  # noqa: PLR0913, PLR0917 -- one argument per worker fact
+        self,
+        record: bytes,
+        previous: bytes | None,
+        path: str | None,
+        read_back: bytes | None,
+        failure: BaseException | None,
+        stage: str,
+    ) -> None:
+        """Main thread: report what happened, and log only what read back."""
+        if failure is not None:
+            if stage in ("read", "backup"):
+                self.notify_status(
+                    f"{stage}: {failure} — nothing was written", refused=True
+                )
+            else:
+                self.notify_status(f"store: {failure}", refused=True)
+            return
+        if previous is None or read_back is None:  # pragma: no cover
+            self.notify_status("store: no read-back; nothing was logged", refused=True)
+            return
+        where = f"; what was there is in {literal(path)}" if path else ""
+        sentence = verify.describe(record, read_back, what="the effects settings")
+        if verify.mismatches(record, read_back):
+            self.notify_status(f"effects: {sentence}{where}", refused=True)
+            return
+        self._undo_log.push(
+            Record("effects settings", EffectsEditRecord(previous=previous))
+        )
+        self.notify_status(f"stored the effects settings; {sentence}{where}")
 
     # --- scanning -----------------------------------------------------------
 

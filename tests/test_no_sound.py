@@ -353,6 +353,7 @@ _PROTOCOL_METHODS = frozenset(
         "read_mix",
         "read_mix_names",
         "read_global",
+        "read_effects",
         "select",
     }
 )

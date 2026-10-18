@@ -49,6 +49,8 @@ from nano import records as rec
 __all__ = [
     "EditGate",
     "EditRecord",
+    "EffectsEditRecord",
+    "EffectsEditor",
     "GlobalEditRecord",
     "GlobalEditor",
     "GlobalRow",
@@ -207,6 +209,25 @@ class MixEditRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class EffectsEditRecord:
+    """One completed effects store, carrying enough to put the effects back.
+
+    The effects counterpart of :class:`EditRecord`: the 65 bytes that were
+    there immediately before the write, and the name those bytes spell.
+    ``z`` re-sends them with ``write_effects``; nothing here reaches the
+    wire itself.
+    """
+
+    previous: bytes
+    name: str = ""
+
+    @property
+    def label(self) -> str:
+        """What the undo history calls this edit."""
+        return "the effects settings"
+
+
+@dataclass(frozen=True, slots=True)
 class GlobalEditRecord:
     """One completed global store: the whole set, as it was.
 
@@ -348,6 +369,110 @@ class GlobalEditor:
         param = _GLOBAL_BY_LABEL.get(label)
         if param is None:
             return f"{label!r} is not a global parameter"
+        refusal = self.refusal(param)
+        if refusal is not None:
+            return f"{param.label} was not written: {refusal}"
+        clamped = param.clamp(value)
+        stored = clamped if clamped >= 0 else clamped + (1 << param.bits)
+        rec.encode_bit_field(self._working, param, stored)
+        return None
+
+
+#: The mapping from parameter label to Param for the Effects section,
+#: used by :class:`EffectsEditor.set_value` for O(1) lookups.
+_EFFECT_BY_LABEL: dict[str, p.Param] = {param.label: param for param in p.EFFECT_PARAMS}
+
+
+class EffectsEditor:
+    """The one effects record, and which of its rows a store may change.
+
+    **Table-driven and small**: the rows are :data:`nano.params.EFFECT_PARAMS`,
+    the widths and ranges are theirs, and the only policy here is which
+    rows a whole-record store must not pretend to change. The values are
+    offset-binary (the spec's convention for packed records), so a signed
+    row is stored with the offset applied -- :func:`nano.records.effects_record_bytes`
+    does the inverse, and :func:`nano.records.encode_bit_field` handles the
+    encoding.
+
+    The instrument is silent about whether it kept an effects store, exactly
+    as it is about a program, so the app reads the record back and compares
+    it; this class holds no device and sends nothing.
+    """
+
+    def __init__(self, record: bytes) -> None:
+        """Wrap the effects dump as it was read."""
+        rec.check_size(record, rec.EFFECTS_BYTES, "the effects settings")
+        self._original = bytes(record)
+        self._working = bytearray(self._original)
+
+    @property
+    def original(self) -> bytes:
+        """The record as it was read, untouched -- what a backup preserves."""
+        return self._original
+
+    @property
+    def size(self) -> int:
+        """How many bytes the dump carries."""
+        return len(self._original)
+
+    def record(self) -> bytes:
+        """The working copy, ready to send."""
+        return bytes(self._working)
+
+    @property
+    def dirty(self) -> bool:
+        """Whether anything has been changed since the record was read."""
+        return self._working != self._original
+
+    def reset(self) -> None:
+        """Discard the edits; the working copy becomes the record again."""
+        self._working[:] = self._original
+
+    def value(self, param: p.Param) -> int | None:
+        """One row's current value, with offset applied, or ``None`` if absent."""
+        return rec.effects_record_bytes(self._working).get(param.label)
+
+    def refusal(self, param: p.Param) -> str | None:
+        """Why a store must leave ``param`` alone, or ``None``."""
+        if "deleted parameter" in param.label:
+            return "a deleted parameter the spec keeps only as a spare"
+        if param.function < 0:
+            return "the spec gives this row no direct-edit address"
+        last_bit = param.bit_address + param.bits - 1
+        if last_bit >> 3 >= len(self._original):
+            return "not in this dump: it predates the row"
+        return None
+
+    def rows(self) -> list:
+        """Every documented effects parameter, in the spec's order."""
+        values = rec.effects_record_bytes(self._working)
+        return [
+            type(
+                "EffectsRow",
+                (),
+                {
+                    "param": param,
+                    "value": values.get(param.label),
+                    "refusal": self.refusal(param),
+                    "writable": self.refusal(param) is None,
+                },
+            )
+            for param in p.EFFECT_PARAMS
+        ]
+
+    def set_value(self, label: str, value: int) -> str | None:
+        """Set one row on the working copy; return the refusal, or ``None``.
+
+        The value is clamped to the row's documented range first (the
+        spec's own rule for the ``10`` message, reused here) and then
+        stored with the offset applied, which is how an Effects record
+        carries a signed value. A refused row is refused here too, so a
+        caller that reaches past the screen's own check still cannot
+        write one.
+        """
+        param = _EFFECT_BY_LABEL.get(label)
+        if param is None:
+            return f"{label!r} is not an effects parameter"
         refusal = self.refusal(param)
         if refusal is not None:
             return f"{param.label} was not written: {refusal}"

@@ -46,7 +46,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Label, Static
 
 from nanosyned import mix as mixview
-from nanosyned.editor import GlobalEditor, GlobalRow, ProgramEditor
+from nanosyned.editor import EffectsEditor, GlobalEditor, GlobalRow, ProgramEditor
 from nanosyned.text import literal
 from vinsynlib.ui.confirm import ConfirmScreen
 from vinsynlib.ui.hints import KeyHints as _LibraryKeyHints
@@ -57,6 +57,7 @@ from vinsynlib.ui.report import ReportScreen as _Frame
 __all__ = [
     "ConfirmScreen",
     "EditorScreen",
+    "EffectsScreen",
     "GlobalScreen",
     "KeyHints",
     "MixScreen",
@@ -707,6 +708,221 @@ class GlobalScreen(ModalScreen[bytes | None]):
     def on_data_table_row_highlighted(self, event) -> None:
         """Moving the cursor is a change of mind, as it is in the family."""
         if event.data_table.id == "global-table" and self._armed:
+            self._disarm()
+            self._refresh()
+
+    def action_arm(self) -> None:
+        if not self._editor.dirty:
+            self._say("nothing to store — no setting has been changed", refused=True)
+            return
+        self._armed = True
+        self._notice = ""
+        self._refresh()
+
+    def action_revert(self) -> None:
+        """Undo the staged edits. Sends nothing; disarms."""
+        self._disarm()
+        self._editor.reset()
+        self._notice = ""
+        self._fill()
+
+    def action_fire(self) -> None:
+        """Return the record, but only while armed. A second look first."""
+        if not self._armed:
+            self._say("not armed — press a first", refused=True)
+            return
+        if not self._editor.dirty:
+            self._disarm()
+            self._say("nothing to store — no setting has been changed", refused=True)
+            return
+        record = self._editor.record()
+        self._disarm()
+        self.dismiss(record)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class EffectsScreen(ModalScreen[bytes | None]):
+    """The unit's one effects record, table-driven, with an armed store.
+
+    Every documented row of :data:`nano.params.EFFECT_PARAMS` is shown, in
+    the spec's order, with its value, its range and -- where it must not be
+    written -- the reason. The rows the specification documents as deleted
+    parameters, or the rows a dump does not carry, are **shown but not
+    editable**: a store here writes the whole record, and writing a value the
+    unit is documented to ignore while reporting success would be a lie about
+    what happened.
+
+    As in :class:`GlobalScreen`, nothing is sent until `a` then `w`, and
+    anything that moves the cursor or opens a dialog disarms.
+    """
+
+    DEFAULT_CSS = """
+    EffectsScreen { align: center middle; }
+    EffectsScreen > Vertical {
+        width: 104; height: 90%; border: thick $primary;
+        background: $surface; padding: 1 2;
+    }
+    EffectsScreen DataTable { height: 1fr; }
+    EffectsScreen .note { height: auto; color: $text-muted; padding-top: 1; }
+    EffectsScreen #effects-status { height: auto; color: $text; padding-top: 1; }
+    EffectsScreen .armed {
+        color: $error;
+        text-style: bold;
+    }
+    """
+
+    BINDINGS: ClassVar[list[Any]] = [
+        Binding("escape", "close", "Cancel"),
+        Binding("q", "close", "Cancel"),
+        Binding("e", "edit_value", "Edit"),
+        Binding("a", "arm", "Arm"),
+        Binding("w", "fire", "Store"),
+        Binding("r", "revert", "Revert"),
+    ]
+
+    def __init__(self, editor: EffectsEditor) -> None:
+        super().__init__()
+        self._editor = editor
+        self._armed = False
+        self._notice = ""
+
+    @property
+    def armed(self) -> bool:
+        """Whether `w` would store right now."""
+        return self._armed
+
+    @property
+    def editor(self) -> EffectsEditor:
+        """The rules object, so a test can ask it what it holds."""
+        return self._editor
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="effects-dialog"):
+            yield Label("", id="effects-title")
+            yield DataTable(id="effects-table", cursor_type="row")
+            yield Static("", id="effects-status")
+            yield Static(
+                "[dim]↑↓ pick a setting · e edit · a arm · w store · "
+                "r revert · esc cancel. Rows with a note are shown but not "
+                "written -- the spec marks some as deleted parameters, or "
+                "the dump does not carry them.[/dim]",
+                id="effects-note",
+                classes="note",
+            )
+
+    def on_mount(self) -> None:
+        table = self.query_one("#effects-table", DataTable)
+        for label, key in (
+            ("parameter", "param"),
+            ("value", "value"),
+            ("range", "range"),
+            ("note", "note"),
+        ):
+            table.add_column(label, key=key)
+        self._fill()
+
+    def _rows(self) -> list:
+        return self._editor.rows()
+
+    def _fill(self) -> None:
+        """Redraw the table from the editor, keeping the cursor row."""
+        table = self.query_one("#effects-table", DataTable)
+        row = table.cursor_row or 0
+        table.clear()
+        for index, entry in enumerate(self._rows()):
+            table.add_row(
+                literal(entry.param.label),
+                _shown(entry.value),
+                f"{entry.param.low}..{entry.param.high}",
+                "" if entry.writable else literal(entry.refusal or ""),
+                key=str(index),
+            )
+        if table.row_count:
+            table.move_cursor(row=min(row, table.row_count - 1))
+        self._refresh()
+
+    def _refresh(self) -> None:
+        state = "unsaved changes" if self._editor.dirty else "unchanged"
+        self.query_one("#effects-title", Label).update(
+            f"[b]Effects settings[/b]  [dim]{self._editor.size} bytes · {state}[/dim]"
+        )
+        status = self.query_one("#effects-status", Static)
+        status.update(self._status())
+        status.set_class(self._armed, "armed")
+
+    def _status(self) -> str:
+        if self._notice:
+            return self._notice
+        if self._armed:
+            return (
+                "[b]ARMED[/b] — about to store the effects settings. There is "
+                "one set: this replaces what the whole instrument is "
+                "configured with.\n[b]w[/b] stores it and reads it back; "
+                "its current contents are saved to a backup file first. Any "
+                "other key disarms."
+            )
+        return "[dim]nothing is sent until a then w[/dim]"
+
+    def _say(self, sentence: str, *, refused: bool = False) -> None:
+        self._notice = f"[b]refused:[/b] {literal(sentence)}" if refused else sentence
+        self._refresh()
+
+    def _disarm(self) -> None:
+        self._armed = False
+
+    def _cursor_row(self) -> int:
+        table = self.query_one("#effects-table", DataTable)
+        rows = self._rows()
+        if not rows:
+            return 0
+        return min(max(table.cursor_row or 0, 0), len(rows) - 1)
+
+    def action_edit_value(self) -> None:
+        """Prompt for one row's value. Typing is a change of mind."""
+        self._disarm()
+        self._notice = ""
+        row = self._rows()[self._cursor_row()]
+        if not row.writable:
+            self._say(f"{row.param.label} is not written: {row.refusal}", refused=True)
+            return
+        self.app.push_screen(
+            PromptScreen(
+                f"{row.param.label} ({row.param.low}..{row.param.high}):",
+                "" if row.value is None else str(row.value),
+            ),
+            self._typed,
+        )
+
+    def _typed(self, text: str | None) -> None:
+        if text is None:
+            self._refresh()
+            return
+        row = self._rows()[self._cursor_row()]
+        try:
+            value = int(text.strip())
+        except ValueError:
+            self._say(f"{text!r} is not a number", refused=True)
+            return
+        problem = self._editor.set_value(row.param.label, value)
+        if problem is not None:
+            self._say(problem, refused=True)
+            return
+        clamped = row.param.clamp(value)
+        self._fill()
+        note = " (clamped)" if clamped != value else ""
+        self._say(f"{row.param.label}: {clamped}{note} — not stored yet")
+
+    def on_key(self, event) -> None:
+        """Any key but the fire key is a change of mind while armed."""
+        if self._armed and event.key != "w":
+            self._disarm()
+            self._refresh()
+
+    def on_data_table_row_highlighted(self, event) -> None:
+        """Moving the cursor is a change of mind, as it is in the family."""
+        if event.data_table.id == "effects-table" and self._armed:
             self._disarm()
             self._refresh()
 
