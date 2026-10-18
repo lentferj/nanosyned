@@ -36,6 +36,7 @@ data under another's number. Every read here checks the number too.
 
 from __future__ import annotations
 
+import queue
 import signal
 import sys
 import time
@@ -76,6 +77,13 @@ DEFAULT_TIMEOUT = 2.0
 #: What one port is worth while sweeping for the instrument. Short on
 #: purpose: ports that are not it should not cost seconds each.
 PROBE_TIMEOUT = 0.5
+
+#: rtmidi's input queue size, in messages. The library opens ports at 8192
+#: (``vinsynlib.midi.open_input``) for the same reason this does: the
+#: default fills on a busy chain and rtmidi prints ``message queue limit
+#: reached!!`` over the terminal. See :meth:`NanoBridge._install_callback`
+#: for the other half of the fix -- draining the queue continuously.
+INPUT_QUEUE = 8192
 
 #: Between messages in a run. **Measured on the bench**, no longer a guess:
 #: `tools/measure_send_gap.py` read 32 User programs at 0, 2, 5, 10, 20 and
@@ -194,6 +202,71 @@ class NanoBridge:
             self._in.ignore_types(sysex=False, timing=True, active_sense=True)
         except AttributeError:  # a test double
             pass
+        #: Messages the port's callback has handed over. See
+        #: :meth:`_next_message`.
+        self._inbox: queue.SimpleQueue = queue.SimpleQueue()
+        self._uses_callback = self._install_callback()
+
+    # --- the input queue ----------------------------------------------------
+
+    def _install_callback(self) -> bool:
+        """Have the port deliver each message instead of being polled.
+
+        **This is what keeps rtmidi's input queue from overflowing.**
+        rtmidi's ALSA backend prints ``MidiInAlsa: message queue limit
+        reached!!`` to stderr -- straight over whatever a terminal
+        application is drawing -- as soon as its queue fills, and it fills
+        whenever messages arrive that nobody reads. This program reads only
+        while it is waiting for an answer to something it asked, so on a
+        chain that carries anything else -- a sequencer, a clock, another
+        editor on the same port, this unit's own soft-thru echo of every
+        byte we send -- the queue fills between requests and the whole
+        screen is spammed.
+
+        A callback makes rtmidi hand each message over as it arrives,
+        whether or not a request is in flight, so the port is drained
+        continuously and is never left to overflow. A test double that has
+        no ``set_callback`` keeps the polling path in
+        :meth:`_next_message`.
+        """
+        setter = getattr(self._in, "set_callback", None)
+        if not callable(setter):
+            return False
+        try:
+            setter(self._receive)
+        except Exception:  # pragma: no cover - a port that refuses callbacks
+            return False
+        return True
+
+    def _receive(self, *args) -> None:
+        """The port's callback: park one message for :meth:`_next_message`.
+
+        rtmidi does not call this the same way in every build. This one
+        hands over ``((message, delta), user_data)``; others hand over
+        ``(message, delta)`` or just ``(message, delta)`` as one argument.
+        All of them are normalised here to the tuple
+        :meth:`rtmidi.MidiIn.get_message` returns, so the readers above do
+        not care which they are talking to.
+        """
+        payload = args[0] if args else None
+        if isinstance(payload, tuple) and len(payload) == 2:
+            # Either the (message, delta) pair itself, or the message
+            # family's own two-element payload; both unpack the same.
+            message, data = payload
+        elif payload is not None:
+            message, data = payload, (args[1] if len(args) > 1 else 0.0)
+        else:  # pragma: no cover - rtmidi always passes a message
+            return
+        self._inbox.put((message, data))
+
+    def _next_message(self):
+        """The next message, whether the port calls back or is polled."""
+        if self._uses_callback:
+            try:
+                return self._inbox.get_nowait()
+            except queue.Empty:
+                return None
+        return self._in.get_message()
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -213,7 +286,8 @@ class NanoBridge:
             raise DeviceError(f"no output port named {port!r}; have {outs}")
         if listen not in ins:
             raise DeviceError(f"no input port named {listen!r}; have {ins}")
-        midi_out, midi_in = rtmidi.MidiOut(), rtmidi.MidiIn()
+        midi_out = rtmidi.MidiOut()
+        midi_in = rtmidi.MidiIn(queue_size_limit=INPUT_QUEUE)
         try:
             # If the second open_port raises -- the port vanished between
             # the listing and here, or another program took it -- the
@@ -240,6 +314,14 @@ class NanoBridge:
         return bridge
 
     def close(self) -> None:
+        # Cancel the input callback before the port goes: a callback firing
+        # as the port is torn down would put to an inbox nobody will read.
+        cancel = getattr(self._in, "cancel_callback", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:
+                pass
         for client in (self._in, self._out):
             try:
                 client.close_port()
@@ -256,7 +338,7 @@ class NanoBridge:
     # --- the wire -----------------------------------------------------------
 
     def _drain(self) -> None:
-        while self._in.get_message() is not None:
+        while self._next_message() is not None:
             pass
 
     def _send(self, data: bytes) -> None:
@@ -286,7 +368,7 @@ class NanoBridge:
         self._send(outgoing)
         deadline = time.time() + (self.timeout if timeout is None else timeout)
         while time.time() < deadline:
-            message = self._in.get_message()
+            message = self._next_message()
             if message is None:
                 time.sleep(0.002)
                 continue
@@ -346,7 +428,7 @@ class NanoBridge:
         deadline = time.time() + (self.timeout if timeout is None else timeout)
         answered_dump = False
         while time.time() < deadline:
-            message = self._in.get_message()
+            message = self._next_message()
             if message is None:
                 time.sleep(0.002)
                 continue

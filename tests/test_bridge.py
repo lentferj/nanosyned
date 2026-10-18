@@ -82,6 +82,36 @@ class _FakePort:
         pass
 
 
+class _CallbackPort(_FakePort):
+    """A port that delivers by callback, the way rtmidi's does.
+
+    ``get_message`` returns nothing -- with a callback installed rtmidi
+    never queues for polling -- so a bridge that still polled would see
+    silence. That is what makes the callback tests meaningful: a name that
+    came back came through the inbox.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.callback = None
+        self.cancelled = 0
+
+    def set_callback(self, callback):
+        self.callback = callback
+
+    def cancel_callback(self):
+        self.cancelled += 1
+        self.callback = None
+
+    def get_message(self):
+        return None
+
+    def deliver(self, message, data=None):
+        """What python-rtmidi does: ``((message, delta), user_data)``."""
+        assert self.callback is not None, "no callback was installed"
+        self.callback((list(message), 0.0), data)
+
+
 def _program_record() -> bytes:
     """A 350-byte record that is not all zeros, so a lost byte shows."""
     return bytes((index * 7 + 3) & 0xFF for index in range(rec.PROGRAM_BYTES))
@@ -324,3 +354,83 @@ class TestSweptReporting:
 
         assert got.swept is False
         assert got.probe_seconds == 0.0
+
+
+# --- the input queue --------------------------------------------------------
+
+
+class TestTheInputQueueIsDrained:
+    """The port is read continuously, not only while a request waits.
+
+    rtmidi's ALSA queue prints ``MidiInAlsa: message queue limit
+    reached!!`` over whatever the terminal is drawing when it fills, and it
+    fills whenever traffic arrives that nobody reads. A busy chain -- a
+    sequencer, a clock, this unit's own soft-thru echo of every byte we
+    send -- used to spam the screen. The callback is the fix: the port
+    hands messages over as they arrive, in flight or not.
+    """
+
+    def test_a_callback_port_is_drained_without_polling(self):
+        port = _CallbackPort()
+        bridge.NanoBridge(port, port)
+        assert port.callback is not None, "the port was left to overflow"
+
+    def test_messages_delivered_while_idle_are_parked_and_drained(self):
+        port = _CallbackPort()
+        live = bridge.NanoBridge(port, port)
+
+        # Arriving with no request in flight is exactly the case that used
+        # to overflow the ALSA queue.
+        port.deliver([0xF0, 0x00, 0x00, 0x0E, 0x0E, 0x0F, 0x07, 0xF7])
+        port.deliver([0xF0, 0x00, 0x00, 0x0E, 0x0E, 0x0F, 0x08, 0xF7])
+
+        live._drain()
+        assert live._inbox.empty()
+
+    def test_a_request_reads_the_inbox_not_the_polled_port(self):
+        port = _CallbackPort()
+        live = bridge.NanoBridge(port, port, timeout=0.5)
+        body = list(m.pack7(bytes(rec.MIX_BYTES)))
+        reply = list(m.frame(m.Function.MIX_DUMP, [7, *body]))
+
+        original = port.send_message
+
+        def answer(data):
+            original(data)
+            # The instrument answers the request; the callback hands the
+            # reply over. get_message never returns it.
+            port.deliver(reply)
+
+        port.send_message = answer
+        got = live.request(m.mix_dump_request(7), m.Function.MIX_DUMP, number=7)
+        assert got.number == 7
+
+    def test_closing_cancels_the_callback(self):
+        port = _CallbackPort()
+        live = bridge.NanoBridge(port, port)
+
+        live.close()
+
+        assert port.cancelled == 1, "the callback outlived the port"
+
+    def test_both_callback_shapes_are_understood(self):
+        """rtmidi hands the message over differently across builds."""
+        port = _CallbackPort()
+        live = bridge.NanoBridge(port, port)
+
+        # The two-argument form: callback(message, delta).
+        port.callback([0xF0, 0x0A, 0xF7], 0.0)
+        # The form this build uses: callback((message, delta), user_data).
+        port.callback(([0xF0, 0x0B, 0xF7], 0.0), None)
+
+        assert live._next_message()[0] == [0xF0, 0x0A, 0xF7]
+        assert live._next_message()[0] == [0xF0, 0x0B, 0xF7]
+
+    def test_a_port_without_set_callback_still_polls(self):
+        # The test doubles and any older rtmidi keep the polling path.
+        port = _FakePort()
+        live = bridge.NanoBridge(port, port)
+        port.inbox.append(([0xF0, 0x00, 0x00, 0x0E, 0x0E, 0x0F, 0x07, 0xF7], 0.0))
+
+        assert live._next_message() is not None
+        assert live._next_message() is None
