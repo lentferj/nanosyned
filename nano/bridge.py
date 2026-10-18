@@ -77,13 +77,21 @@ DEFAULT_TIMEOUT = 2.0
 #: purpose: ports that are not it should not cost seconds each.
 PROBE_TIMEOUT = 0.5
 
-#: Between messages in a run. A **guess**, unlike the sibling s3ked's
-#: measured equivalents, and labelled as one at the point of use. The
-#: NanoSynth's manual documents no inter-message timing because it
-#: documents no System Exclusive at all. Measuring it is a TODO item.
-SEND_GAP = 0.010
+#: Between messages in a run. **Measured on the bench**, no longer a guess:
+#: `tools/measure_send_gap.py` read 32 User programs at 0, 2, 5, 10, 20 and
+#: 50 ms and every run reproduced the reference exactly, including no delay
+#: at all -- the unit's own reply latency (about 160 ms a program here)
+#: dominates. The measurement was over the bench chain (the computer to an
+#: XV-2020 over USB, the NanoSynth behind it on DIN), so the baud-limited DIN
+#: hop is included. The value below is the smallest candidate measured clean;
+#: see docs/RESOLUTION_NOTES.md for the run.
+SEND_GAP = 0.000
 
-#: After a Bank Select, before the Program Change. Also a guess.
+#: After a Bank Select, before the Program Change. **Still a guess**: the
+#: measuring tool could not observe this one -- the unit's edit buffer did
+#: not reflect a Program Change at any candidate gap, so the method could not
+#: tell a short gap from a working one. It stays the sibling projects'
+#: conservative default until a method that can read the change exists.
 SELECT_GAP = 0.005
 
 

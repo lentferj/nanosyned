@@ -314,3 +314,42 @@ It is deliberately not inside the catalog file. The catalog is a
 transcription of the manual; the sidecar is one instrument's current
 contents; the printed-versus-live disagreement is the whole point of
 having two sources, and overwriting one with the other would destroy it.
+
+## 17. `SEND_GAP`, measured on the bench
+
+`tools/measure_send_gap.py` reads the first N User programs at a
+conservative reference gap (100 ms, twice, and refuses to proceed unless
+the two passes agree), then re-reads at a series of candidate gaps and
+compares every name against the reference. A gap that is too short shows
+up not as a timeout but as a reply belonging to the *previous* request,
+filed late — the hazard `bridge.request(number=…)` exists to prevent.
+
+The run, on 2026-10-18, against the unit behind the XV-2020 on the bench:
+
+| gap | programs clean | timeouts | mis-filed | mean read |
+|---|---|---|---|---|
+| 0 ms | 32/32 | 0 | 0 | 5.22 s |
+| 2 ms | 32/32 | 0 | 0 | 5.29 s |
+| 5 ms | 32/32 | 0 | 0 | 5.37 s |
+| 10 ms | 32/32 | 0 | 0 | 5.53 s |
+| 20 ms | 32/32 | 0 | 0 | 5.84 s |
+| 50 ms | 32/32 | 0 | 0 | 6.77 s |
+
+Every candidate gap reproduced the reference exactly, including no delay
+at all. The mean read of 32 programs rises only by the gap itself — about
+5.2 s at 0 ms against 6.8 s at 50 ms, i.e. 32 × 50 ms of deliberate delay
+— so the unit's own reply latency (roughly 160 ms a program on this chain)
+dominates and the inter-message gap is not the limiting factor. `SEND_GAP`
+is therefore `0.000`: the smallest candidate measured clean. The DIN hop
+to the unit is included in what was measured, so the baud-limited leg is
+covered.
+
+`SELECT_GAP` (Bank Select, then Program Change) could not be measured this
+way. The tool's method selects a General MIDI program as a reference, then
+selects a User program and polls the edit buffer for the change; at every
+candidate gap the edit buffer still reported the program it started on
+(`WailinWall`, User 000), so the tool could not distinguish a short gap
+from a working one. It stays `0.005`. Whether the edit buffer not updating
+is a fact about the unit's Program Change handling, a fact about the edit
+buffer until a note is played, or a flaw in the probe is not established
+here — it is recorded as an open question rather than a finding.

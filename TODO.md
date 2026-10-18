@@ -17,20 +17,27 @@ vinsynlib 0.4.2, ratings, scan, live names, the write path and its fence,
 the tooling tier and the hardware suite. What is left is the bench work
 and the owner's transcription.
 
-## 1. `SEND_GAP` and `SELECT_GAP` are guesses
+## 1. `SEND_GAP` is measured; `SELECT_GAP` is still a guess
 
-**Status:** open, blocked on the bench run.
+**Status:** `SEND_GAP` closed, `SELECT_GAP` open, blocked on a method that
+can observe the change.
 
-Neither has been measured. Alesis documents no inter-message timing for
-this unit because Alesis documents no System Exclusive for it at all. The
-values are the sibling projects' conservative defaults.
+`tools/measure_send_gap.py` was run against the unit on the bench chain
+(the computer to a Roland XV-2020 over USB, the NanoSynth behind it on
+DIN). Reading 32 User programs at candidate gaps of 0, 2, 5, 10, 20 and
+50 ms reproduced the reference read exactly at **every** gap, including no
+delay at all — the unit's own reply latency (about 160 ms a program here)
+dominates, so the inter-message gap is not what limits the read. `SEND_GAP`
+is now `0.000`, the smallest candidate measured clean; the run is recorded
+in `docs/RESOLUTION_NOTES.md` item 17.
 
-The tool now exists — `tools/measure_send_gap.py` reads the unit at a
-conservative reference gap, then re-reads at candidate gaps and compares
-the names, which is the only way to see a gap that is too short. What
-remains is running it.
+`SELECT_GAP` could not be measured the same way: the unit's edit buffer did
+not reflect a Bank Select plus Program Change at any candidate gap, so the
+tool could not tell a short gap from a working one and it stays the
+siblings' conservative default, `0.005`. Closing it needs a method that can
+read back what a Program Change selected.
 
-**Blocked on:** one bench session.
+**Blocked on:** a way to observe a Program Change's effect.
 
 ## 2. Reading the User bank is 128 round trips
 
