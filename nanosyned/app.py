@@ -456,9 +456,9 @@ class NanosynedApp(App):
             ("#", "num", None),
             ("name", "name", None),
             ("★", "rating", 5),
-            ("MSB", "msb", None),
-            ("LSB", "lsb", None),
             ("PC", "pc", None),
+            ("LSB", "lsb", None),
+            ("MSB", "msb", None),
         ):
             slots.add_column(label, key=key, width=width)
         # Open on the bank that was on screen last time: the left pane's

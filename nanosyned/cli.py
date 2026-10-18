@@ -119,7 +119,7 @@ def _cmd_list(_device, args) -> None:
             ]
         )
     print(f"{entry.label} — {entry.count} programs\n")
-    print(table(["#", "name", "category", "MSB", "LSB", "PC"], rows))
+    print(table(["#", "name", "category", "PC", "LSB", "MSB"], rows))
 
 
 def _cmd_status(device, _args) -> None:
@@ -791,7 +791,7 @@ def _cmd_find(_device, args) -> None:
                 str(number),
             ]
         )
-    print(table(["bank", "#", "name", "MSB", "LSB", "PC"], rows))
+    print(table(["bank", "#", "name", "PC", "LSB", "MSB"], rows))
     if any(catalog.differs(bank_id, number) for bank_id, _kind, number, _name in hits):
         print(
             "\n* the unit and the catalog disagree about this slot; the "
