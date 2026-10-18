@@ -384,11 +384,9 @@ believes, which is why the bench exists.
 
 ## Honest limits
 
-- **`SEND_GAP` and `SELECT_GAP` are still guesses** — 0.010 s and 0.005 s,
-  the siblings' conservative defaults, labelled as such at the point of use.
-  Alesis documents no inter-message timing for this unit, and until
-  `tools/measure_send_gap.py` is run against it, those numbers are not
-  measurements.
+- **`SEND_GAP` is measured at 0.000 on the bench** — no inter-message delay
+  is needed; `SELECT_GAP` (0.005 s) **is still a guess** until a probe that
+  can observe it exists. `tools/measure_send_gap.py` measures both.
 - **Only the User bank can be read.** The other four are ROM and the
   protocol has no request for them, so their names come from a catalog you
   generate from your own transcription. General MIDI is the easy half — the

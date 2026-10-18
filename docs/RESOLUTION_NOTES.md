@@ -353,11 +353,11 @@ covered.
 way. The tool's method selects a General MIDI program as a reference, then
 selects a User program and polls the edit buffer for the change; at every
 candidate gap the edit buffer still reported the program it started on
-(`WailinWall`, User 000), so the tool could not distinguish a short gap
-from a working one. It stays `0.005`. Whether the edit buffer not updating
-is a fact about the unit's Program Change handling, a fact about the edit
-buffer until a note is played, or a flaw in the probe is not established
-here — it is recorded as an open question rather than a finding.
+(User 000), so the tool could not distinguish a short gap from a working
+one. It stays `0.005`. Whether the edit buffer not updating is a fact about
+the unit's Program Change handling, a fact about the edit buffer until a
+note is played, or a flaw in the probe is not established here — it is
+recorded as an open question rather than a finding.
 
 ## 18. The preset names come from the manual, read by OCR
 

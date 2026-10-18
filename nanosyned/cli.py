@@ -114,8 +114,9 @@ def _cmd_list(_device, args) -> None:
                 f"{item.number:03d}",
                 catalog.display_name(entry.id, item.program_change),
                 item.category,
-                str(item.msb),
+                str(item.program_change),
                 str(item.lsb),
+                str(item.msb),
             ]
         )
     print(f"{entry.label} — {entry.count} programs\n")
@@ -786,9 +787,9 @@ def _cmd_find(_device, args) -> None:
                 entry.label,
                 f"{number:03d}",
                 name.rstrip() + (" *" if catalog.differs(bank_id, number) else ""),
-                str(entry.select),
-                str(0),
                 str(number),
+                str(0),
+                str(entry.select),
             ]
         )
     print(table(["bank", "#", "name", "PC", "LSB", "MSB"], rows))

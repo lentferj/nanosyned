@@ -925,8 +925,8 @@ class NanosynedApp(App):
                     shown,
                     rating_cell(ratings.get(entry.key, 0)),
                     str(entry.program_change),
-                    str(entry.msb),
                     str(entry.lsb),
+                    str(entry.msb),
                     key=entry.key,
                 )
         finally:

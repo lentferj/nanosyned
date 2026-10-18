@@ -113,9 +113,9 @@ rule the siblings apply to their instruments' ROM contents.
   Enter and nothing else, and `tests/test_app.py`'s `TestCursorIsSilent`
   enforces that moving the cursor never sends MIDI. That test matters
   more than any other in the suite.
-- `SEND_GAP` and `SELECT_GAP` in `nano/bridge.py` are **guesses** and are
-  labelled as such at the point of use. Do not quote them as
-  measurements; `tools/measure_send_gap.py` measures them on the bench.
+- `SEND_GAP` is **measured at 0.000 on the bench**; `SELECT_GAP` in
+  `nano/bridge.py` is a **guess** and is labelled as such at the point of
+  use. `tools/measure_send_gap.py` measures both on the bench.
 
 ## Workers do MIDI; the main thread does everything else
 
