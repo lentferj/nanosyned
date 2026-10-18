@@ -22,6 +22,7 @@ that nobody had a second copy to compare against.
 """
 
 from nano.terms import TERMS
+from nanosyned import cli
 from nanosyned.app import KEY_HINTS, NanosynedApp, build_parser
 from vinsynlib import conformance
 
@@ -32,6 +33,26 @@ def test_flags_match_the_family() -> None:
     assert not conformance.check_flags(
         build_parser(),
         required=("port", "scan", "recv-port", "demo", "config", "catalog"),
+    )
+
+
+def test_the_cli_flags_match_the_family() -> None:
+    # The command line keeps the same contract as the browser, from the
+    # same table. `favorites` is the store `fav` and `tags` open, so it is
+    # part of what this CLI offers and is checked as such.
+    assert not conformance.check_flags(
+        cli.build_parser(),
+        required=(
+            "port",
+            "scan",
+            "recv-port",
+            "channel",
+            "demo",
+            "config",
+            "catalog",
+            "favorites",
+            "yes",
+        ),
     )
 
 

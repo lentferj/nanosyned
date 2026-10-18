@@ -102,6 +102,18 @@ def _record(size: int, name: str, offset: int, number: int) -> bytes:
     return bytes(record)
 
 
+def _default_program(number: int) -> bytes:
+    """What the demo's user bank holds before anything is written."""
+    name = "Off" if number == banks.SILENT_PROGRAM[1] else demo_name("USER", number)
+    return _record(rec.PROGRAM_BYTES, name, m.NAME_BIT_OFFSET, number)
+
+
+def _default_mix(number: int) -> bytes:
+    return _record(
+        rec.MIX_BYTES, demo_mix_name(number), rec.MIX_NAME_BIT_OFFSET, number
+    )
+
+
 class DemoDevice:
     """Answers the subset of the protocol nanosyned speaks."""
 
@@ -112,6 +124,11 @@ class DemoDevice:
         self.latency = latency
         self.port: str | None = None
         self.recv_port: str | None = None
+        #: Structural parity with :class:`nano.bridge.NanoBridge`: the demo
+        #: never sweeps for a port it does not open, so both stay at the
+        #: value a remembered-port launch has.
+        self.swept: bool = False
+        self.probe_seconds: float = 0.0
         self.selected: banks.Slot | None = None
         self.selected_channel: int = channel
         #: ``(slot, channel)`` for every selection, in order. The channel
@@ -119,6 +136,32 @@ class DemoDevice:
         #: named for the channel pass while asserting only that something
         #: was sent -- which is what happened in the sibling p2ked.
         self.selected_log: list[tuple[banks.Slot, int]] = []
+        #: The user bank as the unit holds it, seeded with the invented
+        #: names this demo has always answered with. A write replaces an
+        #: entry, and ``read_program`` returns what is in here -- which is
+        #: what lets a caller prove "read back == written" against the same
+        #: code it runs against the unit.
+        self._programs: dict[int, bytes] = {
+            number: _default_program(number)
+            for number in range(banks.PROGRAMS_PER_BANK)
+        }
+        self._mixes: dict[int, bytes] = {
+            number: _default_mix(number) for number in range(banks.MIXES)
+        }
+        self._global: bytes = bytes(rec.GLOBAL_BYTES)
+        #: The effects edit buffer. Nothing reads it back over this
+        #: protocol's subset, so it is kept for the log's sake.
+        self.edit_effects: bytes | None = None
+        #: Every write, in order. Kept apart by kind so a test can say
+        #: "nothing was written" (``program_writes == []``) without
+        #: inspecting a count of everything that did happen.
+        self.program_writes: list[tuple[int, bytes]] = []
+        self.effect_writes: list[tuple[int, bytes]] = []
+        self.edit_effect_writes: list[bytes] = []
+        self.mix_writes: list[tuple[int, bytes]] = []
+        self.global_writes: list[bytes] = []
+        self.midi_edits: list[tuple[int, int, int, int, int, int, int]] = []
+        self.mode_selects: list[bool] = []
         self._closed = False
 
     def close(self) -> None:
@@ -166,8 +209,7 @@ class DemoDevice:
         self._tick()
         if not 0 <= number <= 127:
             raise m.ProtocolError(f"user program {number} is outside 0-127")
-        name = "Off" if number == banks.SILENT_PROGRAM[1] else demo_name("USER", number)
-        return _record(rec.PROGRAM_BYTES, name, m.NAME_BIT_OFFSET, number)
+        return self._programs[number]
 
     def read_program_names(
         self,
@@ -198,9 +240,7 @@ class DemoDevice:
         self._tick()
         if not 0 <= number < banks.MIXES:
             raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES - 1}")
-        return _record(
-            rec.MIX_BYTES, demo_mix_name(number), rec.MIX_NAME_BIT_OFFSET, number
-        )
+        return self._mixes[number]
 
     def read_mix_names(
         self,
@@ -217,7 +257,94 @@ class DemoDevice:
 
     def read_global(self, *, timeout: float | None = None) -> bytes:
         self._tick()
-        return bytes(rec.GLOBAL_BYTES)
+        return self._global
+
+    # --- writing, which the demo also keeps --------------------------------
+
+    def write_program(
+        self, number: int, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Store one of the 128 **user** programs. **The demo keeps this.**
+
+        Refuses program 127 for the same reason the unit does: it is
+        hardwired silent and cannot be changed. Refusing it here means a
+        caller that would have overwritten it fails identically against
+        the demo and against the hardware.
+        """
+        self._tick()
+        if not 0 <= number <= 127:
+            raise m.ProtocolError(f"user program {number} is outside 0-127")
+        if number == banks.SILENT_PROGRAM[1]:
+            raise m.ProtocolError(
+                f"user program {number} is hardwired silent and cannot be changed"
+            )
+        stored = bytes(record)
+        self._programs[number] = stored
+        self.program_writes.append((number, stored))
+
+    def write_effects(
+        self, number: int, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Store one of the 128 **user** effects patches. **Kept here too.**"""
+        self._tick()
+        if not 0 <= number <= 127:
+            raise m.ProtocolError(f"effects {number} is outside 0-127")
+        stored = bytes(record)
+        self.effect_writes.append((number, stored))
+
+    def write_edit_effects(
+        self, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Store the effects edit buffer. **Kept here too.**"""
+        self._tick()
+        stored = bytes(record)
+        self.edit_effects = stored
+        self.edit_effect_writes.append(stored)
+
+    def write_mix(
+        self, number: int, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Store a mix: ``0``-``99`` for a user slot, ``100`` for the buffer."""
+        self._tick()
+        if not 0 <= number <= 100:
+            raise m.ProtocolError(f"mix {number} is outside 0-100")
+        stored = bytes(record)
+        self._mixes[number] = stored
+        self.mix_writes.append((number, stored))
+
+    def write_global(self, record: bytes, *, timeout: float | None = None) -> None:
+        """Store the global settings. **Kept here too.**"""
+        self._tick()
+        stored = bytes(record)
+        self._global = stored
+        self.global_writes.append(stored)
+
+    def midi_edit(  # noqa: PLR0913 -- the body is the spec's seven fields
+        self,
+        mode: int,
+        function: int,
+        page: int,
+        pot: int,
+        value: int,
+        *,
+        sound: int = 0,
+        channel: int = 0,
+        timeout: float | None = None,
+    ) -> None:
+        """Address one parameter for editing. **This changes what plays.**
+
+        The encoder is called for its range checks only -- nothing is
+        built or sent -- so the demo refuses exactly the fields the
+        bridge's message builder refuses.
+        """
+        self._tick()
+        m.midi_edit(mode, function, page, pot, value, sound=sound, channel=channel)
+        self.midi_edits.append((mode, function, page, pot, value, sound, channel))
+
+    def mode_select(self, mix_mode: bool) -> None:
+        """Put the unit in Program or Mix mode. **This changes what plays.**"""
+        self._tick()
+        self.mode_selects.append(mix_mode)
 
     # --- the one thing that makes a sound ----------------------------------
 

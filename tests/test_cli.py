@@ -75,6 +75,54 @@ class TestOfflineCommands:
         assert code == 0
         assert "0 program(s)" in out
 
+    def test_fav_and_tags_need_no_device(self, config_path, tmp_path, capsys):
+        store = str(tmp_path / "favorites.db")
+        code, _out, _ = run(
+            capsys,
+            "--config",
+            config_path,
+            "--favorites",
+            store,
+            "fav",
+            "USER",
+            "1",
+            "--add",
+            "--rate",
+            "4",
+        )
+        assert code == 0
+        code, out, _ = run(capsys, "--config", config_path, "--favorites", store, "fav")
+        assert code == 0
+        assert "★★★★·" in out
+        code, _out, err = run(
+            capsys, "--config", config_path, "--favorites", store, "tags"
+        )
+        assert code == 0
+        assert "no tags" in err
+
+    def test_a_swept_connect_says_so_on_stderr(self, config_path, monkeypatch, capsys):
+        from nano import bridge as b
+
+        class Fake:
+            swept = True
+            probe_seconds = 2.0
+            port = "Fake Port 24"
+            channel = 0
+            description = "fake"
+
+            def read_edit_program(self):
+                return b"\x00" * 350
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            b.NanoBridge, "connect", classmethod(lambda cls, **kw: Fake())
+        )
+        code, _out, err = run(capsys, "--config", config_path, "current")
+        assert code == 0
+        assert "swept for 2.0 s; found Fake Port 24" in err
+
     def test_an_out_of_range_channel_is_refused(self, config_path):
         with pytest.raises(SystemExit):
             cli.main(["--config", config_path, "--channel", "17", "banks"])

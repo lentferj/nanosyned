@@ -27,6 +27,7 @@ from typing import Any
 
 from nano import banks, config, dumps
 from nano import catalog as cat
+from nano import favorites as favmod
 from nano import messages as m
 from nano import records as rec
 from vinsynlib.cli import (
@@ -261,10 +262,181 @@ def _cmd_find(_device, args) -> None:
         )
 
 
+# --- favourites -------------------------------------------------------------
+
+
+def _favorites(args) -> favmod.Favorites:
+    """The user's store, at ``--favorites`` or in the data directory."""
+    return favmod.Favorites(getattr(args, "favorites", None))
+
+
+def _favorite_slot(args) -> tuple[str, int]:
+    """The bank and number the action flags apply to, or ``SystemExit``.
+
+    The slot is positional (``fav USER 12 --add``) rather than part of each
+    flag's value, so that the same two words serve ``--add``, ``--remove``
+    and ``--rate`` -- the family's later command lines do it this way, and
+    an action on the wrong slot is not a thing to spell three times.
+    """
+    if args.bank is None or args.number is None:
+        raise SystemExit("error: give a bank and a number, e.g. `fav USER 12 --add`")
+    try:
+        banks.slot(args.bank, args.number)
+    except LookupError as exc:
+        raise SystemExit(f"error: {exc}") from None
+    return args.bank, args.number
+
+
+def _rating_stars(value: object, flag: str) -> int:
+    """A rating from the command line, 0-5, or one line of ``SystemExit``.
+
+    Checked here rather than left to :meth:`Favorites.add`: the column has
+    no CHECK constraint, so an out-of-range rating is stored happily and
+    then breaks the rating column's value-and-scale invariant -- seven
+    stars with no scale, or a negative one that renders as dots and that
+    ``--rating-at-least 0`` cannot find.
+    """
+    try:
+        stars = int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        raise SystemExit(f"error: {flag} wants 0-5, not {value!r}") from None
+    if not 0 <= stars <= 5:
+        raise SystemExit(f"error: {flag} wants 0-5, not {stars}")
+    return stars
+
+
+def _list_favorites(args, favorites: favmod.Favorites) -> None:
+    """One table of whichever favourites the filters select."""
+    if getattr(args, "tag", None):
+        rows = favorites.with_tag(args.tag)
+    elif getattr(args, "search", None):
+        rows = favorites.search(args.search)
+    else:
+        rows = favorites.all(order=args.order)
+    # A rating filter is a post-filter over whichever of the three ran, not
+    # a fourth branch: `--tag lead --rating-at-least 4` has to mean what it
+    # says, and the browser stacks its filter the same way.
+    if getattr(args, "rating_at_least", None) is not None:
+        stars = _rating_stars(args.rating_at_least, "--rating-at-least")
+        rows = [row for row in rows if row.rating >= stars]
+    if not rows:
+        print("no favourites", file=sys.stderr)
+        return
+    catalog = _catalog(args)
+    table_rows = []
+    for fav in rows:
+        try:
+            slot = banks.slot(fav.bank_id, fav.number)
+            wire = [str(slot.bank.select), str(slot.program_change)]
+        except LookupError:
+            # A bank this build no longer defines. Shown, not dropped.
+            wire = ["?", "?"]
+        table_rows.append(
+            [
+                fav.bank_id,
+                f"{fav.number:03d}",
+                fav.name or catalog.display_name(fav.bank_id, fav.number),
+                *wire,
+                favmod.rating_cell(fav.rating),
+                fav.tags,
+                fav.note,
+            ]
+        )
+    print(
+        table(
+            ["bank", "#", "name", "CC0", "PC", "rating", "tags", "note"],
+            table_rows,
+        )
+    )
+
+
+def _cmd_fav(_device, args) -> None:
+    """The favourites database. Offline; opens no instrument."""
+    favorites = _favorites(args)
+    try:
+        if args.add:
+            bank_id, number = _favorite_slot(args)
+            # `add` is an upsert that replaces every field, so anything not
+            # passed would silently wipe it. Carry through what is already
+            # there: "favourite this and rate it 4" must not drop the note.
+            existing = favorites.get(bank_id, number)
+            rating = existing.rating if existing is not None else 0
+            tags = existing.tags if existing is not None else ""
+            note = existing.note if existing is not None else ""
+            if args.rate is not None:
+                rating = _rating_stars(args.rate, "--rate")
+            if args.tags is not None:
+                tags = args.tags
+            if args.note is not None:
+                note = args.note
+            favorites.add(
+                bank_id,
+                number,
+                name=_catalog(args).display_name(bank_id, number),
+                rating=rating,
+                tags=tags,
+                note=note,
+            )
+            print(f"added {bank_id} {number:03d}")
+            return
+        if args.remove:
+            bank_id, number = _favorite_slot(args)
+            if favorites.remove(bank_id, number):
+                print(f"removed {bank_id} {number:03d}")
+            else:
+                print(
+                    f"{bank_id} {number:03d} was not a favourite",
+                    file=sys.stderr,
+                )
+            return
+        if args.rate is not None:
+            # Rating an existing favourite without touching anything else.
+            # Unlike the library's set_rating, this refuses a slot nobody
+            # favourited: a rating is an annotation *on* a favourite, and
+            # `fav --rate` on a typo should say so rather than invent a row.
+            bank_id, number = _favorite_slot(args)
+            if favorites.get(bank_id, number) is None:
+                raise SystemExit(
+                    f"error: {bank_id} {number:03d} is not a favourite; add it first"
+                )
+            stars = _rating_stars(args.rate, "--rate")
+            favorites.set_rating(bank_id, number, stars)
+            print(f"rated {bank_id} {number:03d} {stars}")
+            return
+        if args.tags is not None or args.note is not None:
+            # The library's set_tags/set_note *create* a favourite when
+            # there is none; that is its documented contract, and the help
+            # says so rather than pretending otherwise.
+            bank_id, number = _favorite_slot(args)
+            if args.tags is not None:
+                favorites.set_tags(bank_id, number, args.tags)
+                print(f"tagged {bank_id} {number:03d}")
+            if args.note is not None:
+                favorites.set_note(bank_id, number, args.note)
+                print(f"noted {bank_id} {number:03d}")
+            return
+        _list_favorites(args, favorites)
+    finally:
+        favorites.close()
+
+
+def _cmd_tags(_device, args) -> None:
+    """Every tag in use, with its count. Offline; opens no instrument."""
+    favorites = _favorites(args)
+    try:
+        counts = favorites.tags()
+    finally:
+        favorites.close()
+    if not counts:
+        print("no tags", file=sys.stderr)
+        return
+    print(table(["tag", "count"], [[tag, str(n)] for tag, n in counts.items()]))
+
+
 # --- wiring -----------------------------------------------------------------
 
 #: Commands that need no instrument at all.
-OFFLINE = {"ports", "banks", "list", "syx", "find"}
+OFFLINE = {"ports", "banks", "list", "syx", "find", "fav", "favorites", "tags"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -285,9 +457,31 @@ def build_parser() -> argparse.ArgumentParser:
         catalog=True,
         config=True,
         demo=True,
+        favorites=True,
         yes=True,
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    def _store_flag(sp: argparse.ArgumentParser) -> None:
+        """Let ``--favorites`` follow the subcommand as well as precede it.
+
+        argparse only accepts a parent parser's option *before* the
+        subcommand, and ``nanocli tags --favorites x`` is the shape people
+        actually type. Re-declaring the option keeps the family's own help
+        text, taken from the action just added. ``SUPPRESS`` is the load-
+        bearing part: without it the subparser's default (``None``) would
+        overwrite a path given before the subcommand.
+        """
+        for action in parser._actions:
+            if action.dest == "favorites":
+                sp.add_argument(
+                    *action.option_strings,
+                    dest=action.dest,
+                    metavar=action.metavar,
+                    default=argparse.SUPPRESS,
+                    help=action.help,
+                )
+                return
 
     sub.add_parser("ports", help="list MIDI ports (opens nothing)")
     sub.add_parser("banks", help="the five banks, and what each allows")
@@ -305,6 +499,51 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--mixes", action="store_true", help="list mixes too")
     sp = sub.add_parser("find", help="search known names (no hardware)")
     sp.add_argument("name")
+    sp = sub.add_parser(
+        "fav",
+        aliases=["favorites"],
+        help="the favourites database (no hardware)",
+    )
+    sp.add_argument("bank", nargs="?", choices=banks.bank_ids())
+    sp.add_argument("number", nargs="?", type=int)
+    # --add and --remove are two directions of one operation; argparse can
+    # refuse the pair before the store is even opened. --rate is
+    # deliberately *not* in this group: with --add it supplies the rating
+    # to store, and alone it rates a favourite that already exists.
+    actions = sp.add_mutually_exclusive_group()
+    actions.add_argument("--add", action="store_true", help="favourite the slot")
+    actions.add_argument("--remove", action="store_true", help="un-favourite the slot")
+    sp.add_argument(
+        "--rate",
+        type=int,
+        default=None,
+        metavar="0-5",
+        help=(
+            "with --add, the rating to store; alone, rate a favourite you "
+            "already have (0-5)"
+        ),
+    )
+    sp.add_argument(
+        "--tags",
+        default=None,
+        help="set the tags (creates the favourite if it is not one)",
+    )
+    sp.add_argument(
+        "--note",
+        default=None,
+        help="set the note (creates the favourite if it is not one)",
+    )
+    sp.add_argument("--tag", default=None, help="favourites with this tag")
+    sp.add_argument("--search", default=None, help="search names, tags and notes")
+    sp.add_argument("--rating-at-least", type=int, default=None, metavar="0-5")
+    sp.add_argument(
+        "--order",
+        default="added",
+        choices=["added", "bank", "name", "rating"],
+    )
+    _store_flag(sp)
+    sp = sub.add_parser("tags", help="tags in use, with counts (no hardware)")
+    _store_flag(sp)
     return parser
 
 
@@ -319,6 +558,9 @@ COMMANDS = {
     "select": _cmd_select,
     "syx": _cmd_syx,
     "find": _cmd_find,
+    "fav": _cmd_fav,
+    "favorites": _cmd_fav,
+    "tags": _cmd_tags,
 }
 
 
@@ -360,6 +602,11 @@ def main(argv: list[str] | None = None) -> int:
                         channel=channel,
                         scan=args.scan,
                         on_try=lambda n: print(f"  probing {n}...", file=sys.stderr),
+                    )
+                if getattr(device, "swept", False):
+                    print(
+                        f"swept for {device.probe_seconds:.1f} s; found {device.port}",
+                        file=sys.stderr,
                     )
                 try:
                     port = getattr(device, "port", None)

@@ -59,18 +59,33 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Header, Static
 
-from nano import banks
+from nano import banks, livenames
 from nano import catalog as cat
+from nano.config import UNSET
 from nanosyned.screens import KeyHints, PromptScreen, ReportScreen
 from nanosyned.text import literal
 from vinsynlib import keys
 from vinsynlib.build import build_of
 from vinsynlib.cli import add_common_arguments, make_parser, validate_common
 from vinsynlib.keys import wrap_blocks as _wrap_blocks
+from vinsynlib.ui.work import QUIET_BRIDGE_ERRORS, BusyGate, close_when_idle
 
 __all__ = ["KEY_HINTS", "NanosynedApp", "build_parser", "main", "wrap_blocks"]
 
 _SEP = " · "
+
+#: The family's quiet error set, plus the errors this unit's bridge and
+#: the protocol itself raise on a conversation gone wrong (compare
+#: emorphed's set of the same name). A programming error -- a TypeError,
+#: a KeyError -- is in none of these, so it raises out of the worker
+#: instead of being dressed up as a device fault in the status bar.
+_BRIDGE_ERRORS: tuple[type[BaseException], ...] = (
+    *tuple(QUIET_BRIDGE_ERRORS),
+    ValueError,
+    LookupError,
+    RuntimeError,
+    SystemError,
+)
 
 #: What `F` steps through. The same three the sibling rxved and p2ked use,
 #: so the key means the same thing across these projects.
@@ -171,7 +186,13 @@ class NanosynedApp(App):
     ]
 
     def __init__(
-        self, device, *, catalog=None, favorites=None, config_path: str | None = None
+        self,
+        device,
+        *,
+        catalog=None,
+        favorites=None,
+        config_path: str | None = None,
+        catalog_path: str | None = None,
     ) -> None:
         super().__init__()
         self.device = device
@@ -183,13 +204,73 @@ class NanosynedApp(App):
         #: in tests, so a test cannot drop a config into the
         #: working directory.
         self._config_path = config_path
+        #: Which catalog file this browser is pointed at. The live-names
+        #: sidecar travels beside it -- see :func:`nano.livenames.path_for`
+        #: -- so a run against another catalog reads that catalog's names.
+        self._catalog_path = catalog_path or cat.DEFAULT_PATH
         self.view_mode = VIEW_ALL
         self._lock = threading.RLock()
         self._bank_ids: list[str] = banks.bank_ids()
         self._current_bank = self._bank_ids[0]
         self._current: list[banks.Slot] = []
-        self._busy = False
         self._filling = False
+        #: The family's busy gate, over the old boolean. It tracks whether
+        #: an exchange is in flight (for an idle close) and refuses a
+        #: second one before a worker is spawned.
+        self._busy_gate = BusyGate()
+        #: One exchange at a time, claimed on the main thread before the
+        #: worker is spawned and released by the worker in a ``finally``.
+        #: The gate alone cannot carry this: entering it *clears* a
+        #: refusal, so between claiming and entering a second action would
+        #: find neither signal set and start a second worker. ``_busy``
+        #: reads this claim as the third signal.
+        self._exchange = threading.Lock()
+        #: Restore the remembered browser state: which bank the left pane
+        #: was on, which row the right pane's cursor was on, and where the
+        #: cycling ``v`` view stood. Loaded here, not in ``on_mount``,
+        #: because the first ``_fill`` down there builds its rows out of
+        #: ``view_mode`` and ``_current_bank``; restoring anything later
+        #: would mean filling twice. An injected path only -- ``None``
+        #: means a test that asked for silence and gets it. The cursor is
+        #: clamped to whatever the first fill produced, in ``on_mount``.
+        self._saved_slot_cursor: int | None = None
+        if self._config_path is not None:
+            from nano import config as _cfg
+
+            try:
+                saved_view = _cfg.load_ui_state(
+                    "view_mode", self._config_path, default=UNSET
+                )
+                # Never trust a stored value: a view this build renamed
+                # or a stale bank index is ignored, and the app opens on
+                # its defaults.
+                if saved_view is not UNSET and saved_view in VIEW_CYCLE:
+                    self.view_mode = saved_view
+                saved_bank = _cfg.load_ui_int("bank_index", self._config_path)
+                if saved_bank is not None and 0 <= saved_bank < len(self._bank_ids):
+                    self._current_bank = self._bank_ids[saved_bank]
+                self._saved_slot_cursor = _cfg.load_ui_int(
+                    "slot_cursor", self._config_path
+                )
+            except Exception:
+                # The cache is best-effort; a bad read is a default
+                # startup.
+                self._saved_slot_cursor = None
+
+    @property
+    def _busy(self) -> bool:
+        """Whether a MIDI exchange is pending or in flight.
+
+        A property over the gate and the exchange, not a flag set beside
+        the check: a ``@work(thread=True)`` method returns at once, so a
+        boolean it set could only be set on its own thread, too late --
+        which is the race two quick selections used to win.
+        """
+        return (
+            self._busy_gate.check() is not None
+            or self._busy_gate.is_busy()
+            or self._exchange.locked()
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -205,6 +286,15 @@ class NanosynedApp(App):
 
     def on_mount(self) -> None:
         self.title = "nanosyned"
+        # Live names before anything draws: the panes below are built out
+        # of the catalog, so the sidecar's names must be laid over it
+        # first or a bank that has been read before opens on printed
+        # names for one frame. Best-effort by construction -- a missing
+        # or corrupt sidecar reads as an empty one -- so ``applied`` is
+        # simply the count of names that came off it.
+        applied = livenames.apply_to(
+            self.catalog, livenames.path_for(self._catalog_path)
+        )
         table = self.query_one("#bank-table", DataTable)
         for label, key in (("bank", "bank"), ("n", "n"), ("", "src"), ("♥", "fav")):
             table.add_column(label, key=key)
@@ -225,16 +315,59 @@ class NanosynedApp(App):
         # The favourite marker leads the row rather than trailing it: it is
         # a gutter mark the eye runs down, and gluing it to the name would
         # carry it into anything that sorts or searches.
-        for label, key in (("♥", "fav"), ("#", "num"), ("name", "name"), ("PC", "pc")):
+        for label, key in ("♥", "fav"), ("#", "num"), ("name", "name"), ("PC", "pc"):
             slots.add_column(label, key=key)
+        # Open on the bank that was on screen last time: the left pane's
+        # cursor has to sit on it before anything else moves.
+        table.move_cursor(row=self._bank_ids.index(self._current_bank))
         self._fill(self._current_bank)
-        table.focus()
-        self.notify_status(
-            f"{len(self.catalog)} names from the catalog"
-            if self.catalog
-            else "no catalog -- numbers only. Build one with "
-            "tools/extract_catalog.py, or press r to read from the unit."
-        )
+        # The saved slot row, clamped to whatever this fill produced --
+        # one use only.
+        saved_slot_cursor = self._saved_slot_cursor
+        self._saved_slot_cursor = None
+        if saved_slot_cursor is not None and self._current:
+            slots.move_cursor(row=min(saved_slot_cursor, len(self._current) - 1))
+            slots.focus()
+        else:
+            table.focus()
+        # A focus change can reset the slot table's visual cursor, so the
+        # saved row is re-applied once the dust settles -- rxved's shape,
+        # and for the same reason. The handler's unchanged-bank guard is
+        # what makes the queued first highlight harmless: it either matches
+        # the bank already shown, or its refill lands and the next event
+        # puts the restored bank back.
+        if saved_slot_cursor is not None:
+            self.set_timer(0.1, lambda: self._restore_slot_cursor(saved_slot_cursor))
+        printed = len(self.catalog)
+        if printed and applied:
+            self.notify_status(
+                f"{printed} names from the catalog · {applied} read from the unit"
+            )
+        elif printed:
+            self.notify_status(f"{printed} names from the catalog")
+        elif applied:
+            # Not "no catalog": the unit supplied them, they are kept in
+            # the sidecar, and saying otherwise read as "the read never
+            # made it" on every startup (compare emorphed).
+            self.notify_status(
+                f"{applied} names read from the unit (no printed catalog)"
+            )
+        else:
+            self.notify_status("no names yet -- press r to read the User bank")
+
+    def _restore_slot_cursor(self, cursor: int) -> None:
+        """Re-apply the saved slot row after focus changes have settled.
+
+        Best-effort and one-shot: the row may not exist any more (a filter
+        was remembered with it), so a stale cursor is dropped rather than
+        raising out of a timer callback.
+        """
+        try:
+            table = self.query_one("#slot-table", DataTable)
+        except LookupError:
+            return
+        if self._current:
+            table.move_cursor(row=min(cursor, len(self._current) - 1))
 
     # --- filling ------------------------------------------------------------
 
@@ -305,6 +438,42 @@ class NanosynedApp(App):
 
         try:
             config.save_channel(channel, path)
+        except OSError:
+            pass
+
+    def _save_ui_state(
+        self,
+        *,
+        bank_index: Any = UNSET,
+        slot_cursor: Any = UNSET,
+        view_mode: Any = UNSET,
+    ) -> None:
+        """Persist where the user was (bank, slot cursor, cycling view).
+
+        :data:`UNSET` forwards nothing, so saving the cursor leaves the
+        bank position alone: the keys are saved individually and only the
+        ones named matter this time. ``None`` is the family's "remove the
+        key", and this helper never has a reason to spell it -- the
+        browser remembers where the user was, it does not forget.
+
+        Only :class:`OSError` is swallowed -- a read-only directory or a
+        full disk, where forgetting the position beats refusing to run. A
+        programming error (a list where an int belongs) raises and is
+        heard.
+        """
+        if self._config_path is None:
+            return
+        from nano import config as _cfg
+
+        try:
+            for key, value in (
+                ("bank_index", bank_index),
+                ("slot_cursor", slot_cursor),
+                ("view_mode", view_mode),
+            ):
+                if value is UNSET:
+                    continue
+                _cfg.save_ui_state(key, value, self._config_path)
         except OSError:
             pass
 
@@ -420,6 +589,7 @@ class NanosynedApp(App):
             return
         index = VIEW_CYCLE.index(self.view_mode)
         self.view_mode = VIEW_CYCLE[(index + 1) % len(VIEW_CYCLE)]
+        self._save_ui_state(view_mode=self.view_mode)
         self._refill_keeping_place()
         shown = len(self._current)
         if self.view_mode == VIEW_ALL:
@@ -525,9 +695,25 @@ class NanosynedApp(App):
         if event.data_table.id == "bank-table":
             row = event.cursor_row
             if 0 <= row < len(self._bank_ids):
-                self._fill(self._bank_ids[row])
+                bank_id = self._bank_ids[row]
+                # Idempotent on purpose. ``_filling`` cannot guard this --
+                # the event is delivered after the flag is cleared -- so
+                # the handler has to be safe to receive for the bank it
+                # is already showing. Moving the cursor never triggers it
+                # for a row already shown, and a stale queued event for a
+                # bank that was showing a moment ago must not refill the
+                # pane over a newer fill.
+                if bank_id != self._current_bank:
+                    self._fill(bank_id)
+                    self._save_ui_state(bank_index=row)
         elif event.data_table.id == "slot-table":
             self._detail(event.cursor_row)
+            # Only save the slot cursor when the slot table is focused --
+            # the user is actively navigating. Programmatic cursor moves
+            # during startup (while the bank pane has focus) must not
+            # overwrite the saved position they are busy restoring.
+            if event.data_table.has_focus:
+                self._save_ui_state(slot_cursor=event.cursor_row)
 
     def on_data_table_row_selected(self, event) -> None:
         """Enter on a slot. It arrives here, not as a binding."""
@@ -549,26 +735,35 @@ class NanosynedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
-        # Set here, not in the worker. A @work(thread=True) method returns
-        # at once and sets the flag on its own thread, so two quick presses
-        # both passed this check before either worker ran -- two Program
-        # Changes from one intent, and for `r` two bulk requests
-        # back-to-back, which is the traffic that draws "data format error"
-        # from this unit (item 1).
-        self._busy = True
+        # The exchange is claimed here, on the main thread, before any
+        # worker exists: a @work(thread=True) method returns at once, so
+        # two quick presses both passed every check run on their own
+        # thread -- two Program Changes from one intent, and for `r` two
+        # bulk requests back-to-back, which is the traffic that draws
+        # "data format error" from this unit (item 1). The worker
+        # releases the exchange in a ``finally``; entering the busy gate
+        # is what marks the exchange in progress for an idle close.
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
         self._select_worker(self._current[row])
 
     @work(thread=True)
     def _select_worker(self, entry: banks.Slot) -> None:
-        """**MIDI only.** The caller set ``_busy``; this clears it."""
+        """**MIDI only.** The caller claimed the exchange; this frees it."""
+        failure: BaseException | None = None
         try:
-            with self._lock:
+            with self._busy_gate, self._lock:
                 self.device.select(entry)
-        except Exception as exc:
-            self.call_from_thread(self.notify_status, f"select: {exc}", refused=True)
-            return
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
         finally:
-            self._busy = False
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(
+                self.notify_status, f"select: {failure}", refused=True
+            )
+            return
         self.call_from_thread(
             self.notify_status,
             f"selected {entry.display} — Bank Select {entry.bank.select} "
@@ -588,7 +783,10 @@ class NanosynedApp(App):
                 refused=True,
             )
             return
-        self._busy = True  # main thread; see action_select
+        # Main thread; see action_select for why it is claimed here.
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
         self._read_worker(self._current_bank)
 
     @work(thread=True)
@@ -598,7 +796,7 @@ class NanosynedApp(App):
         128 separate requests, not one bulk dump. The only bulk request
         this protocol has returns everything the instrument holds, about
         79 kB of it, and nearly all of that is data this program does not
-        use. The caller set ``_busy``; this clears it.
+        use. The caller claimed the exchange; this frees it.
         """
 
         def progress(done, total):
@@ -606,20 +804,44 @@ class NanosynedApp(App):
                 self.notify_status, f"reading the User bank, {done}/{total} (silent)..."
             )
 
+        failure: BaseException | None = None
+        names: dict[int, str] | None = None
         try:
-            with self._lock:
+            with self._busy_gate, self._lock:
                 names = self.device.read_program_names(on_progress=progress)
-        except Exception as exc:
-            self.call_from_thread(self.notify_status, f"read: {exc}", refused=True)
-            return
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
         finally:
-            self._busy = False
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(self.notify_status, f"read: {failure}", refused=True)
+            return
+        if names is None:  # pragma: no cover -- the failure path caught it
+            return
         self.call_from_thread(self._adopt, bank_id, names)
 
     def _adopt(self, bank_id: str, names: dict[int, str]) -> None:
         for program_change, name in names.items():
             self.catalog.set_live_name(bank_id, program_change, name)
         differing = sum(1 for pc in names if self.catalog.differs(bank_id, pc))
+        # The same names must be here next launch without one read: they
+        # are kept in the sidecar beside the catalog. Only OSError is
+        # swallowed -- a read-only directory keeps the session's names in
+        # the catalog above and does not end the program over a cache.
+        try:
+            livenames.save(
+                livenames.path_for(self._catalog_path),
+                {livenames.key(bank_id, pc): name for pc, name in names.items()},
+            )
+        except OSError:
+            pass
+        # Rows already favourited keep the name they were added with, so a
+        # favourite named from the manual stays stale forever unless
+        # something re-asks the store for its names. This runs on the main
+        # thread, where ``_adopt`` always runs: the favourites database is
+        # sqlite and refuses cross-thread use.
+        if self.favorites is not None:
+            self.favorites.refresh_names(self.catalog.live_name)
         if bank_id == self._current_bank:
             self._fill(bank_id)
         self.notify_status(
@@ -657,16 +879,38 @@ class NanosynedApp(App):
         self.push_screen(PromptScreen("Search names:"), done)
 
     def action_device_info(self) -> None:
+        """Busy-guarded like every other MIDI action.
+
+        `i` needs no guard so urgently as the others: ``identify`` is one
+        request -- but the reply is held and flushed on the *next*
+        message, so an `i` interleaved with the 128 requests of `r` steals
+        one of its User Dump replies and leaves the read one short. The
+        gate and the exchange are claimed here, before the worker exists.
+        """
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
         self._info_worker()
 
     @work(thread=True)
     def _info_worker(self) -> None:
         """**MIDI only** -- the report is built on the main thread."""
+        failure: BaseException | None = None
+        fields: dict | None = None
         try:
-            with self._lock:
+            with self._busy_gate, self._lock:
                 fields = self.device.identify()
-        except Exception as exc:
-            self.call_from_thread(self.notify_status, f"device: {exc}", refused=True)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(
+                self.notify_status, f"device: {failure}", refused=True
+            )
             return
         self.call_from_thread(self._show_info, fields)
 
@@ -786,6 +1030,23 @@ def _build_line() -> str:
     return " · ".join(parts)
 
 
+def _say_sweep(bridge: Any) -> None:
+    """One line when the launch swept for the port, and silence otherwise.
+
+    A sweep takes minutes on a busy host; saying so, once, is what keeps
+    a slow launch from being mistaken for the normal one. Read
+    defensively: the attribute is the bridge's business, and a device
+    that does not track a sweep (the demo does not) simply gets silence.
+    """
+    if not getattr(bridge, "swept", False):
+        return
+    seconds = getattr(bridge, "probe_seconds", None)
+    port = getattr(bridge, "port", None)
+    if not seconds or not port:
+        return
+    print(f"swept for {seconds:.1f} s; found {port}", file=sys.stderr)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = make_parser("nanosyned", "Browse an Alesis NanoSynth's sounds.")
     # Every flag's help text is the family's, from vinsynlib.spec. This tool
@@ -862,6 +1123,10 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.exit(f"error: {exc}")
 
+        # One line when the launch swept: a slow start explained is not
+        # a hung one.
+        _say_sweep(device)
+
         # Remember whatever channel is actually in use -- which after a
         # sweep is the one the unit reported, not the one asked for. The
         # port pair is saved by `connect` itself, and only after a sweep: the
@@ -882,13 +1147,20 @@ def main(argv: list[str] | None = None) -> int:
         # two used to print a traceback.
         raise SystemExit(f"error: {exc}") from None
     app = NanosynedApp(
-        device, catalog=cat.load(args.catalog), favorites=store, config_path=config_path
+        device,
+        catalog=cat.load(args.catalog),
+        favorites=store,
+        config_path=config_path,
+        catalog_path=args.catalog or cat.DEFAULT_PATH,
     )
     try:
         app.run()
     finally:
         store.close()
-        device.close()
+        # Never close mid-exchange: waits for the gate to be neither
+        # refused nor in progress, then closes.
+        with close_when_idle(device, gate=app._busy_gate):
+            pass
     return 0
 
 

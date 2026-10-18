@@ -16,6 +16,11 @@ htmlcov/
 # redistribute: regenerate it locally with tools/extract_catalog.py.
 nano/data/catalog.json
 
+# Names read off the unit, cached beside the catalog. The user's own
+# machine's contents: a local cache, never committed, written by `r`.
+nano/data/live-names.json
+live-names.json
+
 # A disposable cache of which port answered last.
 config.toml
 

@@ -173,6 +173,15 @@ class NanoBridge:
         #: produced a config that never matched.
         self.port: str | None = None
         self.recv_port: str | None = None
+        #: Whether this connection came from a sweep rather than from the
+        #: remembered port. A launch that swept pinged every MIDI port on
+        #: the machine, and a caller that reports how it found the unit --
+        #: rather than only that it did -- needs to be able to say so.
+        self.swept: bool = False
+        #: How long that sweep took, in seconds. ``0.0`` when it did not
+        #: sweep: a fast-path launch has no sweep to time, and reporting a
+        #: zero is more honest than inventing a duration.
+        self.probe_seconds: float = 0.0
         try:
             self._in.ignore_types(sysex=False, timing=True, active_sense=True)
         except AttributeError:  # a test double
@@ -445,6 +454,132 @@ class NanoBridge:
         )
         return packet.data()
 
+    # --- writing, which the unit keeps -------------------------------------
+    #
+    # Every method below sends a store message and returns. None of them
+    # waits for a reply, and that is deliberate: this protocol answers a
+    # store with silence whether it worked or not, so there is nothing to
+    # wait for. What proves a write landed is the record read back
+    # afterwards -- see :mod:`nano.verify` -- and that, like the gate that
+    # decides whether to write at all, the backup that makes it undoable,
+    # and the log that says it happened, belongs to the caller. The
+    # sibling p2ked writes under the same rule.
+    #
+    # ``timeout`` is accepted so these methods fit beside their read-side
+    # counterparts; nothing here waits, so nothing here uses it.
+
+    def write_program(
+        self, number: int, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Store one of the 128 **user** programs. **The unit keeps this.**
+
+        Program 127 is hardwired silent: the manual says it cannot be
+        deleted, edited, overwritten or changed, and the unit refuses
+        nothing on the wire -- it answers a store with silence either way.
+        Refusing it here is the only place the mistake can be caught.
+
+        Sent, then not verified: the write gate, the backup, the log and
+        the read-back belong to the caller. See :mod:`nano.verify` for the
+        comparison that decides whether it landed.
+        """
+        if not 0 <= number <= 127:
+            raise m.ProtocolError(f"user program {number} is outside 0-127")
+        if number == banks.SILENT_PROGRAM[1]:
+            raise m.ProtocolError(
+                f"user program {number} is hardwired silent and cannot be changed"
+            )
+        self._drain()
+        self._send(m.program_dump(number, record))
+
+    def write_effects(
+        self, number: int, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Store one of the 128 **user** effects patches. **Kept by the unit.**
+
+        Sent, then not verified: the write gate, the backup, the log and
+        the read-back belong to the caller, as for :meth:`write_program`.
+        """
+        self._drain()
+        self._send(m.effects_dump(number, record))
+
+    def write_edit_effects(
+        self, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Store the effects edit buffer. **Kept by the unit, until it moves.**
+
+        This is the scratch the current program plays through, not a user
+        slot; mix mode has a different one and this is not it.
+
+        Sent, then not verified: the write gate, the backup, the log and
+        the read-back belong to the caller, as for :meth:`write_program`.
+        """
+        self._drain()
+        self._send(m.edit_effects_dump(record))
+
+    def write_mix(
+        self, number: int, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Store a mix: ``0``-``99`` for a user slot, ``100`` for the buffer.
+
+        **Kept by the unit** -- permanently for a slot, until the next mode
+        change for the buffer, which is the one number past the 99 user
+        mixes and is not a typo for 0.
+
+        Sent, then not verified: the write gate, the backup, the log and
+        the read-back belong to the caller, as for :meth:`write_program`.
+        """
+        self._drain()
+        self._send(m.mix_dump(number, record))
+
+    def write_global(self, record: bytes, *, timeout: float | None = None) -> None:
+        """Store the global settings. **Kept by the unit; there is one set.**
+
+        Sent, then not verified: the write gate, the backup, the log and
+        the read-back belong to the caller, as for :meth:`write_program`.
+        """
+        self._drain()
+        self._send(m.global_dump(record))
+
+    def midi_edit(  # noqa: PLR0913 -- the body is the spec's seven fields
+        self,
+        mode: int,
+        function: int,
+        page: int,
+        pot: int,
+        value: int,
+        *,
+        sound: int = 0,
+        channel: int = 0,
+        timeout: float | None = None,
+    ) -> None:
+        """Address one parameter for editing. **This changes what plays.**
+
+        Nothing is stored: the unit moves the parameter in its working
+        copy, and only a store keeps it. ``mm`` selects the block (global,
+        mix, program or effects); see :func:`nano.messages.midi_edit` for
+        the field layout.
+
+        Sent, then not verified: the write gate, the backup, the log and
+        the read-back belong to the caller, as for :meth:`write_program`.
+        """
+        self._drain()
+        self._send(
+            m.midi_edit(mode, function, page, pot, value, sound=sound, channel=channel)
+        )
+
+    def mode_select(self, mix_mode: bool) -> None:
+        """Put the unit in Program or Mix mode. **This changes what plays.**
+
+        Not a store: nothing is written to memory. It does change which
+        buffer and which set of programs the unit is playing from, so a
+        caller has to decide when to send it.
+
+        Sent, then not verified: the gate, the log and the read-back belong
+        to the caller, as for :meth:`write_program`.
+        """
+        self._drain()
+        self._send(m.mode_select(mix_mode))
+
     # --- the one thing that makes a sound ----------------------------------
 
     def select(self, target: banks.Slot) -> None:
@@ -570,7 +705,13 @@ class NanoBridge:
         Name hints only order the sweep. This instrument has no USB port of
         its own and answers through whatever it is cabled behind, so its
         port is named after something else entirely.
+
+        The bridge this returns says it was found this way: :attr:`swept`
+        is set and :attr:`probe_seconds` carries how long it took. The
+        remembered-port fast path in :meth:`connect` never reaches here and
+        leaves both alone, so a caller can report which launch it got.
         """
+        started = time.monotonic()
         hinted = likely_ports()
         _, outs = list_ports()
         candidates = hinted + [p for p in outs if p not in hinted]
@@ -604,6 +745,8 @@ class NanoBridge:
                 # every later request that does not name its own would run
                 # at the probe's value rather than the working one.
                 bridge.timeout = DEFAULT_TIMEOUT
+                bridge.swept = True
+                bridge.probe_seconds = time.monotonic() - started
                 return bridge
             bridge.close()
         raise DeviceError(
