@@ -141,6 +141,7 @@ many sequencers send instead.
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -e .
+source .venv/bin/activate
 ```
 
 Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** — the
