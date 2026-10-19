@@ -544,6 +544,25 @@ class NanoBridge:
         )
         return packet.data()
 
+    def read_effects(self, number: int, *, timeout: float | None = None) -> bytes:
+        """One of the 128 **user** effects patches. **Silent.**
+
+        The unit has 128 user effects patches and answers dump requests
+        for all of them. The effects block is independent of programs
+        and mixes, though a program stores its own effects number.
+        """
+        if not 0 <= number <= 127:
+            raise m.ProtocolError(f"effects {number} is outside 0-127")
+        packet = self.request(
+            m.effects_dump_request(number),
+            m.Function.USER_EFFECTS_DUMP,
+            number=number,
+            timeout=timeout,
+        )
+        data = packet.data()
+        rec.check_size(data, rec.EFFECTS_BYTES, "an effects patch")
+        return data[: rec.EFFECTS_BYTES]
+
     # --- writing, which the unit keeps -------------------------------------
     #
     # Every method below sends a store message and returns. None of them

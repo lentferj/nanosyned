@@ -1833,13 +1833,16 @@ class NanosynedApp(App):
         """**MIDI only.** One global dump; the modal opens on the main thread."""
         failure: BaseException | None = None
         record: bytes | None = None
+        exchange_acquired = False
         try:
             with self._busy_gate, self._lock:
                 record = self.device.read_global()
+            exchange_acquired = True
         except _BRIDGE_ERRORS as exc:
             failure = exc
         finally:
-            self._exchange.release()
+            if exchange_acquired:
+                self._exchange.release()
         if failure is not None:
             self.call_from_thread(
                 self.notify_status, f"global: {failure}", refused=True
@@ -1968,13 +1971,19 @@ class NanosynedApp(App):
         """**MIDI only.** One effects dump; the modal opens on the main thread."""
         failure: BaseException | None = None
         record: bytes | None = None
+        exchange_acquired = False
         try:
             with self._busy_gate, self._lock:
                 record = self.device.read_effects(0)  # User effects bank, slot 0
+            exchange_acquired = True
         except _BRIDGE_ERRORS as exc:
             failure = exc
         finally:
-            self._exchange.release()
+            if exchange_acquired:
+                try:
+                    self._exchange.release()
+                except RuntimeError:
+                    pass  # Lock already released, ignore
         if failure is not None:
             self.call_from_thread(
                 self.notify_status, f"effects: {failure}", refused=True

@@ -108,6 +108,11 @@ def _default_program(number: int) -> bytes:
     return _record(rec.PROGRAM_BYTES, name, m.NAME_BIT_OFFSET, number)
 
 
+def _default_effect(number: int) -> bytes:
+    name = f"Effect {number:03d}"
+    return _record(rec.EFFECTS_BYTES, name, m.NAME_BIT_OFFSET, number)
+
+
 def _default_mix(number: int) -> bytes:
     return _record(
         rec.MIX_BYTES, demo_mix_name(number), rec.MIX_NAME_BIT_OFFSET, number
@@ -147,6 +152,9 @@ class DemoDevice:
         }
         self._mixes: dict[int, bytes] = {
             number: _default_mix(number) for number in range(banks.MIXES)
+        }
+        self._effects: dict[int, bytes] = {
+            number: _default_effect(number) for number in range(128)
         }
         self._global: bytes = bytes(rec.GLOBAL_BYTES)
         #: The effects edit buffer. Nothing reads it back over this
@@ -258,6 +266,12 @@ class DemoDevice:
     def read_global(self, *, timeout: float | None = None) -> bytes:
         self._tick()
         return self._global
+
+    def read_effects(self, number: int, *, timeout: float | None = None) -> bytes:
+        self._tick()
+        if not 0 <= number <= 127:
+            raise ValueError(f"effects {number} is outside 0-127")
+        return self._effects[number]
 
     # --- writing, which the demo also keeps --------------------------------
 
