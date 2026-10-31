@@ -1,26 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # SPDX-FileCopyrightText: Copyright (C) 2026  nanosyned contributors
-#
-# This file is part of nanosyned.
-#
-# nanosyned is free software: you can redistribute it and/or modify it under
-# the terms of the GNU General Public License as published by the Free
-# Software Foundation, either version 2 of the License, or (at your option)
-# any later version.
-#
-# nanosyned is distributed in the hope that it will be useful, but WITHOUT ANY
-# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
-# details.
-
-"""The write surface: dump, send, backup and set.
-
-Every write here runs against a persistent demo device or a file, so no MIDI
-port is opened. What the tests pin down is the order the write commands
-promise: refuse first, read the destination, back it up, write, read back.
-"""
-
-from __future__ import annotations
 
 import pytest
 
@@ -548,6 +527,7 @@ class TestSet:
             "5",
             "--allow-write",
             "--yes",
+            "--force-unverified",
         )
         assert code == 0
         assert "frame    F0 00 00 0E 0E 10 40 00 00 05 F7  (11 bytes)" in out
@@ -574,6 +554,7 @@ class TestSet:
             "5",
             "--allow-write",
             "--yes",
+            "--force-unverified",
         )
         assert code == 0
         assert "channel  5, sound 0, value 5" in out
@@ -584,19 +565,108 @@ class TestSet:
         self, config_path, monkeypatch, capsys
     ):
         use_device(monkeypatch, EditingDemo())
-        code, out, _ = run(
+        with pytest.raises(SystemExit) as caught:
+            run(
+                capsys,
+                "--demo",
+                "--config",
+                config_path,
+                "set",
+                "program",
+                "16",
+                "23",
+                "3",
+                "1",
+                "--allow-write",
+                "--yes",
+            )
+        assert "no parameter at mode program" in str(caught.value)
+
+    def test_set_on_unverified_row_refused_without_force(
+        self, config_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, EditingDemo())
+        with pytest.raises(SystemExit) as caught:
+            run(
+                capsys,
+                "--demo",
+                "--config",
+                config_path,
+                "set",
+                "program",
+                "0",
+                "0",
+                "0",
+                "5",
+                "--allow-write",
+                "--yes",
+            )
+        assert "is a transcription" in str(caught.value)
+        assert device.midi_edits == []
+
+    def test_set_on_unverified_row_with_force_unverified_sends(
+        self, config_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, EditingDemo())
+        code, _out, err = run(
             capsys,
             "--demo",
             "--config",
             config_path,
             "set",
             "program",
-            "16",
-            "23",
-            "3",
-            "1",
+            "0",
+            "0",
+            "0",
+            "5",
+            "--allow-write",
+            "--yes",
+            "--force-unverified",
+        )
+        assert code == 0
+        assert len(device.midi_edits) > 0
+        assert "unverified" in err
+
+    def test_set_on_verified_row_sends_without_force(
+        self, config_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, EditingDemo())
+        # Pitch transpose* is verified (global)
+        code, _out, _ = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "set",
+            "global",
+            "0",
+            "0",
+            "2",
+            "0",
             "--allow-write",
             "--yes",
         )
         assert code == 0
-        assert "not in the transcribed table" in out
+        assert len(device.midi_edits) > 0
+
+    def test_set_at_unknown_address_refused_nothing_sent(
+        self, config_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, EditingDemo())
+        with pytest.raises(SystemExit) as caught:
+            run(
+                capsys,
+                "--demo",
+                "--config",
+                config_path,
+                "set",
+                "program",
+                "99",
+                "99",
+                "99",
+                "1",
+                "--allow-write",
+                "--yes",
+            )
+        assert "no parameter at mode" in str(caught.value)
+        assert device.midi_edits == []

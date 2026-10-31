@@ -676,6 +676,95 @@ def _set_read_back(device, mode: str, param: params.Param | None, value: int) ->
     return 0
 
 
+def _cmd_params(_device, args) -> None:
+    """List the parameter table, and which rows this unit verified."""
+    mode = getattr(args, "mode", None)
+    modes = ["global", "mix", "effects", "program"]
+    if mode is not None:
+        modes = [mode]
+    rows = []
+    for mode_name in modes:
+        for param in params.PARAMS:
+            if param.mode != mode_name:
+                continue
+            verified = "yes" if param.verified else "no"
+            law = param.value_law or "-"
+            range_str = f"{param.low}..{param.high}"
+            if mode is None:
+                rows.append(
+                    [
+                        mode_name,
+                        verified,
+                        law,
+                        str(param.function),
+                        str(param.page),
+                        str(param.pot),
+                        str(param.bits),
+                        range_str,
+                        param.label,
+                    ]
+                )
+            else:
+                rows.append(
+                    [
+                        verified,
+                        law,
+                        str(param.function),
+                        str(param.page),
+                        str(param.pot),
+                        str(param.bits),
+                        range_str,
+                        param.label,
+                    ]
+                )
+    if mode is None:
+        print(
+            _plain_table(
+                ["mode", "verified", "law", "f", "p", "pot", "bits", "range", "label"],
+                rows,
+            )
+        )
+    else:
+        print(
+            _plain_table(
+                ["verified", "law", "f", "p", "pot", "bits", "range", "label"],
+                rows,
+            )
+        )
+    verified_count = len(params.verified_params())
+    total_count = len(params.PARAMS)
+    if mode is not None:
+        mode_verified = len(params.verified_params(mode))
+        mode_total = len([p for p in params.PARAMS if p.mode == mode])
+        head = (
+            f"\n{mode_verified} of {mode_total} {mode} rows verified; "
+            f"{verified_count} of {total_count} overall"
+        )
+    else:
+        head = f"\n{verified_count} of {total_count} rows verified on this unit"
+    print(f"{head}; the rest are transcriptions and are read-only.")
+
+
+def _plain_table(headers: list[str], rows: list[list[str]]) -> str:
+    """A listing table that does **not** truncate.
+
+    :func:`vinsynlib.render.table` caps every column to fit the terminal,
+    which is right for a browser's summary line and wrong for a table
+    meant to be read, grepped and copied: it turned ``verified`` into
+    ``veri...`` and the value law into ``tw...``. Here the widest cell
+    wins and the terminal wraps if it must.
+    """
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+    lines = ["  ".join(header.ljust(widths[i]) for i, header in enumerate(headers))]
+    lines.append("  ".join("-" * widths[i] for i in range(len(headers))))
+    for row in rows:
+        lines.append("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)))
+    return "\n".join(lines)
+
+
 def _cmd_set(device, args) -> int:
     """**Write** one parameter through the ``10`` MIDI Edit message.
 
@@ -688,6 +777,30 @@ def _cmd_set(device, args) -> int:
     mode = args.mode
     channel = getattr(device, "channel", 0) or 0
     number = params.MODE_NUMBERS[mode]
+    param = params.at(
+        mode,
+        args.function,
+        args.page,
+        args.pot,
+        sound=args.sound,
+        channel=channel if mode == "mix" else None,
+    )
+    if param is None:
+        raise SystemExit(
+            f"error: no parameter at mode {mode}, function {args.function}, "
+            f"page {args.page}, pot {args.pot}"
+        )
+    if not param.verified:
+        if not getattr(args, "force_unverified", False):
+            raise SystemExit(
+                f'error: "{param.label}" is a transcription, not verified on '
+                "this unit; add --force-unverified to send it anyway"
+            )
+        print(
+            f"warning: {param.label} is a transcription, not verified on this "
+            "unit; the user asked for it (unverified)",
+            file=sys.stderr,
+        )
     message = m.midi_edit(
         number,
         args.function,
@@ -697,26 +810,12 @@ def _cmd_set(device, args) -> int:
         sound=args.sound,
         channel=channel,
     )
-    param = params.at(
-        mode,
-        args.function,
-        args.page,
-        args.pot,
-        sound=args.sound,
-        channel=channel if mode == "mix" else None,
-    )
     line = " ".join(f"{byte:02X}" for byte in message)
     print(f"frame    {line}  ({len(message)} bytes)")
-    if param is None:
-        print(
-            f"address  mode {mode}, function {args.function}, page "
-            f"{args.page}, pot {args.pot} (not in the transcribed table)"
-        )
-    else:
-        print(
-            f"address  {param.label} (mode {mode}, function "
-            f"{args.function}, page {args.page}, pot {args.pot})"
-        )
+    print(
+        f"address  {param.label} (mode {mode}, function "
+        f"{args.function}, page {args.page}, pot {args.pot})"
+    )
     print(f"channel  {channel + 1}, sound {args.sound}, value {args.value}")
     device.midi_edit(
         number,
@@ -975,7 +1074,17 @@ def _cmd_tags(_device, args) -> None:
 # --- wiring -----------------------------------------------------------------
 
 #: Commands that need no instrument at all.
-OFFLINE = {"ports", "banks", "list", "syx", "find", "fav", "favorites", "tags"}
+OFFLINE = {
+    "ports",
+    "banks",
+    "list",
+    "syx",
+    "find",
+    "fav",
+    "favorites",
+    "tags",
+    "params",
+}
 
 
 def _needs_device(args) -> bool:
@@ -1163,11 +1272,22 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         metavar="N",
         help="program sound or effects bus, 0-3",
     )
+    sp.add_argument("--force-unverified", action="store_true")
     # --channel is both the send channel and the message's `cccc` field;
     # re-declaring it here lets it follow the command, which is the shape
     # people type. main() subtracts one and the device carries the 0-15 form.
     _inherit(sp, "channel")
     _write_flags(sp)
+    sp = sub.add_parser(
+        "params",
+        help="list the parameter table, and which rows this unit verified",
+    )
+    sp.add_argument(
+        "mode",
+        nargs="?",
+        choices=["global", "mix", "program", "effects"],
+        default=None,
+    )
     sp = sub.add_parser("select", help="select a program ON THE UNIT")
     sp.add_argument("bank", choices=banks.bank_ids())
     sp.add_argument("number", type=int)
@@ -1236,6 +1356,7 @@ COMMANDS = {
     "send": _cmd_send,
     "backup": _cmd_backup,
     "set": _cmd_set,
+    "params": _cmd_params,
     "select": _cmd_select,
     "syx": _cmd_syx,
     "find": _cmd_find,
