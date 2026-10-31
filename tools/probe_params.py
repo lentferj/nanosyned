@@ -532,7 +532,18 @@ def check_restore(
 def positive_control(
     device, buffer: Buffer, reference: bytes, rows: list[params.Param], *, settle: float
 ) -> None:
-    """Prove the record can move, then prove it comes back."""
+    """Prove both halves of the path before probing anything.
+
+    Sends the same ``10`` the probes send, reads the record back, and
+    requires the field to hold the value that was sent; then restores the
+    record and requires it byte-identical. Two failures, two meanings: a
+    control that moved nothing means this mode's ``10`` is dead (or the
+    table's address is wrong), and a run that went on would read silence
+    as a verdict; a control that does not come back means no probe here
+    can be trusted. The first bench run proved the point -- it reported
+    ``restored`` after a probe that had moved nothing, because the
+    pre-flight compared an unchanged record with itself.
+    """
     if not rows:
         return
     row = rows[0]
@@ -541,57 +552,30 @@ def positive_control(
     value = flip_value(row, stored)
     target = params.stored_for(row, value)
 
-    if buffer.mode == "global":
-        device.midi_edit(
-            params.MODE_NUMBERS[buffer.mode],
-            row.function,
-            row.page,
-            row.pot,
-            value,
-            sound=row.sound or 0,
-            channel=row.channel or 0,
-        )
-        time.sleep(settle)
-        after = buffer.read(device)
-        if rec.decode_bit_field(after, row) != target:
-            raise ProbeAborted(
-                "the positive control did not move (so the harness cannot "
-                "tell a dead 10 from a working one)",
-                preflight=True,
-            )
-        for r in rows:
-            buffer.restore_row(device, r, reference)
-        read_back = buffer.read(device)
-        if read_back != reference:
-            raise ProbeAborted(
-                "the positive control's restore did not verify",
-                preflight=True,
-            )
-        return
-
-    # mix/program
-    modified = bytearray(reference)
-    rec.encode_bit_field(modified, row, target)
-    buffer.load(device, bytes(modified))
+    device.midi_edit(
+        params.MODE_NUMBERS[buffer.mode],
+        row.function,
+        row.page,
+        row.pot,
+        value,
+        sound=row.sound or 0,
+        channel=row.channel or 0,
+    )
     time.sleep(settle)
     after = buffer.read(device)
-    if after == bytes(reference):
-        raise ProbeAborted(
-            "the positive control did not move (so the harness cannot "
-            "tell a dead 10 from a working one)",
-            preflight=True,
-        )
     if rec.decode_bit_field(after, row) != target:
         raise ProbeAborted(
-            "the positive control did not move (so the harness cannot "
-            "tell a dead 10 from a working one)",
+            "the positive control did not move: this mode's 10 is dead, "
+            "or the table's address is wrong, and a probe could not tell "
+            "the two apart",
             preflight=True,
         )
-    buffer.load(device, reference)
+    buffer.restore_row(device, row, reference)
     read_back = buffer.read(device)
     if read_back != reference:
         raise ProbeAborted(
-            "the positive control's restore did not verify",
+            "the positive control's restore did not verify: the record "
+            "did not come back byte for byte",
             preflight=True,
         )
 
@@ -680,12 +664,15 @@ def run(
        *and* program, Program mode for global);
     2. read the mode's record -- the restore reference (:func:`buffer_for`
        decides which record that is);
-    3. **pre-flight has two halves**: a positive control that proves the
-       record *can* move, then a restore that proves it came back
-       (:func:`check_restore`). A failure raises :class:`ProbeAborted`
-       with ``preflight=True`` *before anything moved*; the bench's false
-       positive occurred because the pre-flight sent the reference back,
-       read the same unchanged record, and compared it to itself;
+    3. **positive control, before any probe**: send the same ``10`` a
+       probe would, read the record back and require the field to hold
+       the value sent, then restore the record and require it
+       byte-identical (:func:`positive_control`). A dead ``10`` or a
+       dead restore raises :class:`ProbeAborted` with
+       ``preflight=True`` *before any probe is attempted*; the bench's
+       false positive occurred because the old pre-flight sent the
+       reference back, read the same unchanged record, and compared it
+       to itself;
     4. one :func:`probe` per row of the mode, each with its own
        ``finally`` restore; ``restored is False`` on any of them stops
        the run immediately;
@@ -717,7 +704,6 @@ def run(
         reference = buffer.read(device)
         if mode_rows:
             positive_control(device, buffer, reference, mode_rows, settle=settle)
-        check_restore(device, reference, buffer=buffer, rows=mode_rows, preflight=True)
 
         for target in mode_rows:
             stored = rec.decode_bit_field(reference, target)

@@ -471,30 +471,34 @@ class TestTheWrongAddressTable:
 class TestARestoreThatDoesNotVerify:
     """The mix restore, because a global run has no load to corrupt."""
 
-    def test_it_aborts_the_run_immediately(self):
-        # The first load (the control) works; the second does not.
+    def test_a_probes_restore_aborts_the_run(self):
+        # The control's load (the first) works; the first probe's does not.
         firmware = Firmware(corrupt_from=1)
         with pytest.raises(tool.ProbeAborted) as excinfo:
             tool.run(firmware, MIX_THREE, settle=0.0)
-        assert excinfo.value.preflight is True
-        assert firmware.edits == []
+        assert excinfo.value.preflight is False
+        # One control 10 and one probe 10: the probe moved the field and
+        # could not put it back, so the run stopped there.
+        assert len(firmware.edits) == 2
 
     def test_the_cli_exit_would_be_non_zero(self, monkeypatch):
         monkeypatch.setattr(
             tool, "EditingDemo", lambda *, modes=(): Firmware(corrupt_from=1)
         )
         argv = ["--demo", "--mode", "mix", "--limit", "3", "--settle", "0"]
-        assert tool.main(argv) == 2
+        assert tool.main(argv) == 1
 
 
 class TestThePreflightRefusal:
     def test_it_refuses_before_probing_anything(self):
-        firmware = Firmware(corrupt_from=0)  # even the pre-flight load fails
+        # Even the control's restore fails, so the run must refuse with
+        # only the control's own 10 on the wire.
+        firmware = Firmware(corrupt_from=0)
         with pytest.raises(tool.ProbeAborted) as excinfo:
             tool.run(firmware, MIX_THREE, settle=0.0)
         assert excinfo.value.preflight is True
-        assert firmware.edits == []
-        assert 0x10 not in _functions(firmware)
+        assert len(firmware.edits) == 1
+        assert _functions(firmware).count(0x10) == 1
 
     def test_the_cli_exits_two_for_a_preflight_refusal(self, monkeypatch):
         monkeypatch.setattr(
