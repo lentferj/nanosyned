@@ -115,7 +115,8 @@ real limitation and is recorded as such, not glossed over.
 ## 3. Safety invariants
 
 1. **Never send `00` (User Program Dump) during a probe.** Only `10` (edit
-   buffer) and `02` (load edit buffer). The stored bank is not written.
+   buffer), `02` (load edit buffer) and `0D` (mode select, no memory
+   written). The stored bank is not written.
 2. **Restore after every probe**, and verify the restore. A probe that cannot
    restore is a stop condition.
 3. **Back up before any later store.** Store tests use the existing fence:
@@ -222,11 +223,13 @@ stops the run. Record it; do not add the row.
 **Pre-flight (once):**
 
 1. `nanocli --scan status` — confirm Alesis, QS family, member 7.
-2. Choose a program whose edit buffer is safe to disturb; record its name.
-3. Read the edit buffer (`03 00` → `02 00`) and save it to
+2. Put the unit in Program mode (Mix mode for the `mix` rows) with the
+   `0D` message: this writes no memory.
+3. Choose a program whose edit buffer is safe to disturb; record its name.
+4. Read the edit buffer (`03 00` → `02 00`) and save it to
    `~/temp/nanosyned-backups/<timestamp>/edit-buffer.syx`. This is the
    restore reference.
-4. Confirm the restore path once with no probe: send `02` with the original
+5. Confirm the restore path once with no probe: send `02` with the original
    record, read it back, compare. If that fails, stop before probing.
 
 **Per probe:**
