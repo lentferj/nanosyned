@@ -78,7 +78,9 @@ class Device(Protocol):
         """Every user program name. **Silent.** Many round trips; see on_progress."""
         ...
 
-    def read_edit_program(self, *, timeout: float | None = None) -> bytes:
+    def read_edit_program(
+        self, *, edit: int = 0, timeout: float | None = None
+    ) -> bytes:
         """The edit buffer: whatever the unit is playing. **Silent.**"""
         ...
 

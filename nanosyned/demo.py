@@ -237,7 +237,10 @@ class DemoDevice:
                 on_progress(number + 1, banks.PROGRAMS_PER_BANK)
         return out
 
-    def read_edit_program(self, *, timeout: float | None = None) -> bytes:
+    def read_edit_program(
+        self, *, edit: int = 0, timeout: float | None = None
+    ) -> bytes:
+        # The demo keeps one buffer: it has no mixes to give 16 more.
         self._tick()
         if self._edit_buffer is None:
             slot = self.selected

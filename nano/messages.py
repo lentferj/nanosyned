@@ -476,9 +476,16 @@ def program_dump_request(number: int) -> bytes:
     return frame(Function.USER_PROGRAM_REQUEST, [number])
 
 
-def edit_program_dump_request() -> bytes:
-    """Ask for the edit buffer -- whatever the unit is playing now."""
-    return frame(Function.EDIT_PROGRAM_REQUEST, [0x00])
+def edit_program_dump_request(edit: int = 0) -> bytes:
+    """Ask for one edit buffer.
+
+    ``0`` is the program edit buffer -- whatever the unit is playing --
+    and ``1``-``16`` are the per-channel program edit buffers a mix
+    addresses. The bench confirmed the unit answers the numbered ones.
+    """
+    if not 0 <= edit <= 16:
+        raise ProtocolError(f"edit {edit} is outside 0-16")
+    return frame(Function.EDIT_PROGRAM_REQUEST, [edit])
 
 
 def effects_dump_request(number: int) -> bytes:

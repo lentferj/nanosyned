@@ -515,10 +515,21 @@ class NanoBridge:
             time.sleep(SEND_GAP)  # measured 0.000 on the bench; see SEND_GAP
         return out
 
-    def read_edit_program(self, *, timeout: float | None = None) -> bytes:
-        """The edit buffer: whatever the unit is playing. **Silent.**"""
+    def read_edit_program(
+        self, *, edit: int = 0, timeout: float | None = None
+    ) -> bytes:
+        """An edit buffer: ``0`` is the program, ``1``-``16`` a mix channel.
+
+        The program edit buffer is whatever the unit is playing. The
+        numbered ones are the per-channel programs a mix addresses, which
+        is where a ``10`` program edit lands -- the bench confirmed that
+        Program-mode edits are ignored but Mix-mode ones are not.
+        """
         packet = self.request(
-            m.edit_program_dump_request(), m.Function.EDIT_PROGRAM_DUMP, timeout=timeout
+            m.edit_program_dump_request(edit),
+            m.Function.EDIT_PROGRAM_DUMP,
+            number=edit,
+            timeout=timeout,
         )
         data = packet.data()
         rec.check_size(data, rec.PROGRAM_BYTES, "a program")

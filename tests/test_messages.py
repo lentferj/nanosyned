@@ -218,6 +218,12 @@ class TestRequests:
         with pytest.raises(m.ProtocolError, match="0-100"):
             m.mix_dump_request(101)
 
+    def test_an_edit_buffer_request_can_name_a_mix_channel(self):
+        assert m.parse(m.edit_program_dump_request(0)).number == 0
+        assert m.parse(m.edit_program_dump_request(3)).number == 3
+        with pytest.raises(m.ProtocolError, match="0-16"):
+            m.edit_program_dump_request(17)
+
     def test_every_request_has_a_named_reply(self):
         for request, reply in m.Function.REPLY_TO.items():
             assert m.Function.name(request).endswith("Request")

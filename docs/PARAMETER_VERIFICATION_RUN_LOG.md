@@ -61,6 +61,12 @@ unit has even parsed it. This is almost certainly the pre-existing
 one-row probe reported `no-change restored` — with nothing changed,
 the restore "verified" trivially and proved nothing.
 
+**Confirmed after the fix.** With `RECORD_GAP` in the write methods,
+`tests/test_hardware.py::TestHardwareProgramWrite` now passes: user
+program 0 renamed to `WRITETEST`, stored, read back identical across
+all 350 bytes, then restored and verified. That test had been failing
+on `master` before this branch. The unit's program 0 is back as found.
+
 ### `10` is honoured for Global, Mix and Program — but differently
 
 Each mode was tested with a value that differs from the current one,

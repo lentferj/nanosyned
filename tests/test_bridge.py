@@ -482,6 +482,25 @@ class TestTheInputQueueIsDrained:
 
         assert port.cancelled == 1, "the callback outlived the port"
 
+    def test_a_numbered_edit_buffer_is_asked_for_by_number(self):
+        """Program `10`s only land in Mix mode, in edit buffers 1-16."""
+        port = _CallbackPort()
+        live = bridge.NanoBridge(port, port, timeout=0.5)
+        body = list(m.pack7(bytes(rec.PROGRAM_BYTES)))
+        reply = list(m.frame(m.Function.EDIT_PROGRAM_DUMP, [3, *body]))
+
+        original = port.send_message
+
+        def answer(data):
+            original(data)
+            port.deliver(reply)
+
+        port.send_message = answer
+        got = live.read_edit_program(edit=3)
+
+        assert got == bytes(rec.PROGRAM_BYTES)
+        assert port.sent[0] == m.edit_program_dump_request(3)
+
     def test_both_callback_shapes_are_understood(self):
         """rtmidi hands the message over differently across builds."""
         port = _CallbackPort()
