@@ -176,3 +176,6 @@ secrets-update: ## Regenerate .secrets.baseline with detect-secrets scan
 	@# Mirrors p2ked's exact command but `scan --baseline` merges findings
 	@# into the baseline rather than checking, undermining the purpose.
 	$(BIN)/detect-secrets scan --baseline .secrets.baseline
+# Regenerate docs/PARAMETER_NUMBERS.md from nano/params.py.
+params-doc:
+	.venv/bin/python tools/gen_parameter_docs.py

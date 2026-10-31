@@ -78,6 +78,13 @@ Two more conventions matter and are documented where they bite:
 
 The ``10`` message takes the two's-complement value, so a parameter read out
 of a packed record must have ``offset`` added before it is sent.
+
+**The value law is a hypothesis until the probe confirms it.** :func:`law_of`
+resolves the law a row's bits are stored under -- ``"twos"``, ``"offset"`` or
+``"raw"`` -- from the probe's confirmation when there is one, and from the
+row's own shape when there is not; :func:`stored_for` and
+:func:`value_from_stored` are the two ends of that arithmetic, the helpers
+the probe and the editors will both use.
 """
 
 from __future__ import annotations
@@ -87,7 +94,7 @@ from typing import Final
 
 from nano import records
 
-__all__ = [
+__all__ = [  # noqa: RUF022 -- the tables-before-methods order is sorted plain
     "EFFECT_COMMON_PARAMS",
     "EFFECT_CONFIG_0_PARAMS",
     "EFFECT_MOD_PARAMS",
@@ -100,9 +107,13 @@ __all__ = [
     "PARAMS",
     "PROGRAM_COMMON_PARAMS",
     "Param",
+    "VALUE_LAWS",
     "at",
     "by_label",
+    "law_of",
     "midi_edit_for",
+    "stored_for",
+    "value_from_stored",
     "verified_params",
     "with_channel",
     "with_sound",
@@ -115,6 +126,12 @@ MODE_NUMBERS: Final[dict[str, int]] = {
     "program": 2,
     "effects": 3,
 }
+
+
+#: The value laws a stored field can be written under, the unknown slot
+#: leading the named ones. The probe sets one with a confirming before/after;
+#: until it does, :func:`law_of` infers one from the row's own shape.
+VALUE_LAWS: tuple[str, ...] = ("", "offset", "twos", "raw")
 
 
 @dataclass(frozen=True)
@@ -644,6 +661,67 @@ def verified_params(mode: str | None = None) -> tuple[Param, ...]:
     if mode is None:
         return tuple(param for param in PARAMS if param.verified)
     return tuple(param for param in PARAMS if param.verified and param.mode == mode)
+
+
+def law_of(param: Param) -> str:
+    """The value law the parameter's stored field is written under.
+
+    The probe's explicit ``param.value_law`` wins when it named one; until
+    it did, the law is inferred from the parameter's own shape: a Global row
+    stores two's complement, a packed row with a negative limit or a nonzero
+    offset stores offset binary, and any other row stores its value raw.
+    """
+    if param.value_law and param.value_law in VALUE_LAWS:
+        return param.value_law
+    if param.mode == "global":
+        return "twos"
+    if param.offset != 0 or param.low < 0:
+        return "offset"
+    return "raw"
+
+
+def stored_for(param: Param, value: int) -> int:
+    """The stored field value for ``param``'s displayed ``value``.
+
+    The value is first checked against the row's documented range, then
+    moved into the field's own domain -- two's complement, offset binary or
+    raw -- and the result is checked to fit the field's width. This is the
+    arithmetic both the probe and the editors share: the ``10`` message takes
+    the displayed value, the record stores the field.
+    """
+    if not param.low <= value <= param.high:
+        raise ValueError(f"{param.label}: {value} is outside {param.low}..{param.high}")
+    law = law_of(param)
+    if law == "offset":
+        stored = value - param.offset
+    elif law == "twos":
+        stored = value & ((1 << param.bits) - 1)
+    else:
+        stored = value
+    if not 0 <= stored < (1 << param.bits):
+        raise ValueError(f"{param.label}: {value} does not fit in {param.bits} bits")
+    return stored
+
+
+def value_from_stored(param: Param, stored: int) -> int:
+    """The displayed value for ``param``'s stored field ``stored``.
+
+    The exact inverse of :func:`stored_for`: the stored pattern is checked
+    against the field's width, then read back under the row's value law.
+    """
+    if not 0 <= stored < (1 << param.bits):
+        raise ValueError(f"{param.label}: {stored} does not fit in {param.bits} bits")
+    law = law_of(param)
+    if law == "offset":
+        return stored + param.offset
+    if law == "twos":
+        # A two's-complement field stores its value biased into unsigned;
+        # the rows whose low limit is negative are signed fields, the rest
+        # keep their stored pattern as the value.
+        if param.low < 0 and stored >= 1 << (param.bits - 1):
+            return stored - (1 << param.bits)
+        return stored
+    return stored
 
 
 def midi_edit_for(param: Param, value: int) -> bytes:

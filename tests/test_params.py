@@ -32,6 +32,8 @@ authority of a green suite.
 
 import dataclasses
 
+import pytest
+
 from nano import params
 from nano import records as rec
 
@@ -233,3 +235,66 @@ class TestTheTablesAreTheOnesDocumented:
             == sound_row.bit_address + (rec.PROGRAM_COMMON + 2 * rec.SOUND_BYTES) * 8
         )
         assert sound_row.sound is None
+
+
+class TestTheValueLaws:
+    """The displayed value and the stored bits are two ends of one law."""
+
+    def test_the_law_is_inferred_then_overridden(self):
+        transpose = params.GLOBAL_PARAMS[1]
+        semitone = params.at("program", 3, 0, 0)
+        assert semitone is not None
+        octave = params.at("mix", 3, 0, 0)
+        assert octave is not None
+
+        assert params.law_of(transpose) == "twos"
+        assert params.law_of(semitone) == "offset"
+        assert params.law_of(params.at("mix", 1, 0, 0)) == "raw"
+        # A law the probe confirmed overrides the inference.
+        assert params.law_of(dataclasses.replace(transpose, value_law="raw")) == "raw"
+
+    def test_the_stored_and_displayed_ends_agree(self):
+        transpose = params.GLOBAL_PARAMS[1]
+        semitone = params.at("program", 3, 0, 0)
+        assert semitone is not None
+        octave = params.at("mix", 3, 0, 0)
+        assert octave is not None
+
+        assert params.stored_for(transpose, -12) == 244
+        assert params.stored_for(transpose, 12) == 12
+        assert params.value_from_stored(transpose, 244) == -12
+        assert params.value_from_stored(transpose, 12) == 12
+
+        assert params.stored_for(semitone, -24) == 0
+        assert params.stored_for(semitone, 25) == 49
+        assert params.value_from_stored(semitone, 0) == -24
+        assert params.value_from_stored(semitone, 49) == 25
+
+        assert params.stored_for(octave, -2) == 0
+        assert params.value_from_stored(octave, 0) == -2
+
+    def test_every_row_round_trips_through_stored_and_displayed(self):
+        for row in params.PARAMS:
+            values = [row.low, row.high]
+            if row.low <= 0 <= row.high:
+                values.append(0)
+            for value in values:
+                stored = params.stored_for(row, value)
+                assert params.value_from_stored(row, stored) == value
+
+    def test_stored_for_refuses_out_of_range_and_overwide_results(self):
+        transpose = params.GLOBAL_PARAMS[1]
+        with pytest.raises(ValueError):
+            params.stored_for(transpose, transpose.low - 1)
+        with pytest.raises(ValueError):
+            params.stored_for(transpose, transpose.high + 1)
+
+        # A pathological width: 99 does not fit in six bits.
+        narrow = dataclasses.replace(params.MIX_CHANNEL_PARAMS[3], bits=6)
+        with pytest.raises(ValueError):
+            params.stored_for(narrow, 99)
+
+    def test_value_from_stored_refuses_an_overwide_stored_value(self):
+        transpose = params.GLOBAL_PARAMS[1]
+        with pytest.raises(ValueError):
+            params.value_from_stored(dataclasses.replace(transpose, bits=4), 244)
