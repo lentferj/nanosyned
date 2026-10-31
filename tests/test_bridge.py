@@ -117,9 +117,31 @@ def _program_record() -> bytes:
     return bytes((index * 7 + 3) & 0xFF for index in range(rec.PROGRAM_BYTES))
 
 
+@pytest.fixture(autouse=True)
+def _no_record_gap(monkeypatch):
+    """The record gap is measured on the wire; the tests must not spend it."""
+    monkeypatch.setattr(bridge, "RECORD_GAP", 0.0)
+
+
 class TestWriteMethods:
     """Each sends exactly the store message and returns. Nothing is verified
     here: the gate, the backup, the log and the read-back are the caller's."""
+
+    def test_a_record_write_waits_for_the_wire(self, monkeypatch):
+        """A dump is hundreds of bytes; the next message must wait for it.
+
+        Measured on the bench: a 408-byte load ends up dropped if the next
+        request goes out 0.15 s later, and lands at 0.4 s.
+        """
+        port = _FakePort()
+        live = bridge.NanoBridge(port, port)
+        slept: list[float] = []
+        monkeypatch.setattr(bridge, "RECORD_GAP", 0.4)
+        monkeypatch.setattr(bridge.time, "sleep", slept.append)
+
+        live.write_edit_program(_program_record())
+
+        assert slept == [0.4]
 
     def test_write_program_sends_the_store(self):
         port = _FakePort()

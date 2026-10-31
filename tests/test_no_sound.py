@@ -258,7 +258,10 @@ _CHANNEL_VOICE_BUILDERS = frozenset({"bank_select", "program_change"})
 #: builder. ``_send`` is the transport itself; ``request`` passes a
 #: computed frame that its callers built with ``messages.*``. Both are
 #: tunnels for System Exclusive, and neither can make a sound on its own.
-_FUNNELS = frozenset({"_send", "request"})
+#: ``_send_record`` is a funnel like ``_send``: it takes a frame the caller
+#: already built, adds the record gap, and is called only from the dump
+#: writes. ``request`` is here because it sends the request it was handed.
+_FUNNELS = frozenset({"_send", "_send_record", "request"})
 
 
 def _parsed(path):

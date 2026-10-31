@@ -210,10 +210,13 @@ class TestRequests:
         with pytest.raises(m.ProtocolError, match="0-127"):
             m.program_dump_request(128)
 
-    def test_a_mix_request_knows_there_are_a_hundred(self):
+    def test_a_mix_request_knows_the_edit_buffer_is_one_past_the_slots(self):
         assert m.parse(m.mix_dump_request(99)).number == 99
-        with pytest.raises(m.ProtocolError, match="0-99"):
-            m.mix_dump_request(100)
+        # 100 is the edit buffer, not a typo for 0: the specification names
+        # it and the unit answers it.
+        assert m.parse(m.mix_dump_request(100)).number == 100
+        with pytest.raises(m.ProtocolError, match="0-100"):
+            m.mix_dump_request(101)
 
     def test_every_request_has_a_named_reply(self):
         for request, reply in m.Function.REPLY_TO.items():

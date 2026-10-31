@@ -492,13 +492,15 @@ def edit_effects_dump_request() -> bytes:
 
 
 def mix_dump_request(number: int) -> bytes:
-    """Ask for one of the 100 user mixes.
+    """Ask for one of the 100 user mixes, or the mix edit buffer.
 
-    The NanoSynth's manual does not mention mixes at all. The unit answers
-    for them anyway, which is how this came to be here.
+    ``0``-``99`` are the user mixes; ``100`` is the edit buffer, which the
+    specification names and the NanoSynth answers for. The NanoSynth's
+    manual does not mention mixes at all. The unit answers for them
+    anyway, which is how this came to be here.
     """
-    if not 0 <= number <= 99:
-        raise ProtocolError(f"mix {number} is outside 0-99")
+    if not 0 <= number <= 100:
+        raise ProtocolError(f"mix {number} is outside 0-100")
     return frame(Function.MIX_REQUEST, [number])
 
 

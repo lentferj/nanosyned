@@ -173,3 +173,9 @@ controlled before/after change on the unit confirms its offset and value
 law; rows that cannot be verified stay read-only.
 
 **Blocked on:** the bench run (V05-V10 in the plan).
+
+**Bench update, 2026-10-31:** the first run is on the unit and recorded in
+`docs/PARAMETER_VERIFICATION_RUN_LOG.md`. `10` lands for Global and Mix,
+and for Program only in Mix mode (per-channel edit buffers); Effects `10`
+is inert on this firmware. No row was promoted. A record-sized load also
+needs a ~0.4 s settle (`RECORD_GAP`), which the write path now has.

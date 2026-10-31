@@ -102,6 +102,12 @@ SEND_GAP = 0.000
 #: conservative default until a method that can read the change exists.
 SELECT_GAP = 0.005
 
+#: After a record-sized dump, before the next message. A 408-byte frame is
+#: about 130 ms on the wire at 31.25 kbaud before the unit has even parsed
+#: it, and the bench measured a load landing at 0.4 s but not at 0.15 s.
+#: :data:`SEND_GAP` is for small messages and is not enough here.
+RECORD_GAP = 0.4
+
 
 def _rtmidi():
     try:
@@ -344,6 +350,19 @@ class NanoBridge:
     def _send(self, data: bytes) -> None:
         self._out.send_message(list(data))
 
+    def _send_record(self, data: bytes) -> None:
+        """Send a record-sized dump, then wait for the unit to take it.
+
+        A dump is hundreds of bytes and the unit answers it with silence,
+        so there is no reply to wait for -- but sending the next request
+        too soon finds the unit still receiving the last one and the
+        restore (or the store) is dropped. :data:`RECORD_GAP` is the
+        measured settle, and the reason every write below uses this
+        instead of :meth:`_send`.
+        """
+        self._send(data)
+        time.sleep(RECORD_GAP)
+
     def request(
         self,
         outgoing: bytes,
@@ -506,7 +525,7 @@ class NanoBridge:
         return data[: rec.PROGRAM_BYTES]
 
     def read_mix(self, number: int, *, timeout: float | None = None) -> bytes:
-        """One of the 100 mixes. **Silent.**
+        """One of the 100 mixes, or the mix edit buffer (100). **Silent.**
 
         The manual does not mention mixes. The unit answers for them.
         """
@@ -598,7 +617,7 @@ class NanoBridge:
                 f"user program {number} is hardwired silent and cannot be changed"
             )
         self._drain()
-        self._send(m.program_dump(number, record))
+        self._send_record(m.program_dump(number, record))
 
     def write_edit_program(
         self, record: bytes, *, edit: int = 0, timeout: float | None = None
@@ -617,7 +636,7 @@ class NanoBridge:
         """
         rec.check_size(record, rec.PROGRAM_BYTES, "a program")
         self._drain()
-        self._send(m.edit_program_dump(record[: rec.PROGRAM_BYTES], edit=edit))
+        self._send_record(m.edit_program_dump(record[: rec.PROGRAM_BYTES], edit=edit))
 
     def write_effects(
         self, number: int, record: bytes, *, timeout: float | None = None
@@ -628,7 +647,7 @@ class NanoBridge:
         the read-back belong to the caller, as for :meth:`write_program`.
         """
         self._drain()
-        self._send(m.effects_dump(number, record))
+        self._send_record(m.effects_dump(number, record))
 
     def write_edit_effects(
         self, record: bytes, *, timeout: float | None = None
@@ -642,7 +661,7 @@ class NanoBridge:
         the read-back belong to the caller, as for :meth:`write_program`.
         """
         self._drain()
-        self._send(m.edit_effects_dump(record))
+        self._send_record(m.edit_effects_dump(record))
 
     def write_mix(
         self, number: int, record: bytes, *, timeout: float | None = None
@@ -657,7 +676,7 @@ class NanoBridge:
         the read-back belong to the caller, as for :meth:`write_program`.
         """
         self._drain()
-        self._send(m.mix_dump(number, record))
+        self._send_record(m.mix_dump(number, record))
 
     def write_global(self, record: bytes, *, timeout: float | None = None) -> None:
         """Store the global settings. **Kept by the unit; there is one set.**
@@ -666,7 +685,7 @@ class NanoBridge:
         the read-back belong to the caller, as for :meth:`write_program`.
         """
         self._drain()
-        self._send(m.global_dump(record))
+        self._send_record(m.global_dump(record))
 
     def midi_edit(  # noqa: PLR0913 -- the body is the spec's seven fields
         self,

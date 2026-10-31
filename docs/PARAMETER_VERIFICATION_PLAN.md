@@ -180,7 +180,7 @@ Ladder:
 |---|---|---|---|---|
 | V05 | Probe the **Global** rows (20): offsets and two's-complement law; skip spares/model-only rows | run log + `docs/PARAMETER_NUMBERS.md` | restore verified after each | V03 |
 | V06 | Probe the **Mix common + channel-1 template** (13 + 20); then channel 2 and channel 16 to confirm the 8-byte stride | same | same | V05 |
-| V07 | Probe the **Effects** primary branch (64) and the MOD rows (6); record which type-dependent rows share addresses | same | same | V06 |
+| V07 | Probe the **Effects** primary branch (64) and the MOD rows (6); record which type-dependent rows share addresses. **Blocked on hardware:** the 2026-10-31 run showed `10` is inert for effects (the config row, valid in every configuration, refused values 0/1/2). Record it and leave the table unverified until a working address is found | run log + `docs/PARAMETER_NUMBERS.md` | same | V06 |
 | V08 | Probe **program common/name** (13) and the 31 transcribed keyboard-sound rows; record the rest of the sound table as unprobed | same | same | V07 |
 | V09 | Multi-value law pass for every signed/offset field: send low, high and a negative; assert `stored == value - offset` (or two's complement) | same | a mismatch is a finding, not a reason to edit the table | V08 |
 | V10 | Bitfield sibling pass: for each packed field, assert only its bits change and sibling bits are untouched | same | any sibling change stops that field | V09 |
@@ -220,32 +220,63 @@ stops the run. Record it; do not add the row.
 
 ## 5. Hardware protocol for the probe
 
+**Read the bench findings first: `docs/PARAMETER_VERIFICATION_RUN_LOG.md`.**
+The 2026-10-31 run established four things the original protocol got wrong:
+
+| mode | `10` lands? | buffer to read | restore |
+|---|---|---|---|
+| Global | **yes** | `0A` global dump | `10` with the old value (`0A` is a store) |
+| Mix | **yes** | `0F 64` → `0E 64` (edit buffer 100, 138 bytes) | `0E 64` |
+| Program (Program mode) | **no** | `03 00` → `02 00` does not move | — |
+| Program (Mix mode, channel N) | **yes** | `03 <N+1>` → `02 <N+1>` | `02 <N+1>` |
+| Effects | **no** | `09` → `08` does not move | — |
+
+So the harness must select the buffer **per mode**, not always the program
+edit buffer, and Effects cannot be verified on this firmware as it stands.
+Program rows are only reachable in Mix mode, where each channel has its own
+edit buffer.
+
 **Pre-flight (once):**
 
 1. `nanocli --scan status` — confirm Alesis, QS family, member 7.
-2. Put the unit in Program mode (Mix mode for the `mix` rows) with the
-   `0D` message: this writes no memory.
+2. Put the unit in the mode the rows live in with `0D`:
+   Program mode (`00`) for Global and Effects, **Mix mode (`01`) for Mix and
+   Program** rows (program editing only lands there).
 3. Choose a program whose edit buffer is safe to disturb; record its name.
-4. Read the edit buffer (`03 00` → `02 00`) and save it to
+4. Read the mode's buffer and save it:
    `~/temp/nanosyned-backups/<timestamp>/edit-buffer.syx`. This is the
    restore reference.
-5. Confirm the restore path once with no probe: send `02` with the original
-   record, read it back, compare. If that fails, stop before probing.
+5. **Positive control:** flip one bit of the reference, load it with the
+   mode's load message, read it back, and confirm it moved. A restore test
+   with nothing changed proves nothing and looked like a pass on the first
+   run. Then load the original back and confirm.
 
-**Per probe:**
+**Per probe (Mix or Program):**
 
 ```
-03 00                                   -> 02 00 <before>   (350 bytes)
+03 <buffer>                             -> 02 <buffer> <before>  (350 bytes)
 10 <mm><f><page><pot><value>            -> (silence)
-03 00                                   -> 02 00 <after>
+03 <buffer>                             -> 02 <buffer> <after>
 diff(before, after)                     -> byte(s) and bit(s)
-02 00 <before>                          -> (silence; loads edit buffer)
-03 00                                   -> 02 00 <must equal before>
+02 <buffer> <before>                    -> (silence; loads edit buffer)
+03 <buffer>                             -> 02 <buffer> <must equal before>
 ```
 
-- Match the reply by opcode `02` **and** number `00`.
-- After the `10`, allow a short settle (the unit is silent); do not wait for
-  a reply.
+**Per probe (Global):**
+
+```
+0A 00                                   -> 0A 00 <before>       (20 bytes)
+10 00 <f><page><pot><value>             -> (silence)
+0A 00                                   -> 0A 00 <after>
+10 00 <f><page><pot><old value>         -> (silence; restores the row)
+0A 00                                   -> 0A 00 <must equal before>
+```
+
+- Match the reply by opcode **and** number.
+- After the `10`, allow a short settle; the unit is silent under it.
+- **After a record-sized load, wait `RECORD_GAP` (0.4 s).** The bench
+  measured the restore landing at 0.4 s and being dropped at 0.15 s;
+  `SEND_GAP = 0` is for small messages only.
 - If more than the expected bits change, record the diff and stop that field.
 - If the restore read-back differs, stop the whole run.
 
