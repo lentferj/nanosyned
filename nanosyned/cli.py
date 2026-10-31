@@ -741,7 +741,10 @@ def _cmd_params(_device, args) -> None:
             f"{verified_count} of {total_count} overall"
         )
     else:
-        head = f"\n{verified_count} of {total_count} rows verified on this unit"
+        head = (
+            f"\n{verified_count} of {total_count} rows verified on the bench "
+            f"unit (2026-11-01)"
+        )
     print(f"{head}; the rest are transcriptions and are read-only.")
 
 

@@ -114,9 +114,11 @@ real limitation and is recorded as such, not glossed over.
 
 ## 3. Safety invariants
 
-1. **Never send `00` (User Program Dump) during a probe.** Only `10` (edit
-   buffer), `02` (load edit buffer) and `0D` (mode select, no memory
-   written). The stored bank is not written.
+1. **Never send `00` (User Program Dump) during a probe.** Only `10` (MIDI
+   Edit), `02` (load a program edit buffer), `0D` (mode select, no memory
+   written) and `0E` **with number 100 only** (load the mix edit buffer).
+   `0E` 0-99 is a user-mix store and is never sent; neither is `0A` (the
+   global store). The stored bank is not written.
 2. **Restore after every probe**, and verify the restore. A probe that cannot
    restore is a stop condition.
 3. **Back up before any later store.** Store tests use the existing fence:
@@ -239,9 +241,9 @@ edit buffer.
 **Pre-flight (once):**
 
 1. `nanocli --scan status` — confirm Alesis, QS family, member 7.
-2. Put the unit in the mode the rows live in with `0D`:
-   Program mode (`00`) for Global and Effects, **Mix mode (`01`) for Mix and
-   Program** rows (program editing only lands there).
+2. Put the unit in the mode the rows live in with `0D`: Program mode
+   (`00`) for Global, **Mix mode (`01`) for Mix and Program** rows (a
+   program `10` lands only there). Effects rows are not probed at all.
 3. Choose a program whose edit buffer is safe to disturb; record its name.
 4. Read the mode's buffer and save it:
    `~/temp/nanosyned-backups/<timestamp>/edit-buffer.syx`. This is the

@@ -156,9 +156,18 @@ class ProbeAborted(RuntimeError):
     "something was attempted and did not confirm".
     """
 
-    def __init__(self, message: str, *, preflight: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        preflight: bool = False,
+        probes: list[Probe] | None = None,
+    ) -> None:
         super().__init__(message)
         self.preflight = preflight
+        #: What was probed before the abort. ``run`` attaches this so an
+        #: interrupted run still writes its findings and its ``--json``.
+        self.probes = list(probes or ())
 
 
 @dataclass(frozen=True)
@@ -573,6 +582,13 @@ def positive_control(
         time.sleep(settle)
         after = buffer.read(device)
         if rec.decode_bit_field(after, row) != target:
+            if after != reference:
+                # The row moved, but not to the value sent: put the
+                # record back before trying the next row, or the stray
+                # bits would poison every later diff.
+                check_restore(
+                    device, reference, buffer=buffer, rows=rows, preflight=True
+                )
             continue  # this row is not editable here; try the next
         buffer.restore_row(device, row, reference)
         read_back = buffer.read(device)
@@ -708,32 +724,57 @@ def run(
         by_mode.setdefault(target.mode, []).append(target)
 
     probes: list[Probe] = []
-    for mode, mode_rows in by_mode.items():
-        # Rule: the mode is chosen before the record is read.
-        select_mode(device, mode)
-        buffer = buffer_for(mode, channel=mode_rows[0].channel or 0)
-        reference = buffer.read(device)
-        if mode_rows:
+    try:
+        for mode, mode_rows in by_mode.items():
+            # Rule: the mode is chosen before the record is read.
+            select_mode(device, mode)
+            buffer = buffer_for(mode, channel=mode_rows[0].channel or 0)
+            reference = buffer.read(device)
             positive_control(device, buffer, reference, mode_rows, settle=settle)
 
-        for target in mode_rows:
-            stored = rec.decode_bit_field(reference, target)
-            result = probe(
-                device,
-                target,
-                flip_value(target, stored),
-                settle=settle,
-                reference=reference,
-                buffer=buffer,
-            )
-            if not result.restored:
-                raise ProbeAborted(
-                    f"{target.label}: the {mode} record did not come back "
-                    f"byte for byte after the probe, so the run stops here"
+            for target in mode_rows:
+                stored = rec.decode_bit_field(reference, target)
+                result = probe(
+                    device,
+                    target,
+                    flip_value(target, stored),
+                    settle=settle,
+                    reference=reference,
+                    buffer=buffer,
                 )
-            probes.append(result)
+                if not result.restored:
+                    # A global row can move bits outside its own field,
+                    # and one ``10`` cannot put those back. Try the
+                    # mode's own restore (every row for global, the
+                    # whole record for mix/program) before stopping, so
+                    # the unit is left as clean as the protocol allows,
+                    # and say what could not be undone.
+                    leftover = changed_bits(reference, buffer.read(device))
+                    try:
+                        check_restore(
+                            device,
+                            reference,
+                            buffer=buffer,
+                            rows=mode_rows,
+                            preflight=False,
+                        )
+                    except ProbeAborted:
+                        pass
+                    raise ProbeAborted(
+                        f"{target.label}: the {mode} record did not come "
+                        f"back byte for byte after the probe (leftover "
+                        f"bits {leftover}); the run stops here"
+                    )
+                probes.append(result)
 
-        check_restore(device, reference, buffer=buffer, rows=mode_rows, preflight=False)
+            check_restore(
+                device, reference, buffer=buffer, rows=mode_rows, preflight=False
+            )
+    except ProbeAborted as exc:
+        # Keep what was proved before the abort: an interrupted run is
+        # still evidence, and --json exists for the run log.
+        exc.probes = list(probes)
+        raise
     return probes
 
 
@@ -1127,7 +1168,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--backup-dir",
         metavar="DIR",
         default=None,
-        help=f"write the restore reference to DIR/{BACKUP_NAME} before probing",
+        help=(
+            f"write the restore reference to DIR/{BACKUP_NAME} before "
+            f"probing (with --all, only the first mode's record)"
+        ),
     )
     parser.add_argument(
         "--json",
@@ -1279,6 +1323,11 @@ def main(argv: list[str] | None = None) -> int:
         probes = run(device, rows, settle=args.settle)
     except ProbeAborted as exc:
         print(f"aborted: {exc}", file=sys.stderr)
+        if exc.probes:
+            # The run stopped, but these rows were proved and are worth
+            # keeping; the exit stays non-zero because it did not finish.
+            report(list(exc.probes), args.json_path)
+            return 1
         return 2 if exc.preflight else 1
     except (LookupError, TimeoutError, ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)

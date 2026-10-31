@@ -127,8 +127,10 @@ restore.
 
 ## Unit state after the run
 
-- Program edit buffer 0: `WailinWall`, digest `75b9a5bdf195`, restored.
-- Program edit buffer 1: `Tubulous`, restored after the sound tests.
+- Program edit buffer 0 (the unit's own program, not named here), digest
+  `75b9a5bdf195`, restored.
+- Program edit buffer 1 (the next channel's), digest `8fadd8b045f6`, restored
+  after the sound tests.
 - Mix edit buffer 100: restored (`bfceecee977b`).
 - Effects edit buffer: config 3, restored (`b44e1d0bc16b`).
 - Global: byte 1 back at 7; record restored (`56b9d94fcb91`).
@@ -178,6 +180,34 @@ showed: 10 Global (`twos`), 27 Mix, 38 Program (`raw` or `offset`).
 Effects have none. The remaining 103 rows are still transcriptions and
 stay read-only in the editors. `docs/PARAMETER_NUMBERS.md` is
 regenerated and shows the per-mode counts.
+
+## Review (`opencode-go/glm-5.3-flash`)
+
+Verdict: **FIX-FIRST**. The findings were fixed on the branch and the
+suite re-run:
+
+- **HIGH** — a global row that moved bits *outside* its field could
+  leave the record altered, because `run` raised before the final
+  restore. It now attempts the mode's own restore before stopping and
+  reports the leftover bits.
+- **MEDIUM** — the positive control `continue`d past a row that moved
+  but did not reach the target, leaving stray bits (persistently, for
+  global). It now restores through `check_restore` before trying the
+  next row.
+- **MEDIUM** — an aborted run discarded the probes it had already
+  proved, and never wrote `--json`. `ProbeAborted` now carries them and
+  `main` reports them; exit `2` means only "nothing was probed".
+- **MEDIUM** — the run log named two programs read off the unit.
+  Replaced with the slot and digest.
+- **LOW/NIT** — the run-level mismatch test was vacuous and now asserts
+  the abort and a direct probe's verdict; the TODO body no longer says
+  `set` sends any address; the `params` summary says "bench unit
+  (2026-11-01)"; the plan's invariant 1 includes `0E` with number 100
+  only; the `--backup-dir` help says `--all` backs up the first mode.
+
+The review also confirmed the store ban (no `00`, `0A`, or `0E` < 100 on
+the probe path), the 75 promoted rows against the three JSON files, the
+generated map, and the record gap.
 
 ## Remaining
 

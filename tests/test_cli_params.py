@@ -32,7 +32,7 @@ class TestParams:
         monkeypatch.setattr(b.NanoBridge, "connect", classmethod(fail_connect))
         code, out, _ = run(capsys, "--config", config_path, "params")
         assert code == 0
-        assert "75 of 178 rows verified on this unit" in out
+        assert "75 of 178 rows verified on the bench unit (2026-11-01)" in out
 
     def test_params_global_shows_only_global_and_known_verified(
         self, config_path, capsys

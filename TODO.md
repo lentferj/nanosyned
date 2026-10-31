@@ -160,12 +160,14 @@ which is the claim that actually matters.
 **Status:** partly verified on the unit: 75 of 178 rows confirmed.
 
 The 178 rows in `nano/params.py` are transcribed from Alesis's published
-QS specification, not verified against this firmware: Global 20, Mix
-common 13 plus the channel template 20, Effects 11 + 64 + 6, Program
-common 13 plus 31 sound rows. What is unprobed: every row's offset and
-value law, the program sound table beyond those 31 rows, the
-type-dependent effect branches, and the multi-byte rows. `nanocli set`
-can send any address today.
+QS specification: Global 20, Mix common 13 plus the channel template 20,
+Effects 11 + 64 + 6, Program common 13 plus 31 sound rows. The bench run
+confirmed 75 of them (Global 10, Mix 27, Program 38, Effects 0) and those
+carry `verified=True` with the law it showed. The rest -- the program
+sound table beyond the probed sound, the type-dependent effect branches,
+the multi-byte rows, and every row of the modes the unit ignored -- stay
+read-only. `nanocli set` refuses an unverified row unless
+`--force-unverified` is given, and `nanocli params` lists the status.
 
 The differential verification plan is
 `docs/PARAMETER_VERIFICATION_PLAN.md`: a row becomes writable only after a

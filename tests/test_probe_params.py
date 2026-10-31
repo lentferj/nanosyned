@@ -456,37 +456,74 @@ class TestTheWrongAddressTable:
     """A field the unit writes one bit away from the table's claim."""
 
     def test_the_verdict_is_mismatch_and_the_run_reports_failure(self):
+        # The control sees the shifted address too and refuses; that is
+        # asserted, not swallowed. The verdict itself is read from a
+        # direct probe, where no control stands in front of it.
         firmware = Firmware(shift=1)
-        try:
-            probes = tool.run(firmware, GLOBAL_THREE, settle=0.0)
-        except tool.ProbeAborted:
-            # Positive control now catches dead/wrong control behavior in general
-            return
-        assert [p.verdict for p in probes] == ["mismatch"] * 3
-        assert tool.succeeded(probes) is False
-        assert [p.restored for p in probes] == [True] * 3
-        assert bytes(firmware.global_record) == bytes(rec.GLOBAL_BYTES)
+        with pytest.raises(tool.ProbeAborted) as excinfo:
+            tool.run(firmware, GLOBAL_THREE, settle=0.0)
+        assert "control did not move" in str(excinfo.value)
+        assert excinfo.value.preflight is True
+
+        row = GLOBAL_THREE[0]
+        firmware = Firmware(shift=1)
+        reference = firmware.read_global()
+        stored = rec.decode_bit_field(reference, row)
+        result = tool.probe(
+            firmware,
+            row,
+            tool.flip_value(row, stored),
+            settle=0.0,
+            reference=reference,
+        )
+        assert result.verdict == "mismatch"
+        # The record is all zeros, so putting a zero back through the
+        # shifted address is still byte-identical: the verdict, not the
+        # restore, is the finding. ``succeeded`` must refuse it anyway.
+        assert result.restored is True
+        assert tool.succeeded([result]) is False
 
 
 class TestARestoreThatDoesNotVerify:
     """The mix restore, because a global run has no load to corrupt."""
 
     def test_a_probes_restore_aborts_the_run(self):
-        # The control's load (the first) works; the first probe's does not.
-        firmware = Firmware(corrupt_from=1)
+        # The control's load and the first probe's restore work; the
+        # second probe's does not.
+        firmware = Firmware(corrupt_from=2)
         with pytest.raises(tool.ProbeAborted) as excinfo:
             tool.run(firmware, MIX_THREE, settle=0.0)
         assert excinfo.value.preflight is False
-        # One control 10 and one probe 10: the probe moved the field and
-        # could not put it back, so the run stopped there.
-        assert len(firmware.edits) == 2
+        # The first probe is still evidence, and it is carried out.
+        assert len(excinfo.value.probes) == 1
 
     def test_the_cli_exit_would_be_non_zero(self, monkeypatch):
         monkeypatch.setattr(
-            tool, "EditingDemo", lambda *, modes=(): Firmware(corrupt_from=1)
+            tool, "EditingDemo", lambda *, modes=(): Firmware(corrupt_from=2)
         )
         argv = ["--demo", "--mode", "mix", "--limit", "3", "--settle", "0"]
         assert tool.main(argv) == 1
+
+    def test_an_aborted_run_still_writes_its_json(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            tool, "EditingDemo", lambda *, modes=(): Firmware(corrupt_from=2)
+        )
+        out = tmp_path / "probes.json"
+        argv = [
+            "--demo",
+            "--mode",
+            "mix",
+            "--limit",
+            "3",
+            "--settle",
+            "0",
+            "--json",
+            str(out),
+        ]
+        assert tool.main(argv) == 1
+        payload = json.loads(out.read_text())
+        assert len(payload) == 1
+        assert payload[0]["verdict"] == "confirmed"
 
 
 class TestThePreflightRefusal:
