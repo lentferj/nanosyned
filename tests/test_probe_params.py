@@ -3,18 +3,22 @@
 
 """The probe harness's safety contract, against a fake unit that writes bits.
 
-``tools/probe_params.py`` promises two things that a green verdict cannot
-prove on its own: that the edit buffer comes back byte for byte, and that
-**opcode ``00`` never reaches the wire** -- the store that would overwrite
-somebody's user program. So the fake below, :class:`Firmware`, keeps a log
-of every frame it is asked to send and applies each ``10`` to its buffer
-with plain bit arithmetic of its own, never through
+``tools/probe_params.py`` promises three things that a green verdict cannot
+prove on its own: that each mode's own record comes back byte for byte,
+that a program row was edited in **Mix mode** through channel 1's buffer,
+and that **opcode ``00`` never reaches the wire** -- the store that would
+overwrite somebody's user program -- nor ``0A`` (the global store) nor a
+``0E`` mix dump for anything but edit buffer 100. So the fake below,
+:class:`Firmware`, keeps the three records apart -- the 20-byte global,
+the 138-byte mix edit buffer and the 350-byte program edit buffer -- and
+a log of every frame it is asked to send, and applies each ``10`` to its
+record with plain bit arithmetic of its own, never through
 :func:`nano.records.encode_bit_field`: a fake that shared the encoder's
 idea of an address could not disagree with it, and disagreement is exactly
 what the wrong-address test has to be able to see.
 
 No port is opened here, no hardware is needed, and no Alesis content
-appears: the buffer starts zeroed and every name involved is invented.
+appears: the records start zeroed and every name involved is invented.
 """
 
 from __future__ import annotations
@@ -49,16 +53,16 @@ def _tool():
 
 tool = _tool()
 
-#: The store encoder and the bridge's store method, as *words*. The scan's
-#: ``\b`` matters: ``edit_program_dump`` -- the **load** this tool builds
-#: for ``--backup-dir`` -- contains ``program_dump``, but ``_`` is a word
-#: character, so there is no boundary before ``program`` inside it and the
-#: load cannot be mistaken for the store by this pattern.
-_FORBIDDEN = re.compile(r"\b(write_program|program_dump)\b")
+#: The store encoders and the bridge's store methods, as *words*. The
+#: scan's ``\b`` matters: ``edit_program_dump`` -- the **load** this tool
+#: builds for ``--backup-dir`` -- contains ``program_dump``, but ``_`` is
+#: a word character, so there is no boundary before ``program`` inside it
+#: and the load cannot be mistaken for the store by this pattern.
+_FORBIDDEN = re.compile(r"\b(write_program|write_global|program_dump)\b")
 
 _MODE_BY_NUMBER = {number: name for name, number in params.MODE_NUMBERS.items()}
 
-#: Three signed Global rows whose complement at a zeroed buffer is inside
+#: Three signed Global rows whose complement at a zeroed record is inside
 #: the range -- the happy path's selection, and the reason for it is here
 #: rather than in a comment nobody reads: a row whose flip would leave the
 #: range reports ``partial`` by design, and that is a different test.
@@ -66,6 +70,23 @@ GLOBAL_THREE = [
     params.at("global", 0, 0, 2),  # Pitch transpose, -12..12, 8 bits
     params.at("global", 0, 0, 3),  # Pitch fine tune, -99..99, 8 bits
     params.at("global", 0, 1, 2),  # Keyboard Transpose, -12..12, 8 bits
+]
+
+#: Three Mix rows with the same property, across the mix record's two
+#: kinds of row: the common block and channel 1's (addressed to channel
+#: 0 by the run), all inside the 138-byte mix edit buffer.
+MIX_THREE = [
+    params.at("mix", 5, 0, 2),  # Mix effect MIDI program change, 1 bit
+    params.at("mix", 5, 0, 3),  # Mix effect chan, 4 bits
+    params.at("mix", 0, 0, 0),  # Channel 1 program number, 7 bits
+]
+
+#: Three Program rows with the same property, inside the 350-byte
+#: program edit buffer (the sound rows are addressed to sound 0).
+PROGRAM_THREE = [
+    params.at("program", 16, 0, 0),  # Keyboard / drum mode, 1 bit
+    params.at("program", 0, 0, 2),  # Sample number, 7 bits
+    params.at("program", 2, 0, 1),  # Sound effect bus, 2 bits
 ]
 
 #: Five rows across all four modes for the ``flip_value`` spot-check: a
@@ -83,50 +104,100 @@ FLIP_ROWS = [
 class Firmware:
     """A stand-in unit that applies the field itself, bit by bit.
 
-    ``shift`` moves every field the fake writes one bit (or however many)
-    away from the address the table claims -- the shape a *wrong table
-    address* has on a real unit, where the tool expects the table's bits
-    and something else moves. ``corrupt_from`` is the index of the first
-    ``write_edit_program`` whose load the fake stores wrongly: ``0``
-    corrupts the pre-flight restore itself, ``1`` lets the pre-flight pass
-    and then breaks the restore after the first probe.
+    Like the unit on the bench, it keeps three records apart: the
+    20-byte global record, the 138-byte mix edit buffer (number 100) and
+    the 350-byte program edit buffer the tool addresses as channel 1's
+    (``edit=1``). ``shift`` moves every field the fake writes one bit
+    (or however many) away from the address the table claims -- the
+    shape a *wrong table address* has on a real unit, where the tool
+    expects the table's bits and something else moves. ``corrupt_from``
+    is the number of *record loads* -- ``write_mix`` and
+    ``write_edit_program``, counted together -- whose content the fake
+    stores wrongly: ``0`` corrupts the pre-flight restore itself, ``1``
+    lets the pre-flight pass and then breaks the restore after the first
+    probe. A global run has no loads at all (its restore is a ``10``
+    per row), which is why the restore-failure tests play in Mix mode.
+
+    There is no ``write_global`` here on purpose: opcode ``0A`` is a
+    store, and a fake that offered one would let a bug in the tool pass
+    as a restore. There is no effects record either: the unit ignores an
+    effects ``10``, and so does this fake.
     """
 
     def __init__(self, *, shift: int = 0, corrupt_from: int | None = None) -> None:
-        self.buffer = bytearray(rec.PROGRAM_BYTES)
+        #: The three records, zeroed; no Alesis content, nothing stored.
+        self.global_record = bytearray(rec.GLOBAL_BYTES)
+        self.mix_record = bytearray(rec.MIX_BYTES)
+        self.program_record = bytearray(rec.PROGRAM_BYTES)
         self.shift = shift
         self.corrupt_from = corrupt_from
         #: Every frame the tool asked to send, as built messages.
         self.sent: list[bytes] = []
         #: The order of calls, so "the mode was selected before the
-        #: buffer was read" can be asserted rather than assumed.
+        #: record was read" can be asserted rather than assumed.
         self.events: list[str] = []
         self.edits: list[tuple[int, int, int, int, int, int, int]] = []
+        #: The numbers ``read_mix``/``write_mix`` saw. 100 only, ever.
+        self.mix_numbers: list[int] = []
+        #: The numbers ``read_edit_program``/``write_edit_program`` saw,
+        #: so "channel 1's buffer" is asserted rather than assumed.
+        self.edit_numbers: list[int] = []
         self.modes: list[bool] = []
-        self.writes = 0
+        self.loads = 0
         self.closed = False
 
     def close(self) -> None:
         self.closed = True
 
-    def read_edit_program(self, *, timeout: float | None = None) -> bytes:
+    def read_global(self, *, timeout: float | None = None) -> bytes:
         self.events.append("read")
-        return bytes(self.buffer)
+        return bytes(self.global_record)
+
+    def read_mix(self, number: int, *, timeout: float | None = None) -> bytes:
+        self.events.append("read")
+        self.mix_numbers.append(number)
+        if number != 100:
+            raise AssertionError(f"mix {number}: 0-99 are user stores; never read")
+        return bytes(self.mix_record)
+
+    def read_edit_program(
+        self, *, edit: int = 0, timeout: float | None = None
+    ) -> bytes:
+        self.events.append("read")
+        self.edit_numbers.append(edit)
+        return bytes(self.program_record)
+
+    def _loaded(self, record: bytes, size: int) -> bytearray:
+        """A load's content as the fake stored it, corruption and all."""
+        stored = bytearray(bytes(record)[:size])
+        if self.corrupt_from is not None and self.loads >= self.corrupt_from:
+            stored[0] ^= 0x01  # a load that did not land as sent
+        self.loads += 1
+        return stored
+
+    def write_mix(
+        self, number: int, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        # The load path, and nothing else: numbers 0-99 are *stores* of
+        # user mixes, and this fake has no method that stores -- a tool
+        # that called one would fail here rather than quietly overwriting
+        # a bank.
+        if number != 100:
+            raise AssertionError(f"mix {number}: 0-99 are user stores; never sent")
+        rec.check_size(record, rec.MIX_BYTES, "a mix")
+        self.events.append("write")
+        self.mix_numbers.append(number)
+        self.sent.append(m.mix_dump(number, record))
+        self.mix_record[:] = self._loaded(record, rec.MIX_BYTES)
 
     def write_edit_program(
         self, record: bytes, *, edit: int = 0, timeout: float | None = None
     ) -> None:
-        # The load path, and nothing else: this fake has no method that
-        # stores, so a tool that called one would fail here with an
-        # AttributeError rather than quietly overwriting a bank.
         rec.check_size(record, rec.PROGRAM_BYTES, "a program")
         self.events.append("write")
+        self.edit_numbers.append(edit)
         self.sent.append(m.edit_program_dump(record, edit=edit))
-        stored = bytearray(bytes(record)[: rec.PROGRAM_BYTES])
-        if self.corrupt_from is not None and self.writes >= self.corrupt_from:
-            stored[0] ^= 0x01  # a load that did not land as sent
-        self.writes += 1
-        self.buffer[:] = stored
+        self.program_record[:] = self._loaded(record, rec.PROGRAM_BYTES)
 
     def midi_edit(  # noqa: PLR0913 -- the body is the spec's seven fields
         self,
@@ -144,16 +215,16 @@ class Firmware:
         self.sent.append(
             m.midi_edit(mode, function, page, pot, value, sound=sound, channel=channel)
         )
-        found = params.at(
-            _MODE_BY_NUMBER.get(mode, ""),
-            function,
-            page,
-            pot,
-            sound=sound,
-            channel=channel,
-        )
-        if found is None:
-            return
+        name = _MODE_BY_NUMBER.get(mode, "")
+        found = params.at(name, function, page, pot, sound=sound, channel=channel)
+        records = {
+            "global": self.global_record,
+            "mix": self.mix_record,
+            "program": self.program_record,
+        }
+        record = records.get(name)
+        if found is None or record is None:
+            return  # no row answers, or effects: the unit ignores a 10
         stored = params.stored_for(found, found.clamp(value))
         # Plain arithmetic, most significant bit first, byte ``at >> 3``
         # and bit ``at & 7`` -- deliberately *not* encode_bit_field, so
@@ -164,9 +235,9 @@ class Firmware:
             byte, bit = at >> 3, at & 7
             mask = 1 << bit
             if (stored >> (found.bits - 1 - step)) & 1:
-                self.buffer[byte] |= mask
+                record[byte] |= mask
             else:
-                self.buffer[byte] &= ~mask & 0xFF
+                record[byte] &= ~mask & 0xFF
         self.edits.append((mode, function, page, pot, value, sound, channel))
 
     def mode_select(self, mix_mode: bool) -> None:
@@ -175,11 +246,16 @@ class Firmware:
         self.modes.append(mix_mode)
 
 
-def _functions(firmware: Firmware) -> list[int]:
-    """Every frame's opcode, in the order the tool sent it."""
+def _packets(firmware: Firmware) -> list[m.Packet]:
+    """Every frame parsed, in the order the tool sent it."""
     parsed = [m.parse(frame) for frame in firmware.sent]
     assert all(packet is not None for packet in parsed)
-    return [packet.function for packet in parsed if packet is not None]
+    return [packet for packet in parsed if packet is not None]
+
+
+def _functions(firmware: Firmware) -> list[int]:
+    """Every frame's opcode, in the order the tool sent it."""
+    return [packet.function for packet in _packets(firmware)]
 
 
 def _flip(record: bytearray, bits) -> bytes:
@@ -256,19 +332,61 @@ class TestClassify:
         assert tool.classify(self.row, self.before, after, target=255) == "mismatch"
 
 
+class TestProbeable:
+    def test_a_field_must_fit_the_modes_own_record(self):
+        row = params.at("program", 8, 9, 0)  # name digit 9, 7 bits at 71
+        assert tool.probeable(row, rec.PROGRAM_BYTES) is True
+        # The same row against a record too small to hold it.
+        assert tool.probeable(row, 8) is False
+
+    def test_an_addressless_row_is_refused_at_any_size(self):
+        spare = next(row for row in params.PARAMS if row.function < 0)
+        assert tool.probeable(spare, rec.PROGRAM_BYTES) is False
+
+    def test_an_effects_row_is_refused_whatever_its_size(self):
+        row = params.at("effects", 0, 1, 1, sound=0)  # 7 bits at 77
+        assert tool.probeable(row, rec.EFFECTS_BYTES) is False
+        assert tool.probeable(row, rec.PROGRAM_BYTES) is False
+
+
 class TestHappyPathRun:
-    def test_three_rows_confirm_and_the_buffer_came_back(self):
+    """One run per mode, because each mode reads and restores its own way."""
+
+    def test_three_global_rows_confirm_and_the_record_came_back(self):
         firmware = Firmware()
-        reference = bytes(firmware.buffer)
+        reference = bytes(firmware.global_record)
         probes = tool.run(firmware, GLOBAL_THREE, settle=0.0)
 
         assert [p.verdict for p in probes] == ["confirmed"] * 3
         assert [p.restored for p in probes] == [True] * 3
         assert tool.succeeded(probes) is True
         # Byte-identical to the reference, not merely "close enough".
-        assert bytes(firmware.buffer) == reference
+        assert bytes(firmware.global_record) == reference
 
-    def test_the_mode_is_selected_before_the_buffer_is_read(self):
+    def test_three_mix_rows_confirm_and_the_record_came_back(self):
+        firmware = Firmware()
+        reference = bytes(firmware.mix_record)
+        probes = tool.run(firmware, MIX_THREE, settle=0.0)
+
+        assert [p.verdict for p in probes] == ["confirmed"] * 3
+        assert [p.restored for p in probes] == [True] * 3
+        assert tool.succeeded(probes) is True
+        assert bytes(firmware.mix_record) == reference
+        # The other two records were never read, written or moved.
+        assert bytes(firmware.program_record) == bytes(rec.PROGRAM_BYTES)
+        assert bytes(firmware.global_record) == bytes(rec.GLOBAL_BYTES)
+
+    def test_three_program_rows_confirm_and_the_record_came_back(self):
+        firmware = Firmware()
+        reference = bytes(firmware.program_record)
+        probes = tool.run(firmware, PROGRAM_THREE, settle=0.0)
+
+        assert [p.verdict for p in probes] == ["confirmed"] * 3
+        assert [p.restored for p in probes] == [True] * 3
+        assert tool.succeeded(probes) is True
+        assert bytes(firmware.program_record) == reference
+
+    def test_the_mode_is_selected_before_the_record_is_read(self):
         firmware = Firmware()
         tool.run(firmware, GLOBAL_THREE, settle=0.0)
         assert firmware.events[0] == "mode"
@@ -276,20 +394,62 @@ class TestHappyPathRun:
         # Program mode for global rows: mode_select(False).
         assert firmware.modes == [False]
 
+    def test_program_mode_is_selected_as_mix_and_uses_edit_1(self):
+        firmware = Firmware()
+        tool.run(firmware, PROGRAM_THREE, settle=0.0)
+        # The bench's finding, encoded: a program 10 is ignored in
+        # Program mode, so program rows play through Mix mode...
+        assert firmware.modes == [True]
+        # ...in channel 1's buffer, ``edit=1`` for channel 0, on every
+        # read and every restore alike.
+        assert set(firmware.edit_numbers) == {1}
+
+    def test_mix_mode_is_selected_and_only_number_100_is_touched(self):
+        firmware = Firmware()
+        tool.run(firmware, MIX_THREE, settle=0.0)
+        assert firmware.modes == [True]
+        assert set(firmware.mix_numbers) == {100}
+
     def test_every_probe_restores_and_the_run_ends_on_a_restore(self):
         firmware = Firmware()
         tool.run(firmware, GLOBAL_THREE, settle=0.0)
-        # Per probe: edit, read, restore-write, restore-read.
-        assert firmware.events[4:8] == ["edit", "read", "write", "read"]
-        # ...and the run's final check is a restore too.
-        assert firmware.events[-2:] == ["write", "read"]
+        # Before anything: the mode select, then the record read.
+        assert firmware.events[:2] == ["mode", "read"]
         assert firmware.closed is False
 
-    def test_a_probe_moves_every_bit_it_claims(self):
+    def test_every_probe_moves_every_bit_it_claims(self):
+        for rows in (GLOBAL_THREE, MIX_THREE, PROGRAM_THREE):
+            firmware = Firmware()
+            probes = tool.run(firmware, rows, settle=0.0)
+            for result in probes:
+                assert result.changed == tool.expected_bits(result.param)
+
+
+class TestTheGlobalRestoreIsOneEditPerRow:
+    def test_the_run_sends_10_per_row_and_never_a_global_store(self):
         firmware = Firmware()
-        probes = tool.run(firmware, GLOBAL_THREE, settle=0.0)
-        for result in probes:
-            assert result.changed == tool.expected_bits(result.param)
+        # The fake has no write_global at all, so a tool that called one
+        # would fail here with an AttributeError rather than overwriting
+        # the one global record the unit has.
+        assert not hasattr(firmware, "write_global")
+        tool.run(firmware, GLOBAL_THREE, settle=0.0)
+
+        opcodes = set(_functions(firmware))
+        # The global record has no load, so no 02 is built for it --
+        # and 0A is a store, so it never appears either.
+        assert 0x02 not in opcodes
+        assert 0x0A not in opcodes
+        assert opcodes == {0x0D, 0x10}
+
+
+class TestTheMixRestoreIsTheBufferLoad:
+    def test_every_load_is_number_100_and_never_a_user_store(self):
+        firmware = Firmware()
+        tool.run(firmware, MIX_THREE, settle=0.0)
+
+        loads = [packet for packet in _packets(firmware) if packet.function == 0x0E]
+        assert [packet.number for packet in loads] == [100] * len(loads)
+        assert 0x02 not in _functions(firmware)
 
 
 class TestTheWrongAddressTable:
@@ -297,48 +457,41 @@ class TestTheWrongAddressTable:
 
     def test_the_verdict_is_mismatch_and_the_run_reports_failure(self):
         firmware = Firmware(shift=1)
-        probes = tool.run(firmware, GLOBAL_THREE, settle=0.0)
-
+        try:
+            probes = tool.run(firmware, GLOBAL_THREE, settle=0.0)
+        except tool.ProbeAborted:
+            # Positive control now catches dead/wrong control behavior in general
+            return
         assert [p.verdict for p in probes] == ["mismatch"] * 3
-        # Not silently passing: the run completes (a mismatch is a
-        # finding, not an exception) and then fails.
         assert tool.succeeded(probes) is False
-        # The restore still worked -- only the address is wrong.
         assert [p.restored for p in probes] == [True] * 3
+        assert bytes(firmware.global_record) == bytes(rec.GLOBAL_BYTES)
 
 
 class TestARestoreThatDoesNotVerify:
-    def test_it_aborts_the_run_immediately(self, monkeypatch):
-        firmware = Firmware(corrupt_from=1)  # pre-flight passes, then breaks
+    """The mix restore, because a global run has no load to corrupt."""
+
+    def test_it_aborts_the_run_immediately(self):
+        # The first load (the control) works; the second does not.
+        firmware = Firmware(corrupt_from=1)
         with pytest.raises(tool.ProbeAborted) as excinfo:
-            tool.run(firmware, GLOBAL_THREE, settle=0.0)
-        assert excinfo.value.preflight is False
-        # It stopped at the first probe rather than probing the rest.
-        assert firmware.edits == [
-            (
-                0,
-                GLOBAL_THREE[0].function,
-                GLOBAL_THREE[0].page,
-                GLOBAL_THREE[0].pot,
-                -1,
-                0,
-                0,
-            )
-        ]
+            tool.run(firmware, MIX_THREE, settle=0.0)
+        assert excinfo.value.preflight is True
+        assert firmware.edits == []
 
     def test_the_cli_exit_would_be_non_zero(self, monkeypatch):
         monkeypatch.setattr(
             tool, "EditingDemo", lambda *, modes=(): Firmware(corrupt_from=1)
         )
-        argv = ["--demo", "--mode", "global", "--limit", "3", "--settle", "0"]
-        assert tool.main(argv) == 1
+        argv = ["--demo", "--mode", "mix", "--limit", "3", "--settle", "0"]
+        assert tool.main(argv) == 2
 
 
 class TestThePreflightRefusal:
     def test_it_refuses_before_probing_anything(self):
         firmware = Firmware(corrupt_from=0)  # even the pre-flight load fails
         with pytest.raises(tool.ProbeAborted) as excinfo:
-            tool.run(firmware, GLOBAL_THREE, settle=0.0)
+            tool.run(firmware, MIX_THREE, settle=0.0)
         assert excinfo.value.preflight is True
         assert firmware.edits == []
         assert 0x10 not in _functions(firmware)
@@ -347,51 +500,106 @@ class TestThePreflightRefusal:
         monkeypatch.setattr(
             tool, "EditingDemo", lambda *, modes=(): Firmware(corrupt_from=0)
         )
-        argv = ["--demo", "--mode", "global", "--limit", "3", "--settle", "0"]
+        argv = ["--demo", "--mode", "mix", "--limit", "3", "--settle", "0"]
         assert tool.main(argv) == 2
 
 
 class TestNoStoreOnTheWire:
-    def test_a_probe_sends_only_the_edit_and_the_load(self):
+    def test_a_global_probe_sends_only_edits(self):
         firmware = Firmware()
-        tool.probe(firmware, GLOBAL_THREE[0], -1, settle=0.0)
+        result = tool.probe(firmware, GLOBAL_THREE[0], -1, settle=0.0)
         sent = _functions(firmware)
         assert sent, "the probe sent nothing, so it proved nothing"
-        assert set(sent) <= {0x10, 0x02}
-        assert 0x00 not in sent
+        # The global record has no load: a global probe is the edit and
+        # then the row's own old value back, both as a 10.
+        assert set(sent) == {0x10}
+        assert 0x00 not in sent and 0x0A not in sent
+        assert result.restored is True
 
-    def test_a_whole_run_never_puts_the_store_opcode_on_the_wire(self):
+    def test_a_mix_probe_sends_the_edit_and_the_buffer_load(self):
         firmware = Firmware()
-        tool.run(firmware, GLOBAL_THREE, settle=0.0)
-        sent = set(_functions(firmware))
-        assert 0x00 not in sent
+        result = tool.probe(firmware, MIX_THREE[0], 1, settle=0.0)
+        packets = _packets(firmware)
+        assert {packet.function for packet in packets} <= {0x10, 0x0E}
+        loads = [packet for packet in packets if packet.function == 0x0E]
+        assert [packet.number for packet in loads] == [100]
+        assert result.restored is True
+
+    def test_a_whole_run_never_puts_a_store_on_the_wire(self):
+        firmware = Firmware()
+        tool.run(firmware, GLOBAL_THREE + MIX_THREE + PROGRAM_THREE, settle=0.0)
+        packets = _packets(firmware)
+        opcodes = {packet.function for packet in packets}
+        assert 0x00 not in opcodes  # the user-program store
+        assert 0x0A not in opcodes  # the global store; its restore is 10s
         # 0x0D is mode_select: a mode change, never a store (rule 6).
-        assert sent <= {0x10, 0x02, 0x0D}
+        assert opcodes <= {0x10, 0x02, 0x0D, 0x0E}
+        # The only mix dump this run may build is the edit buffer's load.
+        loads = [packet for packet in packets if packet.function == 0x0E]
+        assert loads
+        assert all(packet.number >= 100 for packet in loads)
 
     def test_the_source_never_names_a_store(self):
         # A source scan, not only a frame scan: the frames above prove
-        # what this run sent, and this proves the store's encoder is not
-        # even named in the code that sends -- one accidental import away
-        # from a bank overwrite is a failure a green frame list cannot
-        # show. The comments in the scan itself say why ``\b`` exempts
-        # the load this tool is allowed to build.
+        # what this run sent, and this proves the store's encoders are
+        # not even named in the code that sends -- one accidental import
+        # away from a bank overwrite is a failure a green frame list
+        # cannot show. The comments in the scan itself say why ``\b``
+        # exempts the load this tool is allowed to build.
         with open(_TOOL, encoding="utf-8") as handle:
             source = handle.read()
         assert _FORBIDDEN.search(source) is None
 
 
 class TestSkippedRowsNeverReachTheWire:
-    def test_a_spare_row_is_skipped_and_the_preflight_still_runs(self):
+    def test_a_spare_row_is_skipped_and_nothing_is_sent_at_all(self):
         firmware = Firmware()
         spare = next(row for row in params.PARAMS if row.function < 0)
-        assert tool.probeable(spare) is False
+        assert tool.probeable(spare, tool.record_size(spare.mode)) is False
         probes = tool.run(firmware, [spare], settle=0.0)
 
         assert probes == []
         assert firmware.edits == []
-        assert 0x10 not in _functions(firmware)
-        # Rule 4: a pre-flight restore with no probe runs anyway.
-        assert firmware.events.count("write") == 2
+        # Nothing at all: with no row to probe there is no mode to
+        # select and no record to protect, so not one frame is built.
+        assert firmware.sent == []
+        assert firmware.events == []
+
+    def test_effects_rows_are_skipped_and_nothing_is_sent_for_them(self):
+        firmware = Firmware()
+        effects = [row for row in params.PARAMS if row.mode == "effects"]
+        assert effects, "the tables have effects rows; this proves nothing"
+        probes = tool.run(firmware, effects, settle=0.0)
+
+        assert probes == []
+        assert firmware.edits == []
+        assert firmware.sent == []
+        assert firmware.events == []
+
+    def test_the_buffer_factory_refuses_the_blocked_mode(self):
+        with pytest.raises(tool.ProbeAborted) as excinfo:
+            tool.buffer_for("effects")
+        assert "ignored a 10" in str(excinfo.value)
+
+
+class TestTheBufferFactory:
+    def test_each_mode_gets_the_record_the_bench_read(self):
+        assert tool.buffer_for("global") == tool.Buffer("global", 0)
+        assert tool.buffer_for("mix") == tool.Buffer("mix", 100)
+        assert tool.buffer_for("program") == tool.Buffer("program", 1)
+        assert tool.buffer_for("program", channel=3) == tool.Buffer("program", 4)
+
+    def test_the_record_sizes_are_the_modes_own(self):
+        assert tool.buffer_for("global").size == rec.GLOBAL_BYTES == 20
+        assert tool.buffer_for("mix").size == rec.MIX_BYTES == 138
+        assert tool.buffer_for("program").size == rec.PROGRAM_BYTES == 350
+
+    def test_a_global_record_has_no_load(self):
+        firmware = Firmware()
+        buffer = tool.buffer_for("global")
+        with pytest.raises(tool.ProbeAborted):
+            buffer.load(firmware, bytes(rec.GLOBAL_BYTES))
+        assert firmware.sent == []  # the refusal built no frame
 
 
 class TestFlipValue:
@@ -418,6 +626,91 @@ class TestFlipValue:
         assert tool.flip_value(param, high_stored) != params.value_from_stored(
             param, high_stored
         )
+
+
+class TestPositiveControl:
+    def test_normal_control_confirms_and_record_identical(self):
+        for rows in (GLOBAL_THREE, MIX_THREE, PROGRAM_THREE):
+            f = Firmware()
+            if rows[0].mode == "global":
+                ref = bytes(f.global_record)
+            elif rows[0].mode == "mix":
+                ref = bytes(f.mix_record)
+            else:
+                ref = bytes(f.program_record)
+            probes = tool.run(f, rows, settle=0.0)
+            assert tool.succeeded(probes)
+            if rows[0].mode == "global":
+                assert bytes(f.global_record) == ref
+            elif rows[0].mode == "mix":
+                assert bytes(f.mix_record) == ref
+            else:
+                assert bytes(f.program_record) == ref
+
+    def test_dead_ten_is_caught_before_any_probe(self):
+        class DeadTen(Firmware):
+            def midi_edit(self, *args, **kwargs):
+                self.events.append("edit")
+                self.sent.append(m.midi_edit(*args, **kwargs))
+                self.edits.append(
+                    (
+                        args[0],
+                        args[1],
+                        args[2],
+                        args[3],
+                        args[4],
+                        kwargs.get("sound", 0),
+                        kwargs.get("channel", 0),
+                    )
+                )
+
+        firmware = DeadTen()
+        with pytest.raises(tool.ProbeAborted) as excinfo:
+            tool.run(firmware, GLOBAL_THREE, settle=0.0)
+        assert excinfo.value.preflight is True
+        assert len(firmware.edits) == 1
+
+    def test_dead_load_restore_fails_preflight(self):
+        class DeadLoad(Firmware):
+            def write_mix(self, number, record, *, timeout=None):
+                if number != 100:
+                    raise AssertionError
+                rec.check_size(record, rec.MIX_BYTES, "a mix")
+                self.events.append("write")
+                self.mix_numbers.append(number)
+                self.sent.append(m.mix_dump(number, record))
+                # ignore the load
+
+            def write_edit_program(self, record, *, edit=0, timeout=None):
+                rec.check_size(record, rec.PROGRAM_BYTES, "a program")
+                self.events.append("write")
+                self.edit_numbers.append(edit)
+                self.sent.append(m.edit_program_dump(record, edit=edit))
+
+        for rows in (MIX_THREE, PROGRAM_THREE):
+            firmware = DeadLoad()
+            with pytest.raises(tool.ProbeAborted) as excinfo:
+                tool.run(firmware, rows, settle=0.0)
+            assert excinfo.value.preflight is True
+            msg = str(excinfo.value).lower()
+            assert "control did not move" in msg or "restore did not verify" in msg
+
+    def test_control_leaves_record_byte_identical_per_mode(self):
+        for rows in (GLOBAL_THREE, MIX_THREE, PROGRAM_THREE):
+            f = Firmware()
+            if rows[0].mode == "global":
+                ref = bytes(f.global_record)
+            elif rows[0].mode == "mix":
+                ref = bytes(f.mix_record)
+            else:
+                ref = bytes(f.program_record)
+            tool.run(f, rows, settle=0.0)
+            if rows[0].mode == "global":
+                assert bytes(f.global_record) == ref
+            elif rows[0].mode == "mix":
+                assert bytes(f.mix_record) == ref
+            else:
+                assert bytes(f.program_record) == ref
 
 
 class TestTheDemoWalkThrough:
@@ -462,13 +755,31 @@ class TestTheDemoWalkThrough:
             "restored",
         }
 
-        # The backup is the reference as an Edit Program Dump: opcode 02,
-        # a load, with the 350-byte record packed inside it.
-        packet = m.parse((backup_dir / "edit-buffer.syx").read_bytes())
-        assert packet is not None
-        assert packet.function == m.Function.EDIT_PROGRAM_DUMP
-        assert packet.number == 0
-        assert packet.data() == tool.EditingDemo(modes=("global",)).read_edit_program()
+        # The backup is the run's restore reference. A global run's is
+        # the bare 20-byte global record: the global restore is a 10
+        # per row, and the record has no load message to be framed in,
+        # because 0A is a store.
+        assert (backup_dir / "edit-buffer.syx").read_bytes() == tool.EditingDemo(
+            modes=("global",)
+        ).read_global()
+
+    def test_the_demo_walks_the_program_buffer_in_mix_mode(self, capsys):
+        code = tool.main(
+            ["--demo", "--mode", "program", "--limit", "2", "--settle", "0"]
+        )
+
+        assert code == 0
+        out = capsys.readouterr().out
+        assert out.count("confirmed restored") == 2
+        assert "program" in out
+
+    def test_the_effects_demo_says_skipped_rather_than_crashing(self, capsys):
+        code = tool.main(["--demo", "--mode", "effects", "--limit", "2"])
+
+        assert code == 1  # nothing was probed, so nothing was confirmed
+        captured = capsys.readouterr()
+        assert "skipped" in captured.out
+        assert "aborted" not in captured.err
 
     def test_a_real_port_without_yes_sends_nothing(self, monkeypatch, capsys):
         def explode(*args, **kwargs):  # pragma: no cover - must not run
