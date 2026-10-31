@@ -61,6 +61,7 @@ from textual.widgets import DataTable, Header, Static
 
 from nano import banks, livenames, verify
 from nano import catalog as cat
+from nano import config as cfg
 from nano import records as rec
 from nano.config import UNSET
 from nano.favorites import rating_cell
@@ -297,6 +298,13 @@ class NanosynedApp(App):
         #: an exchange is in flight (for an idle close) and refuses a
         #: second one before a worker is spawned.
         self._busy_gate = BusyGate()
+        #: Whether this launch has already put the scan offer on screen.
+        #: The offer has two callers -- the 0.6s timer and an explicit
+        #: ``_maybe_offer_scan`` -- and without this the two could stack
+        #: two dialogs, so answering the top one left another behind.
+        #: "Later" is a deferral to the next launch, not a request to be
+        #: asked again in the same launch.
+        self._scan_offer_shown = False
         #: One exchange at a time, claimed on the main thread before the
         #: worker is spawned and released by the worker in a ``finally``.
         #: The gate alone cannot carry this: entering it *clears* a
@@ -2101,6 +2109,8 @@ class NanosynedApp(App):
         """
         if self._config_path is None or self._busy:
             return
+        if self._scan_offer_shown:
+            return
         if self.catalog or self._has_live_names():
             return
         from nano import config as _cfg
@@ -2112,6 +2122,7 @@ class NanosynedApp(App):
                 return
         except Exception:
             pass
+        self._scan_offer_shown = True
         self.push_screen(ScanOfferScreen(SCAN_OFFER), self._scan_offer_answered)
 
     def _has_live_names(self) -> bool:
@@ -2509,18 +2520,24 @@ def build_parser() -> argparse.ArgumentParser:
         # locked and the only way to arm it is `w`, deliberately.
         allow_write=True,
     )
+    cfg.apply_config_help(parser, tool="nanosyned")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    from nano import config as cfg
 
     config_path = getattr(args, "config", None) or cfg.DEFAULT_PATH
     # The family's range checks, before anything is opened: a mistyped
     # channel costs a message rather than a wrong program change sent to a
     # real instrument.
     validate_common(args)
+
+    if args.config is None:
+        cfg.migrate_legacy_config("nanosyned")
+        import os
+
+        os.makedirs(cfg.config_dir("nanosyned"), exist_ok=True)
 
     #: DemoDevice and NanoBridge are structurally interchangeable -- the
     #: demo mirrors the bridge's interface without inheriting from it -- so

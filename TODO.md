@@ -140,6 +140,10 @@ x5ded and this one. Worth doing as shared work rather than five times.
 
 **Blocked on:** nothing but the decoding. Nothing here depends on it.
 
+Deliberately out of scope for the `param-verify` branch: `.sqs` decoding is a
+shared family gap across all the sibling projects, not a forgotten item. See
+`docs/PARAMETER_VERIFICATION_PLAN.md` section 8.
+
 ## 8. Measure whether the browser can sit open beside a sequencer
 
 **Status:** open.
@@ -150,3 +154,22 @@ against the real unit with a sequencer running into it at the same time,
 which is the claim that actually matters.
 
 **Blocked on:** a bench session.
+
+## 9. The parameter tables are transcribed, not verified
+
+**Status:** open, plan written.
+
+The 178 rows in `nano/params.py` are transcribed from Alesis's published
+QS specification, not verified against this firmware: Global 20, Mix
+common 13 plus the channel template 20, Effects 11 + 64 + 6, Program
+common 13 plus 31 sound rows. What is unprobed: every row's offset and
+value law, the program sound table beyond those 31 rows, the
+type-dependent effect branches, and the multi-byte rows. `nanocli set`
+can send any address today.
+
+The differential verification plan is
+`docs/PARAMETER_VERIFICATION_PLAN.md`: a row becomes writable only after a
+controlled before/after change on the unit confirms its offset and value
+law; rows that cannot be verified stay read-only.
+
+**Blocked on:** the bench run (V05-V10 in the plan).

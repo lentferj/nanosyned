@@ -34,6 +34,14 @@ addresses it, and :mod:`nano.records` turns one plus a value into the bits of
 a record. Nothing else should keep a copy of these numbers: a copy is a
 second truth, and a second truth drifts.
 
+**Transcription is a hypothesis; verification is the result.** Every row
+here was read off the published specification, and a specification is a
+lead, not proof about this firmware. ``verified=True`` on a row means a
+controlled before/after probe on *this unit* confirmed both its ``offset``
+and its value law, and ``value_law`` names the law that probe showed
+(``"offset"``, ``"twos"`` or ``"raw"``). A row without the flag is still
+*shown* by the editors, and is read-only there.
+
 **This is a subset, deliberately.** The program's sound table alone is
 eighty-five bytes of bitfields per sound, and the specification prints one
 keyboard-sound table and one drum-sound table that each of the four sounds
@@ -95,6 +103,7 @@ __all__ = [
     "at",
     "by_label",
     "midi_edit_for",
+    "verified_params",
     "with_channel",
     "with_sound",
 ]
@@ -140,6 +149,17 @@ class Param:
         Optional extras: named values where the spec lists them, and the
         sound/effect-bus or MIDI-channel index where a table repeats.
         ``sound`` is the spec's Send column in the Effects tables.
+    ``verified``
+        Whether a controlled before/after probe on this unit confirmed the
+        row's ``offset`` **and** its value law. Every row starts False:
+        the table is a transcription, and a transcription is a hypothesis.
+        The editors show an unverified row and refuse to write it.
+    ``value_law``
+        The law the probe confirmed, when it confirmed one: ``"offset"``
+        for a packed record (stored = value - ``offset``), ``"twos"`` for
+        a two's-complement field as the Global record stores it, ``"raw"``
+        for a plain unsigned field whose ``low`` is 0. ``""`` means
+        unknown, which is every row until it is verified.
     """
 
     mode: str
@@ -155,6 +175,8 @@ class Param:
     choices: tuple[str, ...] = ()
     sound: int | None = None
     channel: int | None = None
+    verified: bool = False
+    value_law: str = ""
 
     @property
     def span(self) -> int:
@@ -602,6 +624,26 @@ def by_label(text: str) -> list[Param]:
     """Every parameter whose label contains ``text``, case-insensitively."""
     needle = text.casefold()
     return [param for param in PARAMS if needle in param.label.casefold()]
+
+
+def verified_params(mode: str | None = None) -> tuple[Param, ...]:
+    """The rows verified on this unit, optionally limited to one ``mode``.
+
+    A row is here only when a controlled before/after probe on this unit
+    confirmed its ``offset`` **and** its value law -- ``param.verified``
+    being true, with ``param.value_law`` naming the law that probe showed.
+    ``mode`` is one of ``"global"``, ``"mix"``, ``"program"`` or
+    ``"effects"``; with ``None`` every verified row of every mode is
+    returned.
+
+    This is the editing set, not the display set: a row that is *not*
+    verified is still shown in the editors, with its status, and is
+    read-only there -- the transcription is a hypothesis until this
+    function returns it.
+    """
+    if mode is None:
+        return tuple(param for param in PARAMS if param.verified)
+    return tuple(param for param in PARAMS if param.verified and param.mode == mode)
 
 
 def midi_edit_for(param: Param, value: int) -> bytes:

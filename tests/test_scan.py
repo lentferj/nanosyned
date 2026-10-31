@@ -221,6 +221,25 @@ class TestTheOfferIsRemembered:
                 pilot, lambda: isinstance(second.screen, ScanOfferScreen)
             )
 
+    async def test_two_callers_make_one_offer(self, tmp_path):
+        """The 0.6s timer and an explicit check must not stack dialogs.
+
+        Answering the top of a stack leaves the one underneath, and the
+        test then waits forever for a screen that is still there. One
+        launch makes one offer, whichever caller gets there first.
+        """
+        app = make(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._maybe_offer_scan()
+            app._maybe_offer_scan()
+            await pilot.pause()
+            assert isinstance(app.screen, ScanOfferScreen)
+            await pilot.press("n")
+            assert await _until(
+                pilot, lambda: not isinstance(app.screen, ScanOfferScreen)
+            )
+
 
 class TestAWholeScan:
     """The read, its cancel, and the sidecar it leaves behind."""

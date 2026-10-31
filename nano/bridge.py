@@ -600,6 +600,25 @@ class NanoBridge:
         self._drain()
         self._send(m.program_dump(number, record))
 
+    def write_edit_program(
+        self, record: bytes, *, edit: int = 0, timeout: float | None = None
+    ) -> None:
+        """Load the edit buffer. **Does not store.**
+
+        Opcode ``02`` loads the edit buffer -- the program's scratch, the
+        thing the unit is playing -- and opcode ``00`` is the store that
+        does the same job. This is the load a safe parameter probe sends to
+        restore a state, and it must never be a store.
+
+        The unit is silent under a load, so there is nothing to read back
+        here; the caller owns the read-back. ``timeout`` is accepted for
+        parity with the other writes; nothing here waits, so nothing here
+        uses it.
+        """
+        rec.check_size(record, rec.PROGRAM_BYTES, "a program")
+        self._drain()
+        self._send(m.edit_program_dump(record[: rec.PROGRAM_BYTES], edit=edit))
+
     def write_effects(
         self, number: int, record: bytes, *, timeout: float | None = None
     ) -> None:

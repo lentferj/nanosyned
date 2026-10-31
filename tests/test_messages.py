@@ -294,6 +294,20 @@ class TestStoreEncoders:
         # Eight bytes of header and footer around the 400 packed ones.
         assert len(message) == 8 + rec.PROGRAM_PACKED
 
+    def test_the_edit_buffer_load_round_trips(self):
+        record = self._record(rec.PROGRAM_BYTES)
+        message = m.edit_program_dump(record)
+        packet = self._round_trip(message, m.Function.EDIT_PROGRAM_DUMP, 0, record)
+        assert len(packet.payload) == rec.PROGRAM_PACKED
+        # Eight bytes of header and footer around the 400 packed ones.
+        assert len(message) == 8 + rec.PROGRAM_PACKED
+
+    def test_the_edit_buffer_load_can_name_a_mix_edit(self):
+        record = self._record(rec.PROGRAM_BYTES)
+        message = m.edit_program_dump(record, edit=5)
+        self._round_trip(message, m.Function.EDIT_PROGRAM_DUMP, 5, record)
+        assert len(message) == 8 + rec.PROGRAM_PACKED
+
     def test_an_effects_store_round_trips(self):
         record = self._record(rec.EFFECTS_BYTES)
         packet = self._round_trip(
@@ -335,6 +349,15 @@ class TestStoreEncoders:
         assert store.function == m.Function.USER_PROGRAM_DUMP
         assert request.function == m.Function.USER_PROGRAM_REQUEST
         assert store.function != request.function
+
+    def test_the_store_and_the_edit_buffer_load_are_different_opcodes(self):
+        """Opcode ``00`` stores, opcode ``02`` loads. Not two names for one."""
+        record = self._record(rec.PROGRAM_BYTES)
+        store = m.parse(m.program_dump(7, record))
+        load = m.parse(m.edit_program_dump(record))
+        assert store.function == m.Function.USER_PROGRAM_DUMP
+        assert load.function == m.Function.EDIT_PROGRAM_DUMP
+        assert store.function != load.function
 
 
 class TestMidiEdit:
@@ -402,6 +425,12 @@ class TestStoreRefusals:
     def test_a_mix_number_stops_at_the_edit_buffer(self):
         with pytest.raises(m.ProtocolError, match="0-100"):
             m.mix_dump(101, bytes(rec.MIX_BYTES))
+
+    def test_the_edit_buffer_load_names_a_range_of_edits(self):
+        with pytest.raises(m.ProtocolError, match="0-16"):
+            m.edit_program_dump(bytes(rec.PROGRAM_BYTES), edit=-1)
+        with pytest.raises(m.ProtocolError, match="0-16"):
+            m.edit_program_dump(bytes(rec.PROGRAM_BYTES), edit=17)
 
     def test_midi_edit_fields_are_checked(self):
         out_of_range = {

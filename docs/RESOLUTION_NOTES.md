@@ -396,3 +396,19 @@ gives the unit's own names for that bank and the page's for the rest.
 `tests/test_extract_pdf.py` pins the parser — the column geometry, the
 one-time index trim, and the two traps above ("61 Tines", "8va Piano") —
 over an invented TSV, so it needs neither the PDF nor OCR.
+
+## 19. The parameter tables are transcribed as data
+
+`nano/params.py` carries the QS specification's parameter tables as data:
+Global 20 rows, Mix common 13 plus a 20-row channel template, Effects
+11 + 64 + 6, Program common 13 plus 31 sound rows -- 178 rows in all.
+They are keyed by (mode, function, page, pot) with the spec's ranges,
+named choices and bit addresses. Nothing here establishes that this
+firmware honours any of them; the specification is a lead, and the
+firmware's behaviour is not established by transcription. The next step
+is the differential verification plan in
+`docs/PARAMETER_VERIFICATION_PLAN.md`, which promotes a row to verified
+only after a controlled before/after change on the unit confirms its
+offset and its value law. Until then the editors write only what the
+specification documents, and rows the specification marks for another
+model are shown and are not editable.

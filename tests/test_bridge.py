@@ -149,6 +149,33 @@ class TestWriteMethods:
 
         assert port.sent == []
 
+    def test_write_edit_program_sends_the_load(self):
+        port = _FakePort()
+        live = bridge.NanoBridge(port, port)
+        record = _program_record()
+
+        live.write_edit_program(record)
+
+        assert port.sent == [m.edit_program_dump(record)]
+
+    def test_write_edit_program_can_name_a_mix_edit(self):
+        port = _FakePort()
+        live = bridge.NanoBridge(port, port)
+        record = _program_record()
+
+        live.write_edit_program(record, edit=3)
+
+        assert port.sent == [m.edit_program_dump(record, edit=3)]
+
+    def test_write_edit_program_refuses_a_short_record(self):
+        port = _FakePort()
+        live = bridge.NanoBridge(port, port)
+
+        with pytest.raises(m.ProtocolError):
+            live.write_edit_program(b"\x00\x01\x02")
+
+        assert port.sent == []
+
     def test_the_other_stores_send_their_messages(self):
         port = _FakePort()
         live = bridge.NanoBridge(port, port)
@@ -284,6 +311,26 @@ class TestDemoWrites:
         assert demo.edit_effect_writes == [bytes(rec.EFFECTS_BYTES)]
         assert demo.midi_edits == [(m.MIDI_EDIT_MIX, 1, 2, 3, 4, 0, 0)]
         assert demo.mode_selects == [False]
+
+    def test_the_edit_buffer_load_refuses_a_short_record(self):
+        demo = DemoDevice()
+
+        with pytest.raises(m.ProtocolError):
+            demo.write_edit_program(b"\x00\x01\x02")
+
+        assert demo.edit_program_writes == []
+
+    def test_the_edit_buffer_load_round_trips(self):
+        demo = DemoDevice()
+        record = _program_record()
+
+        demo.write_edit_program(record)
+
+        assert demo.read_edit_program() == record
+        assert verify.describe(record, demo.read_edit_program()) == (
+            "record read back byte-for-byte"
+        )
+        assert demo.edit_program_writes == [record]
 
     def test_the_demo_has_the_launch_fields_too(self):
         """Structural parity with the bridge, so the app can report how a

@@ -1,0 +1,235 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-FileCopyrightText: Copyright (C) 2026  nanosyned contributors
+#
+# This file is part of nanosyned.
+#
+# nanosyned is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 2 of the License, or (at your option) any later
+# version.
+#
+# nanosyned is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details.
+
+"""The parameter tables' verification status, with no unit and no MIDI.
+
+The tables in :mod:`nano.params` are a transcription of a published
+specification, and a transcription is a hypothesis about this firmware.
+What the rows gain here is the *slot* for the answer -- ``verified`` and
+``value_law`` -- and nothing else: this file pins that every row starts
+unverified, that the promotion helper says so honestly, and that adding
+the fields changed neither the addresses the readers look up nor the
+shape every existing construction depends on.
+
+No row is verified here, and none may be: the flag is set by
+``docs/PARAMETER_VERIFICATION_PLAN.md``'s probe on the unit, never by a
+test. A test that marked a row verified would be exactly the "a second
+truth drifts" failure the module docstring warns about, wearing the
+authority of a green suite.
+"""
+
+import dataclasses
+
+from nano import params
+from nano import records as rec
+
+#: Every transcribed table and the row count the specification prints for
+#: it. The eight sizes sum to the 178 rows ``PARAMS`` carries.
+_TABLE_SIZES = {
+    "GLOBAL_PARAMS": 20,
+    "MIX_COMMON_PARAMS": 13,
+    "MIX_CHANNEL_PARAMS": 20,
+    "EFFECT_COMMON_PARAMS": 11,
+    "EFFECT_CONFIG_0_PARAMS": 64,
+    "EFFECT_MOD_PARAMS": 6,
+    "PROGRAM_COMMON_PARAMS": 13,
+    "KEYBOARD_SOUND_PARAMS": 31,
+}
+
+
+class TestEveryRowStartsUnverified:
+    def test_no_row_claims_a_verification_it_has_not_had(self):
+        """The whole table is transcribed, so the whole table starts ``False``."""
+        for row in params.PARAMS:
+            assert row.verified is False, row.label
+            assert row.value_law == "", row.label
+
+    def test_the_helper_therefore_returns_nothing(self):
+        assert params.verified_params() == ()
+        assert params.verified_params("global") == ()
+        assert params.verified_params("mix") == ()
+        assert params.verified_params("program") == ()
+        assert params.verified_params("effects") == ()
+
+    def test_the_helper_is_exported(self):
+        """A reader outside the module must find it where ``__all__`` says."""
+        assert "verified_params" in params.__all__
+        assert params.__all__ == sorted(params.__all__)
+
+    def test_the_helper_reads_the_table_at_call_time(self, monkeypatch):
+        """A promoted row shows up, and only in its own mode.
+
+        The row is patched into a local copy of ``PARAMS`` rather than
+        edited into the real one: no test may leave a verification
+        behind, and this proves the filter both ways -- everything
+        verified is returned, everything else is not.
+        """
+        row = dataclasses.replace(
+            params.GLOBAL_PARAMS[1], verified=True, value_law="twos"
+        )
+        monkeypatch.setattr(params, "PARAMS", (row,))
+
+        assert params.verified_params() == (row,)
+        assert params.verified_params("global") == (row,)
+        assert params.verified_params("mix") == ()
+
+
+class TestTheStatusIsACopyNotAMutation:
+    def test_replace_produces_a_verified_row_and_leaves_the_original(self):
+        original = params.GLOBAL_PARAMS[1]
+        promoted = dataclasses.replace(original, verified=True, value_law="twos")
+
+        assert promoted.verified is True
+        assert promoted.value_law == "twos"
+        # Nothing but the two new fields moved.
+        assert (
+            promoted.mode,
+            promoted.function,
+            promoted.page,
+            promoted.pot,
+            promoted.label,
+            promoted.low,
+            promoted.high,
+            promoted.bits,
+            promoted.bit_address,
+            promoted.offset,
+        ) == (
+            original.mode,
+            original.function,
+            original.page,
+            original.pot,
+            original.label,
+            original.low,
+            original.high,
+            original.bits,
+            original.bit_address,
+            original.offset,
+        )
+
+        assert original.verified is False
+        assert original.value_law == ""
+        # ``Param`` is frozen and the tables are tuples, so the table row
+        # is the very object the promotion copied from.
+        assert params.GLOBAL_PARAMS[1] is original
+        assert params.GLOBAL_PARAMS[1].verified is False
+
+    def test_the_copy_is_a_param_and_equal_where_it_was_not_asked_to_change(self):
+        original = params.MIX_CHANNEL_PARAMS[4]
+        promoted = dataclasses.replace(original, verified=True, value_law="offset")
+        assert isinstance(promoted, params.Param)
+        assert promoted != original  # the status is part of equality
+        assert promoted.label == original.label
+        assert promoted.bit_address == original.bit_address
+
+
+class TestTheLookupsStillFindTheirRows:
+    """``verified`` sits after every real column, so nothing moved."""
+
+    def test_by_label_finds_a_global_row(self):
+        rows = params.by_label("Pitch transpose")
+        assert [row.label for row in rows] == ["Pitch transpose*"]
+        assert (rows[0].mode, rows[0].low, rows[0].high) == ("global", -12, 12)
+        assert rows[0].bit_address == 8
+        assert rows[0].verified is False
+
+    def test_at_finds_a_mix_channel_row(self):
+        row = params.at("mix", 1, 0, 0)
+        assert row is not None
+        assert row.label == "Channel 1 volume"
+        assert (row.low, row.high, row.bits, row.bit_address) == (0, 99, 7, 92)
+
+    def test_at_finds_a_program_sound_row(self):
+        row = params.at("program", 3, 0, 0)
+        assert row is not None
+        assert row.label == "Sound pitch semitone"
+        assert (row.low, row.high, row.offset) == (-24, 25, -24)
+
+    def test_at_still_selects_an_effect_send_by_sound(self):
+        row = params.at("effects", 0, 0, 0, sound=1)
+        assert row is not None
+        assert row.label == "Send 2 pitch type"
+        assert (row.sound, row.bit_address) == (1, 246)
+
+    def test_by_label_still_sees_every_mode(self):
+        assert {row.mode for row in params.by_label("Spare")} == {
+            "global",
+            "mix",
+            "program",
+            "effects",
+        }
+
+
+class TestTheTablesAreTheOnesDocumented:
+    def test_every_table_has_the_size_the_specification_prints(self):
+        for name, size in _TABLE_SIZES.items():
+            assert len(getattr(params, name)) == size, name
+        assert sum(_TABLE_SIZES.values()) == len(params.PARAMS)
+
+    def test_params_is_the_union_of_the_tables(self):
+        """``PARAMS`` is the concatenation the module documents, once each."""
+        assert params.EFFECT_PARAMS == (
+            params.EFFECT_COMMON_PARAMS
+            + params.EFFECT_CONFIG_0_PARAMS
+            + params.EFFECT_MOD_PARAMS
+        )
+        assert params.PARAMS == (
+            params.GLOBAL_PARAMS
+            + params.MIX_COMMON_PARAMS
+            + params.MIX_CHANNEL_PARAMS
+            + params.EFFECT_PARAMS
+            + params.PROGRAM_COMMON_PARAMS
+            + params.KEYBOARD_SOUND_PARAMS
+        )
+        assert len(set(params.PARAMS)) == len(params.PARAMS), "a row is listed twice"
+
+    def test_the_status_fields_default_in_a_positional_construction(self):
+        """Every existing row is built from nine positionals plus keywords."""
+        row = params.Param("global", 0, 0, 2, "Pitch transpose*", -12, 12, 8, 8)
+        assert row == params.GLOBAL_PARAMS[1]
+        assert row.offset == 0
+        assert row.choices == ()
+        assert row.sound is None
+        assert row.channel is None
+        assert row.verified is False
+        assert row.value_law == ""
+        # ``span`` and ``clamp`` are the two accessors the editors use.
+        assert row.span == 24
+        assert row.clamp(99) == 12
+
+    def test_moving_a_row_to_a_channel_or_sound_carries_its_status(self):
+        """``with_channel``/``with_sound`` copy, so the status travels."""
+        template = dataclasses.replace(
+            params.MIX_CHANNEL_PARAMS[3], verified=True, value_law="offset"
+        )
+        channelled = params.with_channel(template, 7)
+        assert (channelled.verified, channelled.value_law) == (True, "offset")
+        assert channelled.channel == 7
+        assert channelled.label == "Channel 8 volume"
+        assert channelled.bit_address == template.bit_address + 7 * (
+            rec.MIX_CHANNEL_BYTES * 8
+        )
+        assert template.channel is None
+
+        sound_row = dataclasses.replace(
+            params.KEYBOARD_SOUND_PARAMS[8], verified=True, value_law="offset"
+        )
+        sounded = params.with_sound(sound_row, 2)
+        assert (sounded.verified, sounded.value_law) == (True, "offset")
+        assert sounded.sound == 2
+        assert (
+            sounded.bit_address
+            == sound_row.bit_address + (rec.PROGRAM_COMMON + 2 * rec.SOUND_BYTES) * 8
+        )
+        assert sound_row.sound is None

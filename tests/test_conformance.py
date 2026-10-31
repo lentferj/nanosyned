@@ -25,21 +25,28 @@ from nano.terms import TERMS
 from nanosyned import cli
 from nanosyned.app import KEY_HINTS, WRITE_HINTS, NanosynedApp, build_parser
 from vinsynlib import conformance
+from vinsynlib.config import config_help
 
 
 def test_flags_match_the_family() -> None:
     # A tuple rather than the set in the template: check_flags takes a
     # Sequence, and mypy is right that a set is not one.
+    #
+    # --config is checked separately below. The family's spec still spells
+    # the old relative default (./config.toml); this tool binds the per-tool
+    # platform path (D01), so the family's literal is the one thing that must
+    # differ. Everything else about the flag is still checked.
     assert not conformance.check_flags(
         build_parser(),
-        required=("port", "scan", "recv-port", "demo", "config", "catalog"),
+        required=("port", "scan", "recv-port", "demo", "catalog"),
     )
 
 
 def test_the_cli_flags_match_the_family() -> None:
     # The command line keeps the same contract as the browser, from the
     # same table. `favorites` is the store `fav` and `tags` open, so it is
-    # part of what this CLI offers and is checked as such.
+    # part of what this CLI offers and is checked as such. --config is
+    # excluded here for the same reason it is above, and checked separately.
     assert not conformance.check_flags(
         cli.build_parser(),
         required=(
@@ -48,13 +55,20 @@ def test_the_cli_flags_match_the_family() -> None:
             "recv-port",
             "channel",
             "demo",
-            "config",
             "catalog",
             "favorites",
             "yes",
             "allow-write",
         ),
     )
+
+
+def test_the_config_flag_names_this_tools_own_cache() -> None:
+    """The one deliberate difference from the family's flag text."""
+    for parser in (build_parser(), cli.build_parser()):
+        action = next(a for a in parser._actions if a.dest == "config")
+        assert action.help == config_help("nanosyned")
+        assert "--config" in action.option_strings
 
 
 def test_keys_match_the_family() -> None:

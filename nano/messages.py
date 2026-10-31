@@ -55,6 +55,10 @@ it builds the message -- but the opcodes differ only in the number byte of
 a frame, which is exactly the sort of thing a caller gets wrong, so the
 two are named apart here (``*_request`` against the encoder's bare name).
 
+The one exception is the edit buffer: opcode ``02`` **loads** it, and
+opcode ``00`` is the store. A load is the move a safe parameter probe
+makes to restore a state, and it must never be mistaken for a store.
+
 Every message in this module, in both directions, is transcribed from
 Alesis's published QS6/7/8/R System Exclusive specification and then
 confirmed against this unit on the bench.
@@ -82,6 +86,7 @@ __all__ = [
     "decode_name",
     "edit_effects_dump",
     "edit_effects_dump_request",
+    "edit_program_dump",
     "edit_program_dump_request",
     "effects_dump",
     "effects_dump_request",
@@ -540,6 +545,24 @@ def program_dump(number: int, record: Sequence[int] | bytes) -> bytes:
     if not 0 <= number <= 127:
         raise ProtocolError(f"user program {number} is outside 0-127")
     return frame(Function.USER_PROGRAM_DUMP, [number, *pack7(record)])
+
+
+def edit_program_dump(record: Sequence[int] | bytes, edit: int = 0) -> bytes:
+    """Load the edit buffer -- the unit's scratch, what it is playing.
+
+    Opcode ``02``, with a number naming the edit: ``0`` for the program
+    edit buffer and ``1``-``16`` for a mix program's edit. The store that
+    does the same job belongs to :func:`program_dump` under opcode ``00``;
+    this one loads, and a load must never be sent as a store.
+
+    The record is the 350 bytes of :data:`nano.records.PROGRAM_BYTES`,
+    which pack to 400 and make the message 408 bytes on the wire. The unit
+    answers a load with silence, so there is nothing to read back here --
+    the caller owns the read-back.
+    """
+    if not 0 <= edit <= 16:
+        raise ProtocolError(f"edit {edit} is outside 0-16")
+    return frame(Function.EDIT_PROGRAM_DUMP, [edit, *pack7(record)])
 
 
 def effects_dump(number: int, record: Sequence[int] | bytes) -> bytes:

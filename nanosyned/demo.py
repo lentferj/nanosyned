@@ -160,10 +160,15 @@ class DemoDevice:
         #: The effects edit buffer. Nothing reads it back over this
         #: protocol's subset, so it is kept for the log's sake.
         self.edit_effects: bytes | None = None
+        #: The program edit buffer. Seeded from the current selection and
+        #: replaced by a load, which is what a safe parameter probe sends --
+        #: and what must never be mistaken for a store.
+        self._edit_buffer: bytes | None = None
         #: Every write, in order. Kept apart by kind so a test can say
         #: "nothing was written" (``program_writes == []``) without
         #: inspecting a count of everything that did happen.
         self.program_writes: list[tuple[int, bytes]] = []
+        self.edit_program_writes: list[bytes] = []
         self.effect_writes: list[tuple[int, bytes]] = []
         self.edit_effect_writes: list[bytes] = []
         self.mix_writes: list[tuple[int, bytes]] = []
@@ -234,15 +239,19 @@ class DemoDevice:
 
     def read_edit_program(self, *, timeout: float | None = None) -> bytes:
         self._tick()
-        slot = self.selected
-        if slot is None:
-            return _record(rec.PROGRAM_BYTES, demo_name("GM", 0), m.NAME_BIT_OFFSET, 0)
-        return _record(
-            rec.PROGRAM_BYTES,
-            demo_name(slot.bank_id, slot.number),
-            m.NAME_BIT_OFFSET,
-            slot.number,
-        )
+        if self._edit_buffer is None:
+            slot = self.selected
+            if slot is None:
+                return _record(
+                    rec.PROGRAM_BYTES, demo_name("GM", 0), m.NAME_BIT_OFFSET, 0
+                )
+            return _record(
+                rec.PROGRAM_BYTES,
+                demo_name(slot.bank_id, slot.number),
+                m.NAME_BIT_OFFSET,
+                slot.number,
+            )
+        return self._edit_buffer
 
     def read_mix(self, number: int, *, timeout: float | None = None) -> bytes:
         self._tick()
@@ -295,6 +304,24 @@ class DemoDevice:
         stored = bytes(record)
         self._programs[number] = stored
         self.program_writes.append((number, stored))
+
+    def write_edit_program(
+        self, record: bytes, *, edit: int = 0, timeout: float | None = None
+    ) -> None:
+        """Load the edit buffer. **Kept here too.** Does not store.
+
+        Mirrors :meth:`nano.bridge.NanoBridge.write_edit_program`: refuses
+        a short record, and keeps the loaded buffer the way a unit that
+        took the load would. The unit is silent under a load, so the caller
+        owns the read-back either way.
+        """
+        self._tick()
+        stored = bytes(record)
+        rec.check_size(stored, rec.PROGRAM_BYTES, "a program")
+        m.edit_program_dump(stored, edit=edit)  # range checks, as the encoder does
+        loaded = stored[: rec.PROGRAM_BYTES]
+        self._edit_buffer = loaded
+        self.edit_program_writes.append(loaded)
 
     def write_effects(
         self, number: int, record: bytes, *, timeout: float | None = None

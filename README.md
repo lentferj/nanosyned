@@ -358,6 +358,14 @@ opcodes are the QS specification's — `00` program, `06` effects, `0E` mix,
 confirmed against the instrument on the read side;
 `docs/RESOLUTION_NOTES.md` records which is which.
 
+The parameter tables behind these editors are transcribed from Alesis's
+published QS specification and have **not** been verified against this unit.
+They are not bench-checked, so the editors only write what the specification
+documents, and a row becomes writable only after a controlled before/after
+change on the unit confirms its offset and its value law; that work is
+planned in `docs/PARAMETER_VERIFICATION_PLAN.md`. `.sqs` import remains a
+shared family gap and is out of scope for this branch.
+
   ![The program editor](docs/screenshots/editor.png)
 
 ## The bench, real hardware

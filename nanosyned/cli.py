@@ -36,6 +36,7 @@ from typing import Any
 from nano import backup as bk
 from nano import banks, config, dumps, params, verify
 from nano import catalog as cat
+from nano import config as cfg
 from nano import favorites as favmod
 from nano import messages as m
 from nano import records as rec
@@ -1043,6 +1044,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         yes=True,
         allow_write=True,
     )
+    cfg.apply_config_help(parser, tool="nanosyned")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def _inherit(sp: argparse.ArgumentParser, dest: str) -> None:
@@ -1246,6 +1248,12 @@ COMMANDS = {
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config_path = getattr(args, "config", None) or config.DEFAULT_PATH
+
+    if args.config is None:
+        cfg.migrate_legacy_config("nanosyned")
+        import os
+
+        os.makedirs(cfg.config_dir("nanosyned"), exist_ok=True)
 
     # The family's range checks, before anything is opened.
     validate_common(args)

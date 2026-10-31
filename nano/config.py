@@ -15,7 +15,7 @@
 
 """The local settings cache: which port answered, and which channel.
 
-Now a binding of :class:`vinsynlib.config.Settings` rather than a second
+Now a binding of :class:`vinsynlib.config.bind` rather than a second
 copy of it. The behaviour, including the traps it is written around, is
 the family's and lives in one place:
 
@@ -38,15 +38,34 @@ The ui-state wrappers are the 0.4.0 API, and :data:`UNSET` forwards "not
 given" rather than a value: a caller that omits *default* gets the
 library's sentinel back, so the caller can tell "no preference remembered"
 apart from any value a preference could hold.
+
+The cache is per-user/per-tool, not per-checkout: its location is the
+platform directory for the tool ``nanosyned``, not the working directory.
 """
 
 from __future__ import annotations
 
-from vinsynlib.config import DEFAULT_PATH, UNSET, Settings
+import argparse
+
+from vinsynlib.config import (
+    UNSET,
+    bind,
+    config_dir,
+    config_help,
+    default_config_path,
+    migrate_legacy_config,
+)
+
+DEFAULT_PATH = default_config_path("nanosyned")
 
 __all__ = [
     "DEFAULT_PATH",
     "UNSET",
+    "apply_config_help",
+    "bind",
+    "config_dir",
+    "config_help",
+    "default_config_path",
     "load_channel",
     "load_device_id",
     "load_last_port",
@@ -56,6 +75,7 @@ __all__ = [
     "load_ui_int",
     "load_ui_state",
     "load_ui_str",
+    "migrate_legacy_config",
     "read_ui_state",
     "save_channel",
     "save_device_id",
@@ -65,7 +85,20 @@ __all__ = [
     "save_ui_state",
 ]
 
-_settings = Settings("nanosyned", DEFAULT_PATH)
+_settings = bind("nanosyned", DEFAULT_PATH)
+
+
+def apply_config_help(parser: argparse.ArgumentParser, tool: str = "nanosyned") -> None:
+    """Set the help text for the --config argument in the parser.
+
+    This is used to ensure the help text mentions the per-tool default path
+    rather than always being ./config.toml.
+    """
+    for action in parser._actions:
+        if action.dest == "config":
+            action.help = config_help(tool)
+            break
+
 
 #: Module-level aliases, so every existing call site reads the same as it
 #: did before: ``config.load_channel(path)``.
