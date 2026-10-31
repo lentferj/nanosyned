@@ -529,55 +529,66 @@ def check_restore(
     )
 
 
+#: How many rows the positive control may try before it concludes the
+#: mode's ``10`` is dead. The bench found one mix row the unit ignores
+#: (a 1-bit mix-effect switch) with the next row editable, so one silent
+#: row is not a dead mode.
+CONTROL_ROWS = 5
+
+
 def positive_control(
     device, buffer: Buffer, reference: bytes, rows: list[params.Param], *, settle: float
 ) -> None:
     """Prove both halves of the path before probing anything.
 
-    Sends the same ``10`` the probes send, reads the record back, and
-    requires the field to hold the value that was sent; then restores the
-    record and requires it byte-identical. Two failures, two meanings: a
-    control that moved nothing means this mode's ``10`` is dead (or the
-    table's address is wrong), and a run that went on would read silence
-    as a verdict; a control that does not come back means no probe here
-    can be trusted. The first bench run proved the point -- it reported
-    ``restored`` after a probe that had moved nothing, because the
-    pre-flight compared an unchanged record with itself.
+    Tries up to :data:`CONTROL_ROWS` rows: for each, send the same ``10``
+    a probe would, read the record back, and require the field to hold
+    the value that was sent. A row that does not move is skipped -- one
+    unsupported row is not a dead mode, and the bench found exactly that
+    in the mix table -- and the first row that moves is restored and
+    required to come back byte-identical. If none of them moves, the
+    mode's ``10`` is dead (or every address is wrong) and the run stops
+    before it can read silence as a verdict. The first bench run is the
+    reason the second half exists: it reported ``restored`` after a probe
+    that had moved nothing, because the pre-flight compared an unchanged
+    record with itself.
     """
     if not rows:
         return
-    row = rows[0]
     reference = bytes(reference)
-    stored = rec.decode_bit_field(reference, row)
-    value = flip_value(row, stored)
-    target = params.stored_for(row, value)
+    for row in rows[:CONTROL_ROWS]:
+        stored = rec.decode_bit_field(reference, row)
+        value = flip_value(row, stored)
+        target = params.stored_for(row, value)
 
-    device.midi_edit(
-        params.MODE_NUMBERS[buffer.mode],
-        row.function,
-        row.page,
-        row.pot,
-        value,
-        sound=row.sound or 0,
-        channel=row.channel or 0,
+        device.midi_edit(
+            params.MODE_NUMBERS[buffer.mode],
+            row.function,
+            row.page,
+            row.pot,
+            value,
+            sound=row.sound or 0,
+            channel=row.channel or 0,
+        )
+        time.sleep(settle)
+        after = buffer.read(device)
+        if rec.decode_bit_field(after, row) != target:
+            continue  # this row is not editable here; try the next
+        buffer.restore_row(device, row, reference)
+        read_back = buffer.read(device)
+        if read_back != reference:
+            raise ProbeAborted(
+                "the positive control's restore did not verify: the "
+                "record did not come back byte for byte",
+                preflight=True,
+            )
+        return
+    raise ProbeAborted(
+        f"the positive control did not move in the first {CONTROL_ROWS} "
+        f"row(s): this mode's 10 is dead, or every table address tried "
+        f"is wrong, and a probe could not tell the two apart",
+        preflight=True,
     )
-    time.sleep(settle)
-    after = buffer.read(device)
-    if rec.decode_bit_field(after, row) != target:
-        raise ProbeAborted(
-            "the positive control did not move: this mode's 10 is dead, "
-            "or the table's address is wrong, and a probe could not tell "
-            "the two apart",
-            preflight=True,
-        )
-    buffer.restore_row(device, row, reference)
-    read_back = buffer.read(device)
-    if read_back != reference:
-        raise ProbeAborted(
-            "the positive control's restore did not verify: the record "
-            "did not come back byte for byte",
-            preflight=True,
-        )
 
 
 def probe(  # noqa: PLR0913 -- the three positional and three reference kwargs

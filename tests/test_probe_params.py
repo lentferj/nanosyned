@@ -672,7 +672,26 @@ class TestPositiveControl:
         with pytest.raises(tool.ProbeAborted) as excinfo:
             tool.run(firmware, GLOBAL_THREE, settle=0.0)
         assert excinfo.value.preflight is True
-        assert len(firmware.edits) == 1
+        # The control tries each row it may use, and no probe follows.
+        assert len(firmware.edits) == len(GLOBAL_THREE)
+
+    def test_one_ignored_row_does_not_condemn_the_mode(self):
+        """The bench found a mix row the unit ignores; the next one works."""
+
+        class FirstIgnored(Firmware):
+            def midi_edit(self, *args, **kwargs):
+                if not self.edits:
+                    # Record the frame but change nothing, like the unit
+                    # on an address it does not edit.
+                    self.sent.append(m.midi_edit(*args, **kwargs))
+                    self.edits.append((*args[:5], 0, 0))
+                    return
+                super().midi_edit(*args, **kwargs)
+
+        firmware = FirstIgnored()
+        probes = tool.run(firmware, GLOBAL_THREE, settle=0.0)
+        assert [p.verdict for p in probes] == ["confirmed"] * len(GLOBAL_THREE)
+        assert bytes(firmware.global_record) == bytes(rec.GLOBAL_BYTES)
 
     def test_dead_load_restore_fails_preflight(self):
         class DeadLoad(Firmware):

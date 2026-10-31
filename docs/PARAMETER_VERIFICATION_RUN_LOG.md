@@ -134,12 +134,57 @@ restore.
 - Global: byte 1 back at 7; record restored (`56b9d94fcb91`).
 - **No store (`00`) was ever sent.** No user slot changed.
 
+## V05–V08 — the verification runs
+
+Run with the corrected harness (per-mode buffers, positive control) on
+2026-10-31/11-01:
+
+| mode | rows probed | confirmed | other |
+|---|---|---|---|
+| Global | 17 | **10** | 7 no-change |
+| Mix | 31 | **27** | 1 no-change, 1 mismatch, 1 partial |
+| Program | 41 | **38** | 2 mismatch, 1 partial |
+| Effects | 0 | 0 | blocked (the mode is inert) |
+
+**75 rows confirmed in total.** The harness's control passed in every
+mode after it learned to try several rows: the first mix row ("Mix
+effect MIDI program change", a 1-bit switch) is ignored by the unit,
+and the second ("Mix effect chan") is not. One silent row is not a dead
+mode.
+
+The non-confirmed rows are findings, and none was promoted:
+
+- **Mix:** "Channel 1 program number" changed bits outside its 7-bit
+  field (`mismatch`); "Channel 1 pitch octave" moved but read back
+  something other than the value sent (`partial`); "Channel 1 program
+  type" did not move (`no-change`).
+- **Program:** "Keyboard / drum mode" and "Sample group" changed bits
+  outside their fields (`mismatch`) -- the mode bit switches the whole
+  sound table, which is the expected shape of that one; "Sample number"
+  moved but did not read back the value sent (`partial`).
+- **Global:** the seven no-change rows are the model-specific ones
+  (`QS6,7,8 only`, `QSR only`) and General MIDI / A-D controller mode,
+  which this firmware does not expose through `10`.
+
+The stride spot check passed: "Sound pitch semitone" on **sound 2**
+changed exactly its field at bit 795, and "Channel 1 volume" on
+**channel 2** changed exactly its field at bit 156. The template rows
+were probed on sound 1 / channel 1, and the fixed strides are real.
+
+## V11 — promotion
+
+The 75 confirmed rows carry `verified=True` and the law the probe
+showed: 10 Global (`twos`), 27 Mix, 38 Program (`raw` or `offset`).
+Effects have none. The remaining 103 rows are still transcriptions and
+stay read-only in the editors. `docs/PARAMETER_NUMBERS.md` is
+regenerated and shows the per-mode counts.
+
 ## Remaining
 
-- Redesign the probe harness for the per-mode buffers and the positive
-  control.
-- Fix `mix_dump_request(100)` / `read_mix(100)`.
-- Fix the post-load gap in the write methods (and re-run the hardware
-  write test).
-- Re-run V05–V08 with the corrected harness; effects stay unverified.
-- Then V11–V22 as planned.
+- V09/V10: the multi-value law pass and the sibling-bit pass for the
+  rows above; the mismatch and partial rows need their addresses or
+  widths re-read from the spec before anything is promoted.
+- Effects stay unverified: the unit ignored every effects `10`.
+- V14–V22: the CLI `params`/`param-get`, the TUI parameter editor, the
+  extended mix editor, verified-only enforcement in the effects/global
+  editors, the hardware parameter test, docs, review.

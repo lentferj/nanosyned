@@ -157,7 +157,7 @@ which is the claim that actually matters.
 
 ## 9. The parameter tables are transcribed, not verified
 
-**Status:** open, plan written.
+**Status:** partly verified on the unit: 75 of 178 rows confirmed.
 
 The 178 rows in `nano/params.py` are transcribed from Alesis's published
 QS specification, not verified against this firmware: Global 20, Mix
@@ -174,8 +174,11 @@ law; rows that cannot be verified stay read-only.
 
 **Blocked on:** the bench run (V05-V10 in the plan).
 
-**Bench update, 2026-10-31:** the first run is on the unit and recorded in
+**Bench update, 2026-11-01:** recorded in
 `docs/PARAMETER_VERIFICATION_RUN_LOG.md`. `10` lands for Global and Mix,
 and for Program only in Mix mode (per-channel edit buffers); Effects `10`
-is inert on this firmware. No row was promoted. A record-sized load also
-needs a ~0.4 s settle (`RECORD_GAP`), which the write path now has.
+is inert on this firmware. The confirmed rows are now `verified=True`:
+10 Global, 27 Mix, 38 Program, 0 Effects. The mismatches, partials and
+no-change rows stay unverified; the multi-value and sibling-bit passes
+(V09/V10) are still to do. A record-sized load needs a ~0.4 s settle
+(`RECORD_GAP`), which the write path now has.

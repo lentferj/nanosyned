@@ -51,19 +51,38 @@ _TABLE_SIZES = {
 }
 
 
-class TestEveryRowStartsUnverified:
-    def test_no_row_claims_a_verification_it_has_not_had(self):
-        """The whole table is transcribed, so the whole table starts ``False``."""
-        for row in params.PARAMS:
-            assert row.verified is False, row.label
-            assert row.value_law == "", row.label
+class TestTheVerifiedSet:
+    """What the bench confirmed, and what it did not.
 
-    def test_the_helper_therefore_returns_nothing(self):
-        assert params.verified_params() == ()
-        assert params.verified_params("global") == ()
-        assert params.verified_params("mix") == ()
-        assert params.verified_params("program") == ()
+    The 2026-11-01 run promoted the confirmed rows only; the mismatches,
+    partials and no-change rows stay unverified. A row with no law is a
+    transcription, and the editors must treat it as read-only.
+    """
+
+    def test_a_verified_row_names_a_law_and_the_rest_name_none(self):
+        for row in params.PARAMS:
+            if row.verified:
+                assert row.value_law in params.VALUE_LAWS[1:], row.label
+            else:
+                assert row.value_law == "", row.label
+
+    def test_the_helper_returns_exactly_the_verified_rows(self):
+        promoted = params.verified_params()
+        assert promoted, "the bench confirmed rows; none are marked"
+        assert all(row.verified for row in promoted)
+        for mode in ("global", "mix", "program", "effects"):
+            expected = tuple(
+                row for row in params.PARAMS if row.verified and row.mode == mode
+            )
+            assert params.verified_params(mode) == expected, mode
+        # The unit ignored every effects 10, so no effects row may be here.
         assert params.verified_params("effects") == ()
+
+    def test_every_verified_row_has_an_address_and_a_law(self):
+        """Completeness: a promoted row is editable, so it needs both."""
+        for row in params.verified_params():
+            assert row.function >= 0 and row.page >= 0 and row.pot >= 0, row.label
+            assert params.law_of(row) == row.value_law, row.label
 
     def test_the_helper_is_exported(self):
         """A reader outside the module must find it where ``__all__`` says."""
@@ -90,7 +109,8 @@ class TestEveryRowStartsUnverified:
 
 class TestTheStatusIsACopyNotAMutation:
     def test_replace_produces_a_verified_row_and_leaves_the_original(self):
-        original = params.GLOBAL_PARAMS[1]
+        original = params.EFFECT_COMMON_PARAMS[0]
+        assert original.verified is False
         promoted = dataclasses.replace(original, verified=True, value_law="twos")
 
         assert promoted.verified is True
@@ -124,11 +144,14 @@ class TestTheStatusIsACopyNotAMutation:
         assert original.value_law == ""
         # ``Param`` is frozen and the tables are tuples, so the table row
         # is the very object the promotion copied from.
-        assert params.GLOBAL_PARAMS[1] is original
-        assert params.GLOBAL_PARAMS[1].verified is False
+        assert params.EFFECT_COMMON_PARAMS[0] is original
+        assert params.EFFECT_COMMON_PARAMS[0].verified is False
 
     def test_the_copy_is_a_param_and_equal_where_it_was_not_asked_to_change(self):
-        original = params.MIX_CHANNEL_PARAMS[4]
+        # A row the bench did not confirm (the program type did not
+        # move), so the copy really changes.
+        original = params.MIX_CHANNEL_PARAMS[1]
+        assert original.verified is False
         promoted = dataclasses.replace(original, verified=True, value_law="offset")
         assert isinstance(promoted, params.Param)
         assert promoted != original  # the status is part of equality
@@ -144,7 +167,8 @@ class TestTheLookupsStillFindTheirRows:
         assert [row.label for row in rows] == ["Pitch transpose*"]
         assert (rows[0].mode, rows[0].low, rows[0].high) == ("global", -12, 12)
         assert rows[0].bit_address == 8
-        assert rows[0].verified is False
+        assert rows[0].verified is True
+        assert rows[0].value_law == "twos"
 
     def test_at_finds_a_mix_channel_row(self):
         row = params.at("mix", 1, 0, 0)
@@ -199,13 +223,15 @@ class TestTheTablesAreTheOnesDocumented:
     def test_the_status_fields_default_in_a_positional_construction(self):
         """Every existing row is built from nine positionals plus keywords."""
         row = params.Param("global", 0, 0, 2, "Pitch transpose*", -12, 12, 8, 8)
-        assert row == params.GLOBAL_PARAMS[1]
         assert row.offset == 0
         assert row.choices == ()
         assert row.sound is None
         assert row.channel is None
+        # A fresh row is unverified; the promoted table row is not.
         assert row.verified is False
         assert row.value_law == ""
+        assert params.GLOBAL_PARAMS[1].verified is True
+        assert params.GLOBAL_PARAMS[1].value_law == "twos"
         # ``span`` and ``clamp`` are the two accessors the editors use.
         assert row.span == 24
         assert row.clamp(99) == 12
