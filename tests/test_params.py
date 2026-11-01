@@ -180,7 +180,7 @@ class TestTheLookupsStillFindTheirRows:
         row = params.at("program", 3, 0, 0)
         assert row is not None
         assert row.label == "Sound pitch semitone"
-        assert (row.low, row.high, row.offset) == (-24, 25, -24)
+        assert (row.low, row.high, row.offset) == (-24, 24, -24)
 
     def test_at_still_selects_an_effect_send_by_sound(self):
         row = params.at("effects", 0, 0, 0, sound=1)
@@ -291,10 +291,12 @@ class TestTheValueLaws:
         assert params.value_from_stored(transpose, 244) == -12
         assert params.value_from_stored(transpose, 12) == 12
 
+        # The unit's measured top is 24, not the spec's offset + Limit
+        # (25); the table carries the measured value.
         assert params.stored_for(semitone, -24) == 0
-        assert params.stored_for(semitone, 25) == 49
+        assert params.stored_for(semitone, 24) == 48
         assert params.value_from_stored(semitone, 0) == -24
-        assert params.value_from_stored(semitone, 49) == 25
+        assert params.value_from_stored(semitone, 48) == 24
 
         assert params.stored_for(octave, -2) == 0
         assert params.value_from_stored(octave, 0) == -2

@@ -191,18 +191,20 @@ stores **one less than the documented top**.
 | Sound pitch detune and the other mod rows (11) | 100 | 99 |
 
 The address and the value law are right -- every other value agrees --
-but the documented top is not honoured. Those 13 rows were **demoted**:
-`verified=False`, no law, still in the table, not offered by an editor.
-The specification's Limit may be an exclusive bound for these signed
-fields; re-transcribing their top from the unit is the open follow-up.
+but the documented top is not honoured: the specification's Limit is
+one past the unit's top on these signed rows. The 13 were re-checked
+at the corrected top and at their low and 0 (all 39 value probes
+matched), then the table's `high` was set to the measured value -- 99
+for the mod/detune rows, 12 for the mix semitone, 24 for the program
+semitone -- and they were re-promoted.
 
-## V11 — promotion, then the law pass's corrections
+## V11 — promotion
 
-The 75 flip-confirmed rows were first promoted with the law the probe
-showed (10 Global `twos`, 27 Mix, 38 Program `raw`/`offset`). The
-V09/V10 pass then demoted the 13 above, leaving **62 verified rows**:
-10 Global, 26 Mix, 26 Program, 0 Effects. The remaining 116 rows are
-still transcriptions and stay read-only in the editors.
+All **75 flip-confirmed rows** carry `verified=True` and the law the
+probe showed: 10 Global `twos`, 27 Mix, 38 Program `raw`/`offset`. The
+13 corrected tops above are part of that count; every one was re-probed
+at its new top before promotion. Effects have none. The remaining 103
+rows are still transcriptions and stay read-only in the editors.
 `docs/PARAMETER_NUMBERS.md` is regenerated and shows the per-mode
 counts.
 
@@ -236,10 +238,8 @@ generated map, and the record gap.
 
 ## Remaining
 
-- Re-transcribe the top of the 13 demoted signed fields (the unit stores
-  limit - 1), then re-probe them; the mismatch and partial rows need
-  their addresses or widths re-read from the spec before anything is
-  promoted.
+- The mismatch and partial rows need their addresses or widths re-read
+  from the spec before anything is promoted.
 - Effects stay unverified: the unit ignored every effects `10`.
 - V14–V22: the CLI `params`/`param-get`, the TUI parameter editor, the
   extended mix editor, verified-only enforcement in the effects/global
@@ -247,8 +247,10 @@ generated map, and the record gap.
 
 ## State at the end of this pass
 
-- **62 of 178 rows verified**: 10 Global, 26 Mix, 26 Program, 0 Effects.
-  The other 116 are transcriptions and are read-only.
+- **75 of 178 rows verified**: 10 Global, 27 Mix, 38 Program, 0 Effects.
+  The other 103 are transcriptions and are read-only. The 13 signed
+  rows whose spec Limit sat one past the unit's top now carry the
+  measured top (99/12/24) and were re-probed there.
 - The probe tool reads and restores each mode's own record, with a
   positive control that proves the `10` moved it and the restore brought
   it back. It never sends `00`, `0A`, or `0E` below 100.
