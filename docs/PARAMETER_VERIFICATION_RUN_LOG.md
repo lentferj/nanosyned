@@ -244,3 +244,32 @@ generated map, and the record gap.
 - V14–V22: the CLI `params`/`param-get`, the TUI parameter editor, the
   extended mix editor, verified-only enforcement in the effects/global
   editors, the hardware parameter test, docs, review.
+
+## State at the end of this pass
+
+- **62 of 178 rows verified**: 10 Global, 26 Mix, 26 Program, 0 Effects.
+  The other 116 are transcriptions and are read-only.
+- The probe tool reads and restores each mode's own record, with a
+  positive control that proves the `10` moved it and the restore brought
+  it back. It never sends `00`, `0A`, or `0E` below 100.
+- `nanocli params [MODE]` lists the table offline with the status and
+  law; `nanocli set` refuses an unverified or unknown row, and reads its
+  confirmation from the right buffer per mode.
+- The effects editor no longer offers the ten deleted spares (their bytes
+  stay in the record).
+- `tests/test_hardware_params.py` probes one verified row per mode on
+  the unit, behind `NANOSYNED_HW_PARAMS=1`.
+- `make check` is green (547 passed, 8 skipped; ruff, mypy, vulture,
+  deptry, detect-secrets, pip-audit clean).
+
+**Open:**
+
+- Re-transcribe the top of the 13 demoted signed fields (the unit stores
+  limit - 1), then re-probe them.
+- The mismatch and partial rows (mix program number, mix pitch octave,
+  program mode switch, sample group/number) need their addresses or
+  widths re-read from the spec.
+- Effects remain unverified: the unit ignored every effects `10`.
+- The TUI parameter editor, the extended mix editor and the program
+  sound editor (V15-V17) are not built; the `10` path is available
+  through `nanocli set`.
