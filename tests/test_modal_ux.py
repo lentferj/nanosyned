@@ -306,7 +306,7 @@ class TestEditorScreen:
 
 
 class TestTheMixScreen:
-    """The mix editor: escape, q, and the arm-then-fire store.
+    """The mix editor: escape, q, and the gate-then-arm-then-store path.
 
     Guarded rather than omitted: a screen that appears in
     ``nanosyned.screens`` or ``nanosyned.scan`` without a dismissal test
@@ -315,6 +315,8 @@ class TestTheMixScreen:
 
     ``MixScreen`` takes the record it edits, so this class reads mix 0
     from the demo before pushing it, exactly as the app's picker does.
+    A screen pushed without the app's gate still has one of its own, so
+    ``w`` arms it here just as it does in the app.
     """
 
     @staticmethod
@@ -357,7 +359,7 @@ class TestTheMixScreen:
                 seen.append,
             )
             await _until(pilot, lambda: isinstance(app.screen, mix_screen))
-            await pilot.press("w")
+            await pilot.press("s")
             await pilot.pause()
             assert seen == []
             assert isinstance(app.screen, mix_screen)
@@ -384,9 +386,11 @@ class TestTheMixScreen:
             app.screen.query_one(Input).value = str(wanted)
             await pilot.press("enter")
             await _until(pilot, lambda: isinstance(app.screen, mix_screen))
+            await pilot.press("w")
+            await pilot.pause()
             await pilot.press("a")
             await pilot.pause()
-            await pilot.press("w")
+            await pilot.press("s")
             await _until(pilot, lambda: bool(seen))
             assert seen[0] is not None
             assert mixview.get_channel_field(seen[0], 0, "program") == wanted

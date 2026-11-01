@@ -1634,6 +1634,7 @@ class NanosynedApp(App):
                 record,
                 number=number,
                 replaced=rec.mix_name(record).rstrip(),
+                gate=self._write_gate,
             ),
             lambda new: self._mix_edited(number, new),
         )
@@ -1866,7 +1867,7 @@ class NanosynedApp(App):
     def _open_global(self, record: bytes) -> None:
         """Show the global modal. Main thread; sends nothing."""
         self.push_screen(
-            GlobalScreen(GlobalEditor(record)),
+            GlobalScreen(GlobalEditor(record), gate=self._write_gate),
             self._global_edited,
         )
 
@@ -2013,7 +2014,7 @@ class NanosynedApp(App):
     def _open_effects(self, record: bytes) -> None:
         """Show the effects modal. Main thread; sends nothing."""
         self.push_screen(
-            EffectsScreen(EffectsEditor(record)),
+            EffectsScreen(EffectsEditor(record), gate=self._write_gate),
             self._effects_edited,
         )
 

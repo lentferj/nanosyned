@@ -303,9 +303,10 @@ class MixScreen(ModalScreen[bytes | None]):
     the old choice of fields.
 
     Editing is staged: a value lands in a working copy. Nothing reaches the
-    unit until ``a`` arms and ``w`` -- a different key -- fires. Anything
-    that moves the cursor or opens a dialog disarms, because the thing being
-    replaced is a mix somebody made.
+    unit until ``w`` arms the shared write gate, ``a`` arms this store and
+    ``s`` -- a different key -- fires it. Anything that moves the cursor or
+    opens a dialog disarms, because the thing being replaced is a mix
+    somebody made.
     """
 
     DEFAULT_CSS = """
@@ -327,10 +328,11 @@ class MixScreen(ModalScreen[bytes | None]):
         Binding("escape", "close", "Cancel"),
         Binding("q", "close", "Cancel"),
         Binding("e", "edit_field", "Edit field"),
+        Binding("w", "toggle_gate", "Write gate"),
         Binding("a", "arm", "Arm"),
-        # Deliberately not Enter, and deliberately not next to "a": the fire
-        # key should not be the one a finger is resting on after arming.
-        Binding("w", "fire", "Store"),
+        # Deliberately not Enter: the fire key should not be the one a finger
+        # is resting on after arming.
+        Binding("s", "fire", "Store"),
         Binding("r", "revert", "Revert"),
     ]
 
@@ -349,9 +351,10 @@ class MixScreen(ModalScreen[bytes | None]):
         self._number = number
         #: The name the mix held when it was read -- what firing destroys.
         self._replaced = replaced
-        #: The app's fence, when it hands one over. The screen only shows a
-        #: refusal; it never sends, so the a/w pair is still the only path.
-        self._gate = gate
+        #: The app's fence. A screen pushed without one still gets a gate of
+        #: its own, so `w` means the same thing everywhere; the app checks
+        #: its own gate again when the record comes back.
+        self._gate = gate if gate is not None else EditGate()
         self._expanded: set[int] = set()
         self._row_keys: list[str] = []
         self._armed = False
@@ -359,7 +362,7 @@ class MixScreen(ModalScreen[bytes | None]):
 
     @property
     def armed(self) -> bool:
-        """Whether `w` would store right now."""
+        """Whether `s` would store right now."""
         return self._armed
 
     @property
@@ -378,8 +381,8 @@ class MixScreen(ModalScreen[bytes | None]):
             yield DataTable(id="mix-table", cursor_type="row")
             yield Static("", id="mix-status")
             yield Static(
-                "[dim]↑↓ pick · enter expand/edit · a arm · w store · "
-                "r revert · esc cancel[/dim]",
+                "[dim]↑↓ pick · enter expand/edit · w gate · a arm · "
+                "s store · r revert · esc cancel[/dim]",
                 id="mix-note",
                 classes="note",
             )
@@ -466,10 +469,10 @@ class MixScreen(ModalScreen[bytes | None]):
             return (
                 f"[b]ARMED[/b] — about to store mix {self._number:03d}, "
                 f"replacing {literal(self._replaced) or '(blank)'}.\n"
-                f"[b]w[/b] stores it and reads it back; its current contents "
+                f"[b]s[/b] stores it and reads it back; its current contents "
                 f"are saved to a backup file first. Any other key disarms."
             )
-        return "[dim]nothing is sent until a then w[/dim]"
+        return "[dim]nothing is sent until w arms the gate and a arms the store[/dim]"
 
     def _say(self, sentence: str, *, refused: bool = False) -> None:
         """Put one sentence in the screen's own status row."""
@@ -480,8 +483,8 @@ class MixScreen(ModalScreen[bytes | None]):
         self._armed = False
 
     def _gate_refusal(self) -> str | None:
-        """The gate's refusal, when one was handed over, else ``None``."""
-        return None if self._gate is None else self._gate.check()
+        """The gate's refusal, or ``None`` when a store may go ahead."""
+        return self._gate.check()
 
     def _edit(self, channel: int, label: str) -> None:
         """Open the value prompt for one field of one part."""
@@ -584,9 +587,10 @@ class MixScreen(ModalScreen[bytes | None]):
 
         The status row promises this, and it is the point of a second key:
         a hand that comes down on the keyboard after arming cancels the
-        store instead of firing it.
+        store instead of firing it. ``w`` is one of those keys too: it
+        toggles the gate and disarms the store.
         """
-        if self._armed and event.key != "w":
+        if self._armed and event.key != "s":
             self._disarm()
             self._refresh()
 
@@ -595,6 +599,12 @@ class MixScreen(ModalScreen[bytes | None]):
         if event.data_table.id == "mix-table" and self._armed:
             self._disarm()
             self._refresh()
+
+    def action_toggle_gate(self) -> None:
+        """Flip the app's shared write gate; the flip itself sends nothing."""
+        armed = self._gate.toggle()
+        self._notice = "write gate ARMED" if armed else "write gate locked"
+        self._refresh()
 
     def action_arm(self) -> None:
         refusal = self._gate_refusal()
@@ -617,12 +627,13 @@ class MixScreen(ModalScreen[bytes | None]):
 
     def action_fire(self) -> None:
         """Return the record, but only while armed. A second look first."""
+        if not self._armed:
+            self._say("press a to arm the store", refused=True)
+            return
         refusal = self._gate_refusal()
         if refusal is not None:
+            self._disarm()
             self._say(refusal, refused=True)
-            return
-        if not self._armed:
-            self._say("not armed — press a first", refused=True)
             return
         if self._working == self._original:
             self._disarm()
@@ -671,8 +682,9 @@ class GlobalScreen(ModalScreen[bytes | None]):
     documented to ignore while reporting success would be a lie about what
     happened.
 
-    As in :class:`MixScreen`, nothing is sent until `a` then `w`, and
-    anything that moves the cursor or opens a dialog disarms.
+    As in :class:`MixScreen`, nothing is sent until `w` arms the shared
+    write gate, `a` arms the store and `s` fires it, and anything that moves
+    the cursor or opens a dialog disarms.
     """
 
     DEFAULT_CSS = """
@@ -694,20 +706,25 @@ class GlobalScreen(ModalScreen[bytes | None]):
         Binding("escape", "close", "Cancel"),
         Binding("q", "close", "Cancel"),
         Binding("e", "edit_value", "Edit"),
+        Binding("w", "toggle_gate", "Write gate"),
         Binding("a", "arm", "Arm"),
-        Binding("w", "fire", "Store"),
+        Binding("s", "fire", "Store"),
         Binding("r", "revert", "Revert"),
     ]
 
-    def __init__(self, editor: GlobalEditor) -> None:
+    def __init__(self, editor: GlobalEditor, *, gate: EditGate | None = None) -> None:
         super().__init__()
         self._editor = editor
+        #: The app's fence. A screen pushed without one still gets a gate of
+        #: its own, so `w` means the same thing everywhere; the app checks
+        #: its own gate again when the record comes back.
+        self._gate = gate if gate is not None else EditGate()
         self._armed = False
         self._notice = ""
 
     @property
     def armed(self) -> bool:
-        """Whether `w` would store right now."""
+        """Whether `s` would store right now."""
         return self._armed
 
     @property
@@ -721,10 +738,10 @@ class GlobalScreen(ModalScreen[bytes | None]):
             yield DataTable(id="global-table", cursor_type="row")
             yield Static("", id="global-status")
             yield Static(
-                "[dim]↑↓ pick a setting · e edit · a arm · w store · "
-                "r revert · esc cancel. Rows with a note are shown but not "
-                "written -- the spec marks them for another model, or as "
-                "deleted parameters.[/dim]",
+                "[dim]↑↓ pick a setting · e edit · w gate · a arm · "
+                "s store · r revert · esc cancel. Rows with a note are shown "
+                "but not written -- the spec marks them for another model, "
+                "or as deleted parameters.[/dim]",
                 id="global-note",
                 classes="note",
             )
@@ -776,11 +793,11 @@ class GlobalScreen(ModalScreen[bytes | None]):
             return (
                 "[b]ARMED[/b] — about to store the global settings. There is "
                 "one set: this replaces what the whole instrument is "
-                "configured with.\n[b]w[/b] stores it and reads it back; "
+                "configured with.\n[b]s[/b] stores it and reads it back; "
                 "its current contents are saved to a backup file first. Any "
                 "other key disarms."
             )
-        return "[dim]nothing is sent until a then w[/dim]"
+        return "[dim]nothing is sent until w arms the gate and a arms the store[/dim]"
 
     def _say(self, sentence: str, *, refused: bool = False) -> None:
         self._notice = f"[b]refused:[/b] {literal(sentence)}" if refused else sentence
@@ -788,6 +805,10 @@ class GlobalScreen(ModalScreen[bytes | None]):
 
     def _disarm(self) -> None:
         self._armed = False
+
+    def _gate_refusal(self) -> str | None:
+        """The gate's refusal, or ``None`` when a store may go ahead."""
+        return self._gate.check()
 
     def _cursor_row(self) -> int:
         table = self.query_one("#global-table", DataTable)
@@ -832,8 +853,12 @@ class GlobalScreen(ModalScreen[bytes | None]):
         self._say(f"{row.param.label}: {clamped}{note} — not stored yet")
 
     def on_key(self, event) -> None:
-        """Any key but the fire key is a change of mind while armed."""
-        if self._armed and event.key != "w":
+        """Any key but the fire key is a change of mind while armed.
+
+        ``w`` is one of those keys too: it toggles the gate and disarms the
+        store.
+        """
+        if self._armed and event.key != "s":
             self._disarm()
             self._refresh()
 
@@ -843,7 +868,17 @@ class GlobalScreen(ModalScreen[bytes | None]):
             self._disarm()
             self._refresh()
 
+    def action_toggle_gate(self) -> None:
+        """Flip the app's shared write gate; the flip itself sends nothing."""
+        armed = self._gate.toggle()
+        self._notice = "write gate ARMED" if armed else "write gate locked"
+        self._refresh()
+
     def action_arm(self) -> None:
+        refusal = self._gate_refusal()
+        if refusal is not None:
+            self._say(refusal, refused=True)
+            return
         if not self._editor.dirty:
             self._say("nothing to store — no setting has been changed", refused=True)
             return
@@ -861,7 +896,12 @@ class GlobalScreen(ModalScreen[bytes | None]):
     def action_fire(self) -> None:
         """Return the record, but only while armed. A second look first."""
         if not self._armed:
-            self._say("not armed — press a first", refused=True)
+            self._say("press a to arm the store", refused=True)
+            return
+        refusal = self._gate_refusal()
+        if refusal is not None:
+            self._disarm()
+            self._say(refusal, refused=True)
             return
         if not self._editor.dirty:
             self._disarm()
@@ -887,8 +927,9 @@ class EffectsScreen(ModalScreen[bytes | None]):
     the whole record, and writing a value the unit is documented to ignore
     while reporting success would be a lie about what happened.
 
-    As in :class:`GlobalScreen`, nothing is sent until `a` then `w`, and
-    anything that moves the cursor or opens a dialog disarms.
+    As in :class:`GlobalScreen`, nothing is sent until `w` arms the shared
+    write gate, `a` arms the store and `s` fires it, and anything that moves
+    the cursor or opens a dialog disarms.
     """
 
     DEFAULT_CSS = """
@@ -910,20 +951,25 @@ class EffectsScreen(ModalScreen[bytes | None]):
         Binding("escape", "close", "Cancel"),
         Binding("q", "close", "Cancel"),
         Binding("e", "edit_value", "Edit"),
+        Binding("w", "toggle_gate", "Write gate"),
         Binding("a", "arm", "Arm"),
-        Binding("w", "fire", "Store"),
+        Binding("s", "fire", "Store"),
         Binding("r", "revert", "Revert"),
     ]
 
-    def __init__(self, editor: EffectsEditor) -> None:
+    def __init__(self, editor: EffectsEditor, *, gate: EditGate | None = None) -> None:
         super().__init__()
         self._editor = editor
+        #: The app's fence. A screen pushed without one still gets a gate of
+        #: its own, so `w` means the same thing everywhere; the app checks
+        #: its own gate again when the record comes back.
+        self._gate = gate if gate is not None else EditGate()
         self._armed = False
         self._notice = ""
 
     @property
     def armed(self) -> bool:
-        """Whether `w` would store right now."""
+        """Whether `s` would store right now."""
         return self._armed
 
     @property
@@ -937,8 +983,8 @@ class EffectsScreen(ModalScreen[bytes | None]):
             yield DataTable(id="effects-table", cursor_type="row")
             yield Static("", id="effects-status")
             yield Static(
-                "[dim]↑↓ pick a setting · e edit · a arm · w store · "
-                "r revert · esc cancel. Deleted parameters are not "
+                "[dim]↑↓ pick a setting · e edit · w gate · a arm · "
+                "s store · r revert · esc cancel. Deleted parameters are not "
                 "shown -- the spec keeps their bytes for older software -- "
                 "and rows the dump does not carry are shown but not "
                 "written.[/dim]",
@@ -993,11 +1039,11 @@ class EffectsScreen(ModalScreen[bytes | None]):
             return (
                 "[b]ARMED[/b] — about to store the effects settings. There is "
                 "one set: this replaces what the whole instrument is "
-                "configured with.\n[b]w[/b] stores it and reads it back; "
+                "configured with.\n[b]s[/b] stores it and reads it back; "
                 "its current contents are saved to a backup file first. Any "
                 "other key disarms."
             )
-        return "[dim]nothing is sent until a then w[/dim]"
+        return "[dim]nothing is sent until w arms the gate and a arms the store[/dim]"
 
     def _say(self, sentence: str, *, refused: bool = False) -> None:
         self._notice = f"[b]refused:[/b] {literal(sentence)}" if refused else sentence
@@ -1005,6 +1051,10 @@ class EffectsScreen(ModalScreen[bytes | None]):
 
     def _disarm(self) -> None:
         self._armed = False
+
+    def _gate_refusal(self) -> str | None:
+        """The gate's refusal, or ``None`` when a store may go ahead."""
+        return self._gate.check()
 
     def _cursor_row(self) -> int:
         table = self.query_one("#effects-table", DataTable)
@@ -1049,8 +1099,12 @@ class EffectsScreen(ModalScreen[bytes | None]):
         self._say(f"{row.param.label}: {clamped}{note} — not stored yet")
 
     def on_key(self, event) -> None:
-        """Any key but the fire key is a change of mind while armed."""
-        if self._armed and event.key != "w":
+        """Any key but the fire key is a change of mind while armed.
+
+        ``w`` is one of those keys too: it toggles the gate and disarms the
+        store.
+        """
+        if self._armed and event.key != "s":
             self._disarm()
             self._refresh()
 
@@ -1060,7 +1114,17 @@ class EffectsScreen(ModalScreen[bytes | None]):
             self._disarm()
             self._refresh()
 
+    def action_toggle_gate(self) -> None:
+        """Flip the app's shared write gate; the flip itself sends nothing."""
+        armed = self._gate.toggle()
+        self._notice = "write gate ARMED" if armed else "write gate locked"
+        self._refresh()
+
     def action_arm(self) -> None:
+        refusal = self._gate_refusal()
+        if refusal is not None:
+            self._say(refusal, refused=True)
+            return
         if not self._editor.dirty:
             self._say("nothing to store — no setting has been changed", refused=True)
             return
@@ -1078,7 +1142,12 @@ class EffectsScreen(ModalScreen[bytes | None]):
     def action_fire(self) -> None:
         """Return the record, but only while armed. A second look first."""
         if not self._armed:
-            self._say("not armed — press a first", refused=True)
+            self._say("press a to arm the store", refused=True)
+            return
+        refusal = self._gate_refusal()
+        if refusal is not None:
+            self._disarm()
+            self._say(refusal, refused=True)
             return
         if not self._editor.dirty:
             self._disarm()

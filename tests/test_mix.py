@@ -364,13 +364,19 @@ class TestMixStore(_AppCase):
             await pilot.press("a")
             await pilot.pause()
             assert app.screen.armed is True
-            # Any key but `w` is a change of mind, not a store.
+            # Any key but `s` is a change of mind, not a store.
             await pilot.press("x")
             await pilot.pause()
             assert app.screen.armed is False
+            await pilot.press("s")
+            await pilot.pause()
+            assert isinstance(app.screen, MixScreen)
+            assert "press a to arm the store" in str(
+                app.screen.query_one("#mix-status").content
+            )
             await pilot.press("a")
             await pilot.pause()
-            await pilot.press("w")
+            await pilot.press("s")
             await self._wait(pilot, lambda: len(app._undo_log) == 1)
             assert len(app.device.mix_writes) == 1
             assert app.device.mix_writes[0][0] == 7
@@ -424,9 +430,15 @@ class TestGlobalStore(_AppCase):
             await pilot.press("x")
             await pilot.pause()
             assert app.screen.armed is False
+            await pilot.press("s")
+            await pilot.pause()
+            assert isinstance(app.screen, GlobalScreen)
+            assert "press a to arm the store" in str(
+                app.screen.query_one("#global-status").content
+            )
             await pilot.press("a")
             await pilot.pause()
-            await pilot.press("w")
+            await pilot.press("s")
             await self._wait(pilot, lambda: len(app._undo_log) == 1)
 
             assert len(app.device.global_writes) == 1
