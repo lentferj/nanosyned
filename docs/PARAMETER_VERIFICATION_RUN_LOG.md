@@ -271,7 +271,9 @@ generated map, and the record gap.
 - The mismatch and partial rows (mix program number, mix pitch octave,
   program mode switch, sample group/number) need their addresses or
   widths re-read from the spec.
-- Effects remain unverified: the unit ignored every effects `10`.
+- Effects remain unverified: the unit ignored every effects `10`. The
+  plan to verify them at the record level (`09`/`08`, never `06`) is
+  `docs/EFFECTS_VERIFICATION_PLAN.md`.
 - The TUI parameter editor, the extended mix editor and the program
   sound editor (V15-V17) are not built; the `10` path is available
   through `nanocli set`.
