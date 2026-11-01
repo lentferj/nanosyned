@@ -173,13 +173,38 @@ changed exactly its field at bit 795, and "Channel 1 volume" on
 **channel 2** changed exactly its field at bit 156. The template rows
 were probed on sound 1 / channel 1, and the fixed strides are real.
 
-## V11 — promotion
+## V09/V10 — the multi-value and sibling-bit pass
 
-The 75 confirmed rows carry `verified=True` and the law the probe
-showed: 10 Global (`twos`), 27 Mix, 38 Program (`raw` or `offset`).
-Effects have none. The remaining 103 rows are still transcriptions and
-stay read-only in the editors. `docs/PARAMETER_NUMBERS.md` is
-regenerated and shows the per-mode counts.
+Every promoted row was probed again at up to three values (its low, its
+high, and a mid or signed one), each value diffed against the record
+immediately before it, with every changed bit required to stay inside
+the row's field and the field required to read back exactly what was
+sent. 201 of 214 value probes matched.
+
+The 13 that did not are all the same shape: on a signed field the unit
+stores **one less than the documented top**.
+
+| row | sent | read back |
+|---|---|---|
+| Channel 1 pitch semitone | 13 | 12 |
+| Sound pitch semitone | 25 | 24 |
+| Sound pitch detune and the other mod rows (11) | 100 | 99 |
+
+The address and the value law are right -- every other value agrees --
+but the documented top is not honoured. Those 13 rows were **demoted**:
+`verified=False`, no law, still in the table, not offered by an editor.
+The specification's Limit may be an exclusive bound for these signed
+fields; re-transcribing their top from the unit is the open follow-up.
+
+## V11 — promotion, then the law pass's corrections
+
+The 75 flip-confirmed rows were first promoted with the law the probe
+showed (10 Global `twos`, 27 Mix, 38 Program `raw`/`offset`). The
+V09/V10 pass then demoted the 13 above, leaving **62 verified rows**:
+10 Global, 26 Mix, 26 Program, 0 Effects. The remaining 116 rows are
+still transcriptions and stay read-only in the editors.
+`docs/PARAMETER_NUMBERS.md` is regenerated and shows the per-mode
+counts.
 
 ## Review (`opencode-go/glm-5.3-flash`)
 
@@ -211,9 +236,10 @@ generated map, and the record gap.
 
 ## Remaining
 
-- V09/V10: the multi-value law pass and the sibling-bit pass for the
-  rows above; the mismatch and partial rows need their addresses or
-  widths re-read from the spec before anything is promoted.
+- Re-transcribe the top of the 13 demoted signed fields (the unit stores
+  limit - 1), then re-probe them; the mismatch and partial rows need
+  their addresses or widths re-read from the spec before anything is
+  promoted.
 - Effects stay unverified: the unit ignored every effects `10`.
 - V14–V22: the CLI `params`/`param-get`, the TUI parameter editor, the
   extended mix editor, verified-only enforcement in the effects/global

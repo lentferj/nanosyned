@@ -359,10 +359,12 @@ confirmed against the instrument on the read side;
 `docs/RESOLUTION_NOTES.md` records which is which.
 
 The parameter tables behind these editors are transcribed from Alesis's
-published QS specification. **75 of the 178 rows have been confirmed on the
-unit** by a controlled before/after probe (10 Global, 27 Mix, 38 Program, 0
+published QS specification. **62 of the 178 rows have been confirmed on the
+unit** by a controlled before/after probe (10 Global, 26 Mix, 26 Program, 0
 Effects); the rest are still transcriptions, and the editors must treat them
-as read-only. A row becomes writable only after that probe confirms its
+as read-only. The multi-value pass also found the unit clamps the documented
+top of some signed fields by one, so those rows were demoted rather than
+left claiming more than was measured. A row becomes writable only after that probe confirms its
 offset and its value law, and the findings -- including the mix and program
 rows that did not confirm, and the Effects mode the unit ignores -- are in
 `docs/PARAMETER_VERIFICATION_RUN_LOG.md`. `.sqs` import remains a shared

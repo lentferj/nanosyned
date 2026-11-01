@@ -2,16 +2,16 @@
 
 Rows are transcribed from the published QS6/7/8/R specification. A row is writable only once a controlled before/after probe confirms its offset and value law.
 
-The map holds 178 rows across 4 modes; 75 of them are verified.
+The map holds 178 rows across 4 modes; 62 of them are verified.
 
 ## Summary
 
 | mode | rows | verified |
 | --- | --- | --- |
 | global | 20 | 10 |
-| mix | 33 | 27 |
+| mix | 33 | 26 |
 | effects | 81 | 0 |
-| program | 44 | 38 |
+| program | 44 | 26 |
 
 ## global
 
@@ -53,7 +53,7 @@ The map holds 178 rows across 4 modes; 75 of them are verified.
 | 2 | 0 | 0 | Channel 1 effect level | 7 | 104 | 0..100 | 0 | raw | yes |
 | 2 | 0 | 1 | Channel 1 effect bus | 3 | 111 | 0..4 | 0 | raw | yes |
 | 3 | 0 | 0 | Channel 1 pitch octave | 3 | 114 | -2..3 | -2 | (inferred) | no |
-| 3 | 0 | 2 | Channel 1 pitch semitone | 5 | 117 | -12..13 | -12 | offset | yes |
+| 3 | 0 | 2 | Channel 1 pitch semitone | 5 | 117 | -12..13 | -12 | (inferred) | no |
 | 4 | 0 | 0 | Channel 1 keyboard low note | 7 | 122 | 0..127 | 0 | raw | yes |
 | 4 | 0 | 1 | Channel 1 keyboard high note | 7 | 129 | 0..127 | 0 | raw | yes |
 | 4 | 1 | 0 | Channel 1 midi in on/off | 1 | 136 | 0..1 | 0 | raw | yes |
@@ -176,26 +176,26 @@ The map holds 178 rows across 4 modes; 75 of them are verified.
 | 1 | 0 | 2 | Sound output | 2 | 24 | 0..2 | 0 | raw | yes |
 | 2 | 0 | 0 | Sound effect level | 7 | 26 | 0..99 | 0 | raw | yes |
 | 2 | 0 | 1 | Sound effect bus | 2 | 33 | 0..3 | 0 | raw | yes |
-| 3 | 0 | 0 | Sound pitch semitone | 6 | 35 | -24..25 | -24 | offset | yes |
-| 3 | 0 | 2 | Sound pitch detune | 8 | 41 | -99..100 | -99 | offset | yes |
+| 3 | 0 | 0 | Sound pitch semitone | 6 | 35 | -24..25 | -24 | (inferred) | no |
+| 3 | 0 | 2 | Sound pitch detune | 8 | 41 | -99..100 | -99 | (inferred) | no |
 | 3 | 0 | 3 | Sound pitch detune type | 1 | 49 | 0..1 | 0 | raw | yes |
 | 3 | 1 | 0 | Sound pitch wheel mod | 4 | 50 | 0..12 | 0 | raw | yes |
-| 3 | 1 | 1 | Sound pitch aftertouch mod | 8 | 54 | -99..100 | -99 | offset | yes |
-| 3 | 1 | 2 | Sound pitch lfo mod | 8 | 62 | -99..100 | -99 | offset | yes |
-| 3 | 1 | 3 | Sound pitch env mod | 8 | 70 | -99..100 | -99 | offset | yes |
+| 3 | 1 | 1 | Sound pitch aftertouch mod | 8 | 54 | -99..100 | -99 | (inferred) | no |
+| 3 | 1 | 2 | Sound pitch lfo mod | 8 | 62 | -99..100 | -99 | (inferred) | no |
+| 3 | 1 | 3 | Sound pitch env mod | 8 | 70 | -99..100 | -99 | (inferred) | no |
 | 3 | 2 | 0 | Sound portamento mode | 2 | 78 | 0..2 | 0 | raw | yes |
 | 3 | 2 | 2 | Sound portamento rate | 7 | 80 | 0..99 | 0 | raw | yes |
 | 3 | 2 | 3 | Sound key mode | 2 | 87 | 0..2 | 0 | raw | yes |
 | 4 | 0 | 0 | Sound filter frequency | 7 | 89 | 0..99 | 0 | raw | yes |
 | 4 | 0 | 1 | Sound filter keyboard track | 1 | 96 | 0..1 | 0 | raw | yes |
-| 4 | 0 | 3 | Sound filter velocity mod | 8 | 97 | -99..100 | -99 | offset | yes |
-| 4 | 1 | 0 | Sound filter pitch wheel mod | 8 | 105 | -99..100 | -99 | offset | yes |
-| 4 | 1 | 1 | Sound filter aftertouch mod | 8 | 113 | -99..100 | -99 | offset | yes |
-| 4 | 1 | 2 | Sound filter lfo mod | 8 | 121 | -99..100 | -99 | offset | yes |
-| 4 | 1 | 3 | Sound filter env mod | 8 | 129 | -99..100 | -99 | offset | yes |
+| 4 | 0 | 3 | Sound filter velocity mod | 8 | 97 | -99..100 | -99 | (inferred) | no |
+| 4 | 1 | 0 | Sound filter pitch wheel mod | 8 | 105 | -99..100 | -99 | (inferred) | no |
+| 4 | 1 | 1 | Sound filter aftertouch mod | 8 | 113 | -99..100 | -99 | (inferred) | no |
+| 4 | 1 | 2 | Sound filter lfo mod | 8 | 121 | -99..100 | -99 | (inferred) | no |
+| 4 | 1 | 3 | Sound filter env mod | 8 | 129 | -99..100 | -99 | (inferred) | no |
 | 5 | 0 | 0 | Sound amp velocity curve | 4 | 137 | 0..12 | 0 | raw | yes |
-| 5 | 0 | 1 | Sound amp aftertouch mod | 8 | 141 | -99..100 | -99 | offset | yes |
-| 5 | 0 | 2 | Sound amp alfo mod | 8 | 149 | -99..100 | -99 | offset | yes |
+| 5 | 0 | 1 | Sound amp aftertouch mod | 8 | 141 | -99..100 | -99 | (inferred) | no |
+| 5 | 0 | 2 | Sound amp alfo mod | 8 | 149 | -99..100 | -99 | (inferred) | no |
 | 6 | 0 | 0 | Sound low note limit | 7 | 157 | 0..127 | 0 | raw | yes |
 | 6 | 0 | 1 | Sound high note limit | 7 | 164 | 0..127 | 0 | raw | yes |
 | 6 | 0 | 2 | Sound overlap | 7 | 171 | 0..99 | 0 | raw | yes |

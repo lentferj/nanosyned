@@ -65,7 +65,7 @@ tool = _tool()
 CASES = {
     "global": "Pitch transpose",
     "mix": "Mix name digit 0",
-    "program": "Sound pitch semitone",
+    "program": "Sound volume",
 }
 
 

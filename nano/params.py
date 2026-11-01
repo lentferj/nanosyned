@@ -450,8 +450,6 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
         5,
         117,
         offset=-12,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "mix",
@@ -936,8 +934,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         6,
         35,
         offset=-24,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -950,8 +946,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         41,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -990,8 +984,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         54,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1004,8 +996,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         62,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1018,8 +1008,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         70,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1097,8 +1085,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         97,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1111,8 +1097,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         105,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1125,8 +1109,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         113,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1139,8 +1121,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         121,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1153,8 +1133,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         129,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1180,8 +1158,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         141,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
@@ -1194,8 +1170,6 @@ KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
         8,
         149,
         offset=-99,
-        verified=True,
-        value_law="offset",
     ),
     Param(
         "program",
