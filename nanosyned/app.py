@@ -75,6 +75,7 @@ from nanosyned.editor import (
     MixEditRecord,
     ProgramEditor,
 )
+from nanosyned.paramsui import ParameterScreen
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
 from nanosyned.screens import (
     EditorScreen,
@@ -171,6 +172,7 @@ WRITE_HINTS: tuple[str, ...] = (
     "e edit program",
     "x effects",
     "m mix",
+    "p parameters",
     "M program/mix mode",
     "g global",
     "w write gate",
@@ -253,6 +255,7 @@ class NanosynedApp(App):
         Binding("e", "edit_program", "Edit program"),
         Binding("x", "edit_effects", "Effects"),
         Binding("m", "open_mix", "Mix"),
+        Binding("p", "edit_parameter", "Parameters"),
         Binding("M", "mode_select", "Program/Mix mode"),
         Binding("g", "edit_global", "Global"),
         Binding("w", "toggle_write_gate", "Write gate"),
@@ -1973,6 +1976,12 @@ class NanosynedApp(App):
             self.notify_status("busy", refused=True)
             return
         self._effects_read_worker()
+
+    def action_edit_parameter(self) -> None:
+        """Open the verified-parameter editor for direct ``10`` edits."""
+        self.push_screen(
+            ParameterScreen(self.device, self._write_gate, channel=self._channel())
+        )
 
     @work(thread=True)
     def _effects_read_worker(self) -> None:
