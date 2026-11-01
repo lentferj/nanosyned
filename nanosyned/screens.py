@@ -46,7 +46,13 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Label, Static
 
 from nanosyned import mix as mixview
-from nanosyned.editor import EffectsEditor, GlobalEditor, GlobalRow, ProgramEditor
+from nanosyned.editor import (
+    EditGate,
+    EffectsEditor,
+    GlobalEditor,
+    GlobalRow,
+    ProgramEditor,
+)
 from nanosyned.text import literal
 from vinsynlib.ui.confirm import ConfirmScreen
 from vinsynlib.ui.hints import KeyHints as _LibraryKeyHints
@@ -277,21 +283,27 @@ class EditorScreen(ModalScreen[bytes | None]):
 
 
 class MixScreen(ModalScreen[bytes | None]):
-    """One mix's sixteen channels, and an arm-then-fire store.
+    """One mix's sixteen parts, expandable into every channel field.
 
     Returns the new 138-byte mix record when the user fires, ``None`` when
     they close without storing. **It sends nothing itself** -- there is no
     device and no clock in this screen -- so the app can claim its exchange
     on the main thread, back the mix up, write it and read it back in the
-    one worker every other MIDI action uses.
+    one worker every other MIDI action uses. The store is the whole record,
+    never one field, so the fence stays the app's single write path.
 
     The browser's banks are programs, not mixes, so this screen is reached
     through the app's mix picker (`m`): the mix number is chosen there, and
     this screen only ever edits the record it was handed.
 
-    Editing is staged: ``e`` asks which of the three fields to edit and then
-    for its value, and the change lands in a working copy. Nothing reaches
-    the unit until ``a`` arms and ``w`` -- a different key -- fires. Anything
+    A part is one row, collapsed to ``prog N · vol N · pan N``. Enter
+    expands it into all :data:`nanosyned.mix.FIELDS`; Enter on the part
+    again collapses it, and Enter on a field opens the value prompt. `e`
+    is an alias for editing a field and, on a collapsed part, still offers
+    the old choice of fields.
+
+    Editing is staged: a value lands in a working copy. Nothing reaches the
+    unit until ``a`` arms and ``w`` -- a different key -- fires. Anything
     that moves the cursor or opens a dialog disarms, because the thing being
     replaced is a mix somebody made.
     """
@@ -322,7 +334,14 @@ class MixScreen(ModalScreen[bytes | None]):
         Binding("r", "revert", "Revert"),
     ]
 
-    def __init__(self, record: bytes, *, number: int, replaced: str) -> None:
+    def __init__(
+        self,
+        record: bytes,
+        *,
+        number: int,
+        replaced: str,
+        gate: EditGate | None = None,
+    ) -> None:
         super().__init__()
         self._original = bytes(record)
         self._working = bytes(record)
@@ -330,6 +349,11 @@ class MixScreen(ModalScreen[bytes | None]):
         self._number = number
         #: The name the mix held when it was read -- what firing destroys.
         self._replaced = replaced
+        #: The app's fence, when it hands one over. The screen only shows a
+        #: refusal; it never sends, so the a/w pair is still the only path.
+        self._gate = gate
+        self._expanded: set[int] = set()
+        self._row_keys: list[str] = []
         self._armed = False
         self._notice = ""
 
@@ -343,14 +367,19 @@ class MixScreen(ModalScreen[bytes | None]):
         """The working copy, as firing would return it."""
         return self._working
 
+    @property
+    def expanded(self) -> frozenset[int]:
+        """The parts whose fields are currently shown, zero-based."""
+        return frozenset(self._expanded)
+
     def compose(self) -> ComposeResult:
         with Vertical(id="mix-dialog"):
             yield Label("", id="mix-title")
             yield DataTable(id="mix-table", cursor_type="row")
             yield Static("", id="mix-status")
             yield Static(
-                "[dim]↑↓ pick a channel · e edit program/volume/pan · "
-                "a arm · w store · r revert · esc cancel[/dim]",
+                "[dim]↑↓ pick · enter expand/edit · a arm · w store · "
+                "r revert · esc cancel[/dim]",
                 id="mix-note",
                 classes="note",
             )
@@ -358,30 +387,65 @@ class MixScreen(ModalScreen[bytes | None]):
     def on_mount(self) -> None:
         table = self.query_one("#mix-table", DataTable)
         for label, key in (
-            ("ch", "ch"),
-            ("program", "program"),
-            ("volume", "volume"),
-            ("pan", "pan"),
-            ("enable", "enable"),
+            ("part / field", "item"),
+            ("value", "value"),
+            ("range", "range"),
         ):
             table.add_column(label, key=key)
         self._fill()
+        table.focus()
 
-    def _fill(self) -> None:
-        """Redraw the table from the working copy, keeping the cursor row."""
+    def _summary(self, channel: mixview.MixChannel) -> str:
+        """One line for a collapsed part: the three values the old pane showed."""
+        return (
+            f"prog {_shown(channel.program)} · "
+            f"vol {_shown(channel.volume)} · "
+            f"pan {_shown(channel.pan)}"
+        )
+
+    def _cursor_key(self) -> str | None:
+        """The key of the row under the cursor, or ``None``."""
         table = self.query_one("#mix-table", DataTable)
-        row = table.cursor_row or 0
+        row = table.cursor_row
+        if row is None or not 0 <= row < len(self._row_keys):
+            return None
+        return self._row_keys[row]
+
+    def _fill(self, keep: str | None = None) -> None:
+        """Redraw from the working copy, keeping the named row under the cursor."""
+        table = self.query_one("#mix-table", DataTable)
+        old_row = table.cursor_row or 0
+        if keep is None:
+            keep = self._cursor_key()
         table.clear()
+        self._row_keys = []
         for channel in mixview.channels(self._working):
+            number = channel.channel
+            part_key = f"part:{number}"
+            expanded = number in self._expanded
             table.add_row(
-                str(channel.channel + 1),
-                _shown(channel.program),
-                _shown(channel.volume),
-                _shown(channel.pan),
-                _shown(None if channel.enable is None else int(channel.enable)),
-                key=str(channel.channel),
+                f"PART {number + 1}",
+                self._summary(channel),
+                "expanded" if expanded else "collapsed",
+                key=part_key,
             )
+            self._row_keys.append(part_key)
+            if not expanded:
+                continue
+            for label in mixview.FIELDS:
+                param = mixview.param_for(number, label)
+                value = mixview.get_channel_field(self._working, number, label)
+                table.add_row(
+                    label,
+                    _shown(value),
+                    f"{param.low}..{param.high}" if param is not None else "read-only",
+                    key=f"field:{number}:{label}",
+                )
+                self._row_keys.append(f"field:{number}:{label}")
         if table.row_count:
+            row = old_row
+            if keep in self._row_keys:
+                row = self._row_keys.index(keep)
             table.move_cursor(row=min(row, table.row_count - 1))
         self._refresh()
 
@@ -415,15 +479,39 @@ class MixScreen(ModalScreen[bytes | None]):
     def _disarm(self) -> None:
         self._armed = False
 
-    def _cursor_row(self) -> int:
-        table = self.query_one("#mix-table", DataTable)
-        last = len(mixview.channels(self._working)) - 1
-        return min(max(table.cursor_row or 0, 0), last)
+    def _gate_refusal(self) -> str | None:
+        """The gate's refusal, when one was handed over, else ``None``."""
+        return None if self._gate is None else self._gate.check()
 
-    def action_edit_field(self) -> None:
-        """Choose a field, then type its value. Typing is a change of mind."""
+    def _edit(self, channel: int, label: str) -> None:
+        """Open the value prompt for one field of one part."""
         self._disarm()
         self._notice = ""
+        param = mixview.param_for(channel, label)
+        if param is None:
+            self._say(
+                f"the parameter table has no {label} row for channel {channel + 1}",
+                refused=True,
+            )
+            return
+        current = mixview.get_channel_field(self._working, channel, label)
+        self.app.push_screen(
+            PromptScreen(
+                _mix_prompt(channel, label, param),
+                "" if current is None else str(current),
+            ),
+            lambda text: self._typed(channel, label, text),
+        )
+
+    def action_edit_field(self) -> None:
+        """Edit the row under the cursor, or choose a field of a part."""
+        self._disarm()
+        self._notice = ""
+        key = self._cursor_key()
+        if key is not None and key.startswith("field:"):
+            _, channel, label = key.split(":", 2)
+            self._edit(int(channel), label)
+            return
         row = self._cursor_row()
         self.app.push_screen(
             ChoiceScreen(
@@ -435,48 +523,61 @@ class MixScreen(ModalScreen[bytes | None]):
             lambda choice: self._field_chosen(row, choice),
         )
 
+    def _cursor_row(self) -> int:
+        """The part the cursor is on (or whose field it is on), zero-based."""
+        key = self._cursor_key()
+        if key is not None and key.startswith("field:"):
+            return int(key.split(":", 2)[1])
+        if key is not None and key.startswith("part:"):
+            return int(key.split(":", 1)[1])
+        return max(0, min(self.query_one("#mix-table", DataTable).cursor_row or 0, 15))
+
     def _field_chosen(self, row: int, choice: int | None) -> None:
         if choice is None:
             self._refresh()
             return
-        label = mixview.FIELDS[choice]
-        param = mixview.param_for(row, label)
-        if param is None:
-            self._say(
-                f"the parameter table has no {label} row for channel {row + 1}",
-                refused=True,
-            )
-            return
-        current = mixview.get_channel_field(self._working, row, label)
-        self.app.push_screen(
-            PromptScreen(
-                f"Channel {row + 1} {label} ({param.low}-{param.high}):",
-                "" if current is None else str(current),
-            ),
-            lambda text: self._typed(row, label, text),
-        )
+        self._edit(row, mixview.FIELDS[choice])
 
-    def _typed(self, row: int, label: str, text: str | None) -> None:
+    def _typed(self, channel: int, label: str, text: str | None) -> None:
         if text is None:
             self._refresh()
             return
-        try:
-            value = int(text.strip())
-        except ValueError:
-            self._say(f"{text!r} is not a number", refused=True)
-            return
-        param = mixview.param_for(row, label)
-        if param is None:  # pragma: no cover -- _field_chosen refused it
+        param = mixview.param_for(channel, label)
+        if param is None:  # pragma: no cover -- _edit refused it
             self._say(
-                f"the parameter table has no {label} row for channel {row + 1}",
+                f"the parameter table has no {label} row for channel {channel + 1}",
                 refused=True,
             )
             return
+        value = _value_from_text(param, text)
+        if value is None:
+            self._say(f"{text!r} is not a number or a choice", refused=True)
+            return
         clamped = param.clamp(value)
-        self._working = mixview.set_channel_field(self._working, row, label, value)
-        self._fill()
+        self._notice = ""
+        self._working = mixview.set_channel_field(self._working, channel, label, value)
+        self._fill(keep=f"field:{channel}:{label}")
         note = " (clamped)" if clamped != value else ""
-        self._say(f"channel {row + 1} {label}: {clamped}{note} — not stored yet")
+        self._say(f"channel {channel + 1} {label}: {clamped}{note} — not stored yet")
+
+    def on_data_table_row_selected(self, event) -> None:
+        """Enter expands or collapses a part, or edits the field it is on."""
+        if event.data_table.id != "mix-table":
+            return
+        key = event.row_key.value
+        if key is None:
+            return
+        key = str(key)
+        if key.startswith("part:"):
+            channel = int(key.split(":", 1)[1])
+            if channel in self._expanded:
+                self._expanded.remove(channel)
+            else:
+                self._expanded.add(channel)
+            self._fill(keep=key)
+        elif key.startswith("field:"):
+            _, field_channel, label = key.split(":", 2)
+            self._edit(int(field_channel), label)
 
     def on_key(self, event) -> None:
         """Any key but the fire key is a change of mind while armed.
@@ -496,6 +597,10 @@ class MixScreen(ModalScreen[bytes | None]):
             self._refresh()
 
     def action_arm(self) -> None:
+        refusal = self._gate_refusal()
+        if refusal is not None:
+            self._say(refusal, refused=True)
+            return
         if self._working == self._original:
             self._say("nothing to store — no channel has been changed", refused=True)
             return
@@ -512,6 +617,10 @@ class MixScreen(ModalScreen[bytes | None]):
 
     def action_fire(self) -> None:
         """Return the record, but only while armed. A second look first."""
+        refusal = self._gate_refusal()
+        if refusal is not None:
+            self._say(refusal, refused=True)
+            return
         if not self._armed:
             self._say("not armed — press a first", refused=True)
             return
@@ -525,6 +634,29 @@ class MixScreen(ModalScreen[bytes | None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+def _mix_prompt(channel: int, label: str, param) -> str:
+    """The value prompt's line: the range, and the names of any choices."""
+    title = f"Channel {channel + 1} {label} ({param.low}..{param.high}"
+    if param.choices:
+        named = ", ".join(f"{index}={name}" for index, name in enumerate(param.choices))
+        title += f"; {named}"
+    return title + "):"
+
+
+def _value_from_text(param, text: str) -> int | None:
+    """A typed value or choice name, or ``None`` when neither parses."""
+    text = text.strip()
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    wanted = text.casefold()
+    for index, name in enumerate(param.choices):
+        if name.casefold() == wanted:
+            return index
+    return None
 
 
 class GlobalScreen(ModalScreen[bytes | None]):

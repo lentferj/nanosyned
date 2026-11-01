@@ -31,6 +31,7 @@ from nano import params
 from nano import records as rec
 from nanosyned.screens import PromptScreen
 from nanosyned.text import literal
+from vinsynlib.ui.modals import ChoiceScreen
 
 
 class ParameterScreen(ModalScreen[None]):
@@ -52,6 +53,7 @@ class ParameterScreen(ModalScreen[None]):
         Binding("escape", "close", "Close"),
         Binding("q", "close", "Close"),
         Binding("e", "edit_value", "Edit"),
+        Binding("w", "toggle_gate", "Write gate"),
         Binding("m", "cycle_mode", "Mode"),
     ]
 
@@ -64,6 +66,7 @@ class ParameterScreen(ModalScreen[None]):
         self._mode = mode
         self._channel = channel
         self._notice = ""
+        self._values: list[int | None] = []
         self._params = [
             self._resolved(param) for param in params.verified_params(self._mode)
         ]
@@ -75,8 +78,8 @@ class ParameterScreen(ModalScreen[None]):
             yield DataTable(id="param-table", cursor_type="row")
             yield Static("", id="param-status")
             yield Static(
-                "[dim]↑↓ pick a parameter · e edit · m cycle global/mix/program "
-                "· esc close[/dim]",
+                "[dim]↑↓ pick a parameter · enter/e edit · w write gate · "
+                "m cycle global/mix/program · esc close[/dim]",
                 id="param-note",
                 classes="note",
             )
@@ -95,11 +98,13 @@ class ParameterScreen(ModalScreen[None]):
         for label, key in (
             ("parameter", "param"),
             ("value", "value"),
+            ("choice", "choice"),
             ("range", "range"),
             ("law", "law"),
         ):
             table.add_column(label, key=key)
         self._fill()
+        table.focus()
 
     def _resolved(self, param):
         """The row the ``10`` addresses, with the template's offset applied.
@@ -151,27 +156,32 @@ class ParameterScreen(ModalScreen[None]):
         self._params = [
             self._resolved(param) for param in params.verified_params(self._mode)
         ]
+        self._values = []
         try:
             record = self._read_record()
         except Exception as exc:
             self.query_one("#param-title", Label).update(
                 f"[b]Parameters ({self._mode})[/b]  [dim]{exc}[/dim]"
             )
+            self._values = [None] * len(self._params)
             if table.row_count:
                 table.move_cursor(row=min(row, table.row_count - 1))
             self._refresh_status()
             return
         for index, param in enumerate(self._params):
+            value: int | None = None
             try:
                 stored = rec.decode_bit_field(record, param)
                 value = params.value_from_stored(param, stored)
                 shown = str(value)
             except Exception:
                 shown = "-"
+            self._values.append(value)
             law = param.value_law or params.law_of(param)
             table.add_row(
                 literal(param.label),
                 shown,
+                self._choice_text(param, value),
                 f"{param.low}..{param.high}",
                 law,
                 key=str(index),
@@ -188,21 +198,53 @@ class ParameterScreen(ModalScreen[None]):
         status.update(
             self._notice
             if self._notice
-            else "[dim]m cycle mode · e edit · esc close[/dim]"
+            else "[dim]m cycle mode · enter/e edit · w write gate · esc close[/dim]"
         )
 
     def _say(self, sentence: str, *, refused: bool = False) -> None:
         self._notice = f"[b]refused:[/b] {literal(sentence)}" if refused else sentence
         self._refresh_status()
 
-    def _cursor_param(self):
-        table = self.query_one("#param-table", DataTable)
+    @staticmethod
+    def _choice_text(param, value: int | None) -> str:
+        """The row's named value for ``value``, or a dash.
+
+        Rows without names leave the column blank; a named row whose value
+        is outside its own list shows ``-`` rather than a guess.
+        """
+        if not param.choices:
+            return ""
+        if value is None or not 0 <= value < len(param.choices):
+            return "-"
+        return literal(param.choices[value])
+
+    @staticmethod
+    def _choice_value(param, text: str) -> int | None:
+        """Resolve a typed name or number to the row's value, or ``None``."""
+        typed = text.strip()
+        if not typed:
+            return None
+        for index, name in enumerate(param.choices):
+            if name.casefold() == typed.casefold():
+                return index
+        try:
+            number = int(typed)
+        except ValueError:
+            return None
+        return number if 0 <= number < len(param.choices) else None
+
+    def _cursor_row(self) -> int | None:
         if not self._params:
             return None
+        table = self.query_one("#param-table", DataTable)
         row = table.cursor_row or 0
         if row < 0 or row >= len(self._params):
             return None
-        return self._params[row]
+        return row
+
+    def _cursor_param(self):
+        row = self._cursor_row()
+        return None if row is None else self._params[row]
 
     def action_cycle_mode(self) -> None:
         modes = ["program", "mix", "global"]
@@ -214,16 +256,37 @@ class ParameterScreen(ModalScreen[None]):
         self._notice = f"showing {self._mode} buffer"
         self._fill()
 
+    def action_toggle_gate(self) -> None:
+        """Flip the app's shared write gate; the flip itself sends nothing."""
+        self._gate.toggle()
+        armed = self._gate.armed
+        self._notice = "write gate ARMED" if armed else "write gate locked"
+        self._refresh_status()
+
     def action_edit_value(self) -> None:
-        param = self._cursor_param()
-        if param is None:
+        row = self._cursor_row()
+        if row is None:
             return
+        param = self._params[row]
         refusal = self._gate.check()
         if refusal is not None:
             self._say(refusal, refused=True)
             return
         self._notice = ""
         self._refresh_status()
+        if param.choices:
+            current = self._values[row] if row < len(self._values) else None
+            if current is None or not 0 <= current < len(param.choices):
+                current = 0
+            self.app.push_screen(
+                ChoiceScreen(
+                    f"{param.label}: which value?",
+                    list(param.choices),
+                    current,
+                ),
+                lambda index: self._choice_picked(param, index),
+            )
+            return
         self.app.push_screen(
             PromptScreen(
                 f"{param.label} ({param.low}..{param.high}):",
@@ -232,15 +295,33 @@ class ParameterScreen(ModalScreen[None]):
             lambda text: self._typed(param, text),
         )
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Enter on a row edits it, down the same path as ``e``."""
+        self.action_edit_value()
+
+    def _choice_picked(self, param, index: int | None) -> None:
+        if index is None:
+            self._refresh_status()
+            return
+        self._typed(param, str(index))
+
     def _typed(self, param, text: str | None) -> None:
         if text is None:
             self._refresh_status()
             return
-        try:
-            value = int(str(text).strip())
-        except ValueError:
-            self._say(f"{text!r} is not a number", refused=True)
-            return
+        typed = str(text).strip()
+        if param.choices:
+            value = self._choice_value(param, typed)
+            if value is None:
+                names = ", ".join(param.choices)
+                self._say(f"{typed!r} is not one of: {names}", refused=True)
+                return
+        else:
+            try:
+                value = int(typed)
+            except ValueError:
+                self._say(f"{typed!r} is not a number", refused=True)
+                return
         refusal = self._gate.check()
         if refusal is not None:
             self._say(refusal, refused=True)

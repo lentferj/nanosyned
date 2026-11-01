@@ -52,6 +52,20 @@ def _mix(name: str = "Test Mix") -> bytes:
 
 
 class TestDecoding:
+    def test_every_named_field_is_a_row_of_the_table(self):
+        """All nineteen controls are named, and every control row is named."""
+        assert len(mixview.FIELDS) == len(mixview.FIELD_ADDRESSES) == 19
+        for label in mixview.FIELDS:
+            param = mixview.param_for(0, label)
+            assert param is not None, label
+            assert "Channel 1" in param.label
+        rows = {
+            (param.function, param.page, param.pot)
+            for param in params.MIX_CHANNEL_PARAMS
+            if param.function >= 0
+        }
+        assert set(mixview.FIELD_ADDRESSES.values()) == rows
+
     def test_a_synthetic_mix_decodes_channel_by_channel(self):
         record = _mix()
         for label, value in (
@@ -147,6 +161,34 @@ class TestEditing:
             changed = mixview.set_channel_field(record, 0, label, asked)
             assert mixview.get_channel_field(changed, 0, label) == expected, label
 
+    @pytest.mark.parametrize("channel", [0, rec.MIX_CHANNELS - 1])
+    def test_a_bipolar_field_and_a_switch_round_trip(self, channel):
+        """Pitch semitone uses the offset law; enable is a one-bit switch."""
+        record = _mix()
+        for label, value in (
+            ("pitch_semitone", -7),
+            ("pitch_octave", -2),
+            ("enable", 1),
+        ):
+            other = 0 if channel else rec.MIX_CHANNELS - 1
+            untouched = mixview.get_channel_field(record, other, label)
+            changed = mixview.set_channel_field(record, channel, label, value)
+            assert mixview.get_channel_field(changed, channel, label) == value
+            # No other channel's block moved.
+            assert mixview.get_channel_field(changed, other, label) == untouched
+
+    @pytest.mark.parametrize("channel", [0, rec.MIX_CHANNELS - 1])
+    def test_every_named_field_round_trips_at_both_limits(self, channel):
+        record = _mix()
+        for label in mixview.FIELDS:
+            param = mixview.param_for(channel, label)
+            assert param is not None, label
+            for value in (param.low, param.high):
+                changed = mixview.set_channel_field(record, channel, label, value)
+                assert mixview.get_channel_field(changed, channel, label) == value, (
+                    label
+                )
+
     def test_an_unknown_field_or_channel_is_a_caller_error(self):
         with pytest.raises(ValueError):
             mixview.set_channel_field(_mix(), 0, "reverb", 1)
@@ -154,6 +196,8 @@ class TestEditing:
             mixview.set_channel_field(_mix(), rec.MIX_CHANNELS, "program", 1)
         with pytest.raises(ValueError):
             mixview.param_for(0, "reverb")
+        with pytest.raises(ValueError):
+            mixview.get_channel_field(_mix(), 0, "reverb")
 
 
 class TestGlobalEditor:
@@ -308,7 +352,7 @@ class TestMixStore(_AppCase):
             # Stage volume 44 on channel 1 through the two small dialogs.
             await pilot.press("e")
             await self._wait(pilot, lambda: isinstance(app.screen, ChoiceScreen))
-            app.screen.dismiss(1)  # "volume"
+            app.screen.dismiss(mixview.FIELDS.index("volume"))
             await self._wait(pilot, lambda: isinstance(app.screen, PromptScreen))
             app.screen.query_one(Input).value = "44"
             await pilot.press("enter")
