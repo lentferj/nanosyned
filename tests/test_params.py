@@ -285,10 +285,27 @@ class TestTheNamedValues:
     def test_both_sends_name_the_three_delay_types(self):
         for label in ("Send 1 delay type", "Send 2 delay type"):
             assert _row(label).choices == (
-                "mono delay",
-                "stereo delay",
-                "ping-pong delay",
+                "Mono Delay",
+                "Stereo Delay",
+                "Ping-pong Delay",
             ), label
+
+    def test_the_pitch_types_name_the_six_and_the_three(self):
+        six = (
+            "Mono Chorus",
+            "Stereo Chorus",
+            "Mono Flange",
+            "Stereo Flange",
+            "Pitch Detune",
+            "Resonator",
+        )
+        assert _row("Send 1 pitch type").choices == six
+        assert _row("Send 2 pitch type").choices == six
+        assert _row("Send 3 pitch type").choices == (
+            "Mono Chorus",
+            "Mono Flange",
+            "Resonator",
+        )
 
     def test_the_switches_name_off_and_on(self):
         for label in (
@@ -307,8 +324,16 @@ class TestTheNamedValues:
     def test_the_keyboard_drum_mode_names_both_banks(self):
         assert _row("Keyboard / drum mode (=0)").choices == ("keyboard", "drum")
 
-    def test_the_reverb_type_has_no_names_in_any_source(self):
-        assert _row("Reverb type").choices == ()
+    def test_the_reverb_type_names_the_seven_types(self):
+        assert _row("Reverb type").choices == (
+            "Plate 1",
+            "Plate 2",
+            "Room",
+            "Hall",
+            "Large",
+            "Gate",
+            "Reverse",
+        )
 
 
 class TestTheValueLaws:

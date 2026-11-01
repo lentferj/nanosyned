@@ -170,14 +170,14 @@ class TestEffectsEditor:
         assert choice_text(enable, 0) == "off"
         assert choice_text(enable, 1) == "on"
 
-    def test_the_reverb_type_stays_numeric_with_no_choice(self):
+    def test_the_reverb_type_shows_the_name(self):
         editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))
         row = next(row for row in editor.rows() if row.param.label == "Reverb type")
-        assert row.param.choices == ()
         assert row.value == 0
-        # No source names it: the choice cell is blank, not a guessed name,
-        # and the 0..6 value stays numeric.
-        assert row.choice == ""
+        assert row.choice == "Plate 1"
+        assert editor.set_value("Reverb type", 6) is None
+        row = next(row for row in editor.rows() if row.param.label == "Reverb type")
+        assert row.choice == "Reverse"
 
     def test_set_value_refuses_a_deleted_parameter_and_keeps_the_record(self):
         editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))

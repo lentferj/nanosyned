@@ -141,9 +141,38 @@ _ON_OFF: Final[tuple[str, str]] = ("off", "on")
 #: The three delay types, in the spec's order ("If 17=0 (mono delay)", 1
 #: (stereo), 2 (ping-pong)). Both sends that have a type row use this list.
 _DELAY_TYPES: Final[tuple[str, str, str]] = (
-    "mono delay",
-    "stereo delay",
-    "ping-pong delay",
+    "Mono Delay",
+    "Stereo Delay",
+    "Ping-pong Delay",
+)
+
+#: The pitch types, from the QS6.1 Reference Manual's effect lists. The
+#: specification publishes the 0-5 range but names none of the values; the
+#: manual's Pitch 1/2 lists are the six below, and Pitch 3 offers three.
+_PITCH_TYPES: Final[tuple[str, ...]] = (
+    "Mono Chorus",
+    "Stereo Chorus",
+    "Mono Flange",
+    "Stereo Flange",
+    "Pitch Detune",
+    "Resonator",
+)
+_PITCH_TYPES_3: Final[tuple[str, ...]] = (
+    "Mono Chorus",
+    "Mono Flange",
+    "Resonator",
+)
+
+#: The reverb types, 0-6, from the QS6.1 Reference Manual ("Plate 1, Plate
+#: 2, Room, Hall, Large, Gate, Reverse"). The specification names none.
+_REVERB_TYPES: Final[tuple[str, ...]] = (
+    "Plate 1",
+    "Plate 2",
+    "Room",
+    "Hall",
+    "Large",
+    "Gate",
+    "Reverse",
 )
 
 
@@ -604,7 +633,8 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
     Param("mix", -1, -1, -1, "Channel 1 Spare", 0, 0, 1, 143),
 )
 
-# Neither the specification nor the manual names the reverb type: it stays numeric.
+# The reverb, pitch and delay types are named from the QS6.1 Reference
+# Manual; the specification gives their ranges but no names.
 EFFECT_COMMON_PARAMS: tuple[Param, ...] = (
     Param("effects", 2, 0, 0, "Effect spare (deleted parameter)", 0, 95, 7, 0),
     Param("effects", 2, 1, 0, "Effect spare (deleted parameter)", 0, 95, 7, 7),
@@ -644,7 +674,19 @@ EFFECT_COMMON_PARAMS: tuple[Param, ...] = (
 # share the addresses and differ only in interpretation. The spec's unnamed
 # filler spares are omitted for the same reason.
 EFFECT_CONFIG_0_PARAMS: tuple[Param, ...] = (
-    Param("effects", 0, 0, 0, "Send 1 pitch type", 0, 5, 3, 74, sound=0),
+    Param(
+        "effects",
+        0,
+        0,
+        0,
+        "Send 1 pitch type",
+        0,
+        5,
+        3,
+        74,
+        sound=0,
+        choices=_PITCH_TYPES,
+    ),
     Param("effects", 0, 1, 1, "Send 1 pitch speed", 0, 99, 7, 77, sound=0),
     Param("effects", 0, 1, 0, "Send 1 pitch shape", 0, 1, 1, 84, sound=0),
     Param("effects", 0, 1, 2, "Send 1 pitch depth", 0, 99, 7, 85, sound=0),
@@ -670,7 +712,9 @@ EFFECT_CONFIG_0_PARAMS: tuple[Param, ...] = (
     Param("effects", 4, 1, 2, "Send 1 delay 1ms", 0, 9, 4, 123, sound=0),
     Param("effects", 4, 1, 3, "Send 1 delay feedback", 0, 99, 7, 137, sound=0),
     Param("effects", 5, 0, 1, "Send 1 delay mix", 0, 99, 7, 151, sound=0),
-    Param("effects", 3, 1, 0, "Reverb type", 0, 6, 4, 158, sound=0),
+    Param(
+        "effects", 3, 1, 0, "Reverb type", 0, 6, 4, 158, sound=0, choices=_REVERB_TYPES
+    ),
     Param("effects", 3, 0, 0, "Send 1 reverb input 1", 0, 1, 1, 162, sound=0),
     Param("effects", 3, 0, 1, "Send 1 reverb input 2", 0, 2, 2, 163, sound=0),
     Param(
@@ -709,7 +753,19 @@ EFFECT_CONFIG_0_PARAMS: tuple[Param, ...] = (
     Param("effects", 3, 2, 2, "Send 1 reverb low decay", 0, 99, 7, 225, sound=0),
     Param("effects", 3, 2, 3, "Send 1 reverb high decay", 0, 99, 7, 232, sound=0),
     Param("effects", 5, 0, 2, "Send 1 reverb mix", 0, 99, 7, 239, sound=0),
-    Param("effects", 0, 0, 0, "Send 2 pitch type", 0, 5, 3, 246, sound=1),
+    Param(
+        "effects",
+        0,
+        0,
+        0,
+        "Send 2 pitch type",
+        0,
+        5,
+        3,
+        246,
+        sound=1,
+        choices=_PITCH_TYPES,
+    ),
     Param("effects", 0, 1, 1, "Send 2 pitch speed", 0, 99, 7, 249, sound=1),
     Param("effects", 0, 1, 0, "Send 2 pitch shape", 0, 1, 1, 256, sound=1),
     Param("effects", 0, 1, 2, "Send 2 pitch depth", 0, 99, 7, 257, sound=1),
@@ -751,7 +807,19 @@ EFFECT_CONFIG_0_PARAMS: tuple[Param, ...] = (
         sound=1,
     ),
     Param("effects", 3, 0, 3, "Send 2 reverb input level", 0, 99, 7, 341, sound=1),
-    Param("effects", 0, 0, 0, "Send 3 pitch type", 0, 2, 2, 348, sound=2),
+    Param(
+        "effects",
+        0,
+        0,
+        0,
+        "Send 3 pitch type",
+        0,
+        2,
+        2,
+        348,
+        sound=2,
+        choices=_PITCH_TYPES_3,
+    ),
     Param("effects", 0, 1, 1, "Send 3 pitch speed", 0, 99, 7, 350, sound=2),
     Param("effects", 0, 1, 0, "Send 3 pitch shape", 0, 1, 1, 357, sound=2),
     Param("effects", 0, 1, 2, "Send 3 pitch depth", 0, 99, 7, 358, sound=2),
