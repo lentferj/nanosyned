@@ -136,13 +136,15 @@ individual checks `strict` would enable — `disallow_untyped_defs`,
   open no ports.
 - **`make test-hardware` opens MIDI ports, runs one process at a time, and is
   never part of `make check`.** It is an opt-in suite: it runs
-  `pytest tests/test_hardware.py --hardware`, and without that flag every
-  test in the file skips — a skip with a reason, never a pass, so "the unit
-  was off" and "the offsets are wrong" cannot look the same green. Its one
-  write (a User program renamed and put back) sits behind a third gate,
-  `NANOSYNED_HW_WRITE=1`. `make check` contains no hardware step, so CI never
-  drives the unit. It runs serially — never two at once, never while another
-  session drives the unit.
+  `pytest tests/test_hardware.py tests/test_hardware_params.py --hardware`,
+  and without that flag every test in the files skips — a skip with a
+  reason, never a pass, so "the unit was off" and "the offsets are wrong"
+  cannot look the same green. Its one store (a User program renamed and put
+  back) sits behind a third gate, `NANOSYNED_HW_WRITE=1`; the parameter
+  probe (`tests/test_hardware_params.py`, one confirmed row per mode) sits
+  behind `NANOSYNED_HW_PARAMS=1` and stores nothing. `make check` contains
+  no hardware step, so CI never drives the unit. It runs serially — never
+  two at once, never while another session drives the unit.
 - The demo path (`--demo`) is the synthetic stand-in everywhere else.
 
 ## The detect-secrets trap

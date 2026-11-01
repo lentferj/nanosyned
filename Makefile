@@ -148,7 +148,8 @@ coverage: ## pytest with explicit coverage (addopts already enables it)
 # absent (a later task adds it).
 test-hardware: ## tests that need a real synth (opens MIDI ports)
 	@# Must be run alone: opening MIDI ports precludes concurrent access
-	$(PY) -m pytest tests/test_hardware.py --hardware -o addopts="" -p no:cacheprovider -rs -s
+	$(PY) -m pytest tests/test_hardware.py tests/test_hardware_params.py \
+		--hardware -o addopts="" -p no:cacheprovider -rs -s
 
 ## ---------------------------------------------------------------- ci ---
 
