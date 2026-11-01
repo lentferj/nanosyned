@@ -636,20 +636,41 @@ def _cmd_backup(device, args) -> int | None:
 # --- one parameter, through the direct edit ---------------------------------
 
 
-def _set_read_back(device, mode: str, param: params.Param | None, value: int) -> int:
-    """Read the working copy back where this mode has a request for it."""
+def _parameter_record(device, mode: str, channel: int) -> tuple[bytes, str] | None:
+    """Return (record, buffer_name) for the mode's read-back buffer."""
+    if mode == "global":
+        return device.read_global(), "the global dump"
+    if mode == "mix":
+        return device.read_mix(100), "the mix edit buffer (100)"
     if mode == "program":
-        record = device.read_edit_program()
-        where = "the edit buffer"
-    elif mode == "global":
-        record = device.read_global()
-        where = "the global dump"
-    else:
+        edit = channel + 1
+        return (
+            device.read_edit_program(edit=edit),
+            f"the channel {edit} program edit buffer",
+        )
+    if mode == "effects":
+        return None
+    return None
+
+
+def _set_read_back(
+    device, mode: str, param: params.Param | None, value: int, channel: int
+) -> int:
+    """Read the working copy back where this mode has a request for it."""
+    if mode == "effects":
+        print(
+            "read-back  the bench found the unit ignores an effects 10, so "
+            "nothing was verified"
+        )
+        return 0
+    record_info = _parameter_record(device, mode, channel)
+    if record_info is None:
         print(
             "read-back  this mode has no dump request this command can make; "
             "the edit was not verified (a MIDI Edit stores nothing)"
         )
         return 0
+    record, where = record_info
     if param is None:
         print(
             f"read-back  {where} answered ({len(record)} bytes); the address "
@@ -657,15 +678,8 @@ def _set_read_back(device, mode: str, param: params.Param | None, value: int) ->
         )
         return 0
     stored = rec.decode_bit_field(record, param)
-    if mode == "global":
-        # The global record is two's complement already; the message's value
-        # is the same bit pattern.
-        seen = stored
-        expected = value & ((1 << param.bits) - 1)
-    else:
-        # Program common and sound fields are offset binary.
-        seen = stored + param.offset
-        expected = value
+    seen = params.value_from_stored(param, stored)
+    expected = param.clamp(value)
     if seen != expected:
         print(
             f"read-back  {param.label} reads {seen}, not {expected} -- the "
@@ -804,6 +818,12 @@ def _cmd_set(device, args) -> int:
             "unit; the user asked for it (unverified)",
             file=sys.stderr,
         )
+    # Put the unit in the mode the row lives in: opcode 0D, a mode change only,
+    # no memory written. Program rows only land in Mix mode.
+    if mode in {"mix", "program"}:
+        device.mode_select(True)
+    elif mode == "global":
+        device.mode_select(False)
     message = m.midi_edit(
         number,
         args.function,
@@ -830,7 +850,7 @@ def _cmd_set(device, args) -> int:
         channel=channel,
     )
     print("sent     the working copy, not stored; the unit's memory is unchanged")
-    return _set_read_back(device, mode, param, args.value)
+    return _set_read_back(device, mode, param, args.value, channel)
 
 
 def _cmd_select(device, args) -> int:

@@ -746,13 +746,14 @@ class GlobalScreen(ModalScreen[bytes | None]):
 class EffectsScreen(ModalScreen[bytes | None]):
     """The unit's one effects record, table-driven, with an armed store.
 
-    Every documented row of :data:`nano.params.EFFECT_PARAMS` is shown, in
-    the spec's order, with its value, its range and -- where it must not be
-    written -- the reason. The rows the specification documents as deleted
-    parameters, or the rows a dump does not carry, are **shown but not
-    editable**: a store here writes the whole record, and writing a value the
-    unit is documented to ignore while reporting success would be a lie about
-    what happened.
+    Every documented row of :data:`nano.params.EFFECT_PARAMS` the editor
+    offers is shown, in the spec's order, with its value, its range and --
+    where it must not be written -- the reason. The deleted parameters the
+    specification keeps for older software are not offered at all -- the
+    editor hides them and :func:`set_value` refuses them -- while the rows
+    a dump does not carry are **shown but not editable**: a store here writes
+    the whole record, and writing a value the unit is documented to ignore
+    while reporting success would be a lie about what happened.
 
     As in :class:`GlobalScreen`, nothing is sent until `a` then `w`, and
     anything that moves the cursor or opens a dialog disarms.
@@ -805,9 +806,10 @@ class EffectsScreen(ModalScreen[bytes | None]):
             yield Static("", id="effects-status")
             yield Static(
                 "[dim]↑↓ pick a setting · e edit · a arm · w store · "
-                "r revert · esc cancel. Rows with a note are shown but not "
-                "written -- the spec marks some as deleted parameters, or "
-                "the dump does not carry them.[/dim]",
+                "r revert · esc cancel. Deleted parameters are not "
+                "shown -- the spec keeps their bytes for older software -- "
+                "and rows the dump does not carry are shown but not "
+                "written.[/dim]",
                 id="effects-note",
                 classes="note",
             )

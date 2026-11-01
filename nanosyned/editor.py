@@ -63,6 +63,13 @@ __all__ = [
 #: what to do next is a dead end.
 GATE_REFUSAL = "the write gate is locked; press w to arm it"
 
+#: The refusal for a row the specification keeps as a spare for older
+#: software. The editor offers none of those rows, and nothing may write
+#: the bytes they would have moved.
+DELETED_PARAMETER_REFUSAL = (
+    "that is a deleted parameter the specification keeps for compatibility"
+)
+
 
 class EditGate:
     """The fence in front of every write. Locked unless somebody arms it.
@@ -397,6 +404,11 @@ class EffectsEditor:
     The instrument is silent about whether it kept an effects store, exactly
     as it is about a program, so the app reads the record back and compares
     it; this class holds no device and sends nothing.
+
+    The deleted spares the specification keeps for older software are not
+    offered at all: they are not controls, so the editor's rows never touch
+    those bytes, and :func:`set_value` refuses a hidden row by name while
+    the record keeps carrying the bytes untouched.
     """
 
     def __init__(self, record: bytes) -> None:
@@ -435,7 +447,7 @@ class EffectsEditor:
     def refusal(self, param: p.Param) -> str | None:
         """Why a store must leave ``param`` alone, or ``None``."""
         if "deleted parameter" in param.label:
-            return "a deleted parameter the spec keeps only as a spare"
+            return DELETED_PARAMETER_REFUSAL
         if param.function < 0:
             return "the spec gives this row no direct-edit address"
         last_bit = param.bit_address + param.bits - 1
@@ -444,7 +456,13 @@ class EffectsEditor:
         return None
 
     def rows(self) -> list:
-        """Every documented effects parameter, in the spec's order."""
+        """The rows the editor offers, in the spec's order.
+
+        The deleted spares the specification keeps for older software are
+        not offered: they are not controls, so the view hides them rather
+        than list a row it cannot write. The record still carries their
+        bytes either way; only this list does not offer them.
+        """
         values = rec.effects_record_bytes(self._working)
         return [
             type(
@@ -458,6 +476,7 @@ class EffectsEditor:
                 },
             )
             for param in p.EFFECT_PARAMS
+            if "deleted parameter" not in param.label
         ]
 
     def set_value(self, label: str, value: int) -> str | None:
@@ -469,10 +488,17 @@ class EffectsEditor:
         carries a signed value. A refused row is refused here too, so a
         caller that reaches past the screen's own check still cannot
         write one.
+
+        A hidden row is a deleted parameter, and a deleted parameter is
+        not a control, so it is refused by name here rather than offered or
+        written: the specification keeps the bytes for older software, and
+        the store must leave them alone.
         """
         param = _EFFECT_BY_LABEL.get(label)
         if param is None:
             return f"{label!r} is not an effects parameter"
+        if "deleted parameter" in param.label:
+            return DELETED_PARAMETER_REFUSAL
         refusal = self.refusal(param)
         if refusal is not None:
             return f"{param.label} was not written: {refusal}"

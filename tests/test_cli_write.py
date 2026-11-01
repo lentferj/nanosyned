@@ -486,9 +486,39 @@ class EditingDemo(PersistentDemo):
     def __init__(self) -> None:
         super().__init__()
         self.buffer = bytearray(rec.PROGRAM_BYTES)
+        self.global_buffer = bytearray(rec.GLOBAL_BYTES)
+        self.mix_buffer = bytearray(rec.MIX_BYTES)
+        self.channel_buffers = {}
+        self.mode_selects = []
+        self.logs = []
 
-    def read_edit_program(self, *, timeout: float | None = None) -> bytes:
-        return bytes(self.buffer)
+    def read_edit_program(self, *, edit=0, timeout: float | None = None) -> bytes:
+        self.logs.append(("read_edit_program", edit))
+        if edit == 0:
+            return bytes(self.buffer)
+        if edit not in self.channel_buffers:
+            self.channel_buffers[edit] = bytearray(rec.PROGRAM_BYTES)
+        return bytes(self.channel_buffers[edit])
+
+    def read_global(self, *, timeout: float | None = None) -> bytes:
+        self.logs.append(("read_global",))
+        return bytes(self.global_buffer)
+
+    def read_mix(self, number, *, timeout: float | None = None) -> bytes:
+        assert number == 100
+        self.logs.append(("read_mix", number))
+        return bytes(self.mix_buffer)
+
+    def read_edit_program_buffer(self, edit=0):
+        if edit == 0:
+            return self.buffer
+        if edit not in self.channel_buffers:
+            self.channel_buffers[edit] = bytearray(rec.PROGRAM_BYTES)
+        return self.channel_buffers[edit]
+
+    def mode_select(self, mix_mode: bool) -> None:
+        self.mode_selects.append(mix_mode)
+        self.logs.append(("mode_select", mix_mode))
 
     def midi_edit(  # noqa: PLR0913 -- the protocol's seven fields
         self,
@@ -504,9 +534,33 @@ class EditingDemo(PersistentDemo):
     ) -> None:
         m.midi_edit(mode, function, page, pot, value, sound=sound, channel=channel)
         self.midi_edits.append((mode, function, page, pot, value, sound, channel))
-        param = params.at("program", function, page, pot, sound=sound)
-        if param is not None:
-            rec.encode_bit_field(self.buffer, param, value - param.offset)
+        if mode == 0:  # global
+            param = params.at("global", function, page, pot)
+            if param is not None:
+                # global fields stored directly as bits in global buffer
+                rec.encode_bit_field(
+                    self.global_buffer, param, value & ((1 << param.bits) - 1)
+                )
+            return
+        if mode == 1:  # mix
+            param = params.at("mix", function, page, pot, channel=channel)
+            if param is not None:
+                rec.encode_bit_field(
+                    self.mix_buffer, param, params.stored_for(param, param.clamp(value))
+                )
+            return
+        if mode == 2:  # program
+            param = params.at(
+                "program", function, page, pot, sound=sound, channel=channel
+            )
+            if param is not None:
+                target = self.read_edit_program_buffer(edit=channel + 1)
+                rec.encode_bit_field(
+                    target, param, params.stored_for(param, param.clamp(value))
+                )
+            return
+        if mode == 3:  # effects
+            return
 
 
 class TestSet:
@@ -534,6 +588,123 @@ class TestSet:
         assert "Sample group" in out
         assert "read-back  Sample group = 5" in out
         assert device.midi_edits == [(2, 0, 0, 0, 5, 0, 0)]
+        assert True in device.mode_selects  # program rows go through mix mode
+
+    def test_verified_global_row(self, config_path, monkeypatch, capsys):
+        device = use_device(monkeypatch, EditingDemo())
+        code, out, _ = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "set",
+            "global",
+            "0",
+            "0",
+            "2",
+            "0",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert ("mode_select", False) in device.logs
+        assert ("read_global",) in device.logs
+        assert "read-back" in out
+
+    def test_verified_mix_row(self, config_path, monkeypatch, capsys):
+        device = use_device(monkeypatch, EditingDemo())
+        # Channel 1 enable is verified in mix, raw law
+        code, out, _ = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "set",
+            "mix",
+            "0",
+            "0",
+            "3",
+            "1",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert ("mode_select", True) in device.logs
+        assert ("read_mix", 100) in device.logs
+        assert "Channel 1 enable = 1" in out
+
+    def test_verified_program_row_uses_channel_plus_one(
+        self, config_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, EditingDemo())
+        code, _out, _ = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "set",
+            "program",
+            "1",
+            "0",
+            "0",
+            "10",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert ("mode_select", True) in device.logs
+        assert any(
+            call[0] == "read_edit_program" and call[1] == 1 for call in device.logs
+        )
+
+    def test_effects_has_no_read_back(self, config_path, monkeypatch, capsys):
+        use_device(monkeypatch, EditingDemo())
+        code, out, _ = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "set",
+            "effects",
+            "0",
+            "0",
+            "0",
+            "1",
+            "--allow-write",
+            "--yes",
+            "--force-unverified",
+        )
+        assert code == 0
+        assert "ignores an effects 10" in out
+        assert "nothing was verified" in out
+
+    def test_mismatch_returns_1_and_names_buffer(
+        self, config_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, EditingDemo())
+
+        def bad_read_mix(self, number, *, timeout=None):
+            # return buffer with different value
+            buf = bytearray(rec.MIX_BYTES)
+            return bytes(buf)
+
+        device.read_mix = bad_read_mix.__get__(device, EditingDemo)
+        code, out, _ = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "set",
+            "mix",
+            "0",
+            "0",
+            "3",
+            "1",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 1
+        assert "the mix edit buffer (100)" in out
 
     def test_channel_after_the_subcommand_is_the_send_channel(
         self, config_path, monkeypatch, capsys

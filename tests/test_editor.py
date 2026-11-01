@@ -21,8 +21,16 @@ must be provable, so they are asked directly rather than by pressing a key.
 """
 
 from nano import messages as m
+from nano import params as p
 from nano import records as rec
-from nanosyned.editor import GATE_REFUSAL, EditGate, EditRecord, ProgramEditor
+from nanosyned.editor import (
+    DELETED_PARAMETER_REFUSAL,
+    GATE_REFUSAL,
+    EditGate,
+    EditRecord,
+    EffectsEditor,
+    ProgramEditor,
+)
 
 
 def _record(name: str = "Old Name") -> bytes:
@@ -128,6 +136,42 @@ class TestProgramEditor:
 
         with pytest.raises(m.ProtocolError):
             ProgramEditor(0, bytes(rec.PROGRAM_BYTES - 1))
+
+
+class TestEffectsEditor:
+    def test_the_deleted_rows_are_not_offered(self):
+        editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))
+        rows = editor.rows()
+        # The specification keeps ten effects spares as deleted parameters;
+        # the editor offers the rest, the whole record still carrying them.
+        assert len(rows) == len(p.EFFECT_PARAMS) - 10
+        assert all("deleted parameter" not in row.param.label for row in rows)
+        assert "Effect configuration" in [row.param.label for row in rows]
+
+    def test_the_real_configuration_rows_are_still_offered(self):
+        editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))
+        labels = [row.param.label for row in editor.rows()]
+        assert "Send 1 pitch type" in labels
+        assert "Send 1 pitch speed" in labels
+
+    def test_set_value_refuses_a_deleted_parameter_and_keeps_the_record(self):
+        editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))
+        before = editor.record()
+        problem = editor.set_value("Effect spare (deleted parameter)", 5)
+        assert problem is not None
+        assert problem == DELETED_PARAMETER_REFUSAL
+        assert editor.record() == before
+        assert editor.dirty is False
+
+    def test_editing_a_real_row_keeps_the_deleted_bytes(self):
+        editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))
+        original = editor.record()
+        assert editor.set_value("MIDImod source 1", 3) is None
+        changed = editor.record()
+        assert changed != original
+        # The hidden bytes are the ten deleted spares; a real edit must not
+        # have moved them.
+        assert changed[:10] == original[:10]
 
 
 class TestEditRecord:
