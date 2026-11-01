@@ -134,6 +134,19 @@ MODE_NUMBERS: Final[dict[str, int]] = {
 VALUE_LAWS: tuple[str, ...] = ("", "offset", "twos", "raw")
 
 
+#: The names the specification gives the on/off switches, in its order: the
+#: Mix channel switches and General MIDI all print the same pair.
+_ON_OFF: Final[tuple[str, str]] = ("off", "on")
+
+#: The three delay types, in the spec's order ("If 17=0 (mono delay)", 1
+#: (stereo), 2 (ping-pong)). Both sends that have a type row use this list.
+_DELAY_TYPES: Final[tuple[str, str, str]] = (
+    "mono delay",
+    "stereo delay",
+    "ping-pong delay",
+)
+
+
 @dataclass(frozen=True)
 class Param:
     """One row of one of the specification's parameter tables.
@@ -344,7 +357,7 @@ GLOBAL_PARAMS: tuple[Param, ...] = (
     ),
     Param("global", -1, -1, -1, "Clock *(QS7,8,R only)", 0, 1, 1, 120),
     Param("global", 0, 6, 0, "Mix Group Channel *(QSR only)", 0, 16, 5, 128),
-    Param("global", 0, 0, 1, "General MIDI", 0, 1, 1, 136),
+    Param("global", 0, 0, 1, "General MIDI", 0, 1, 1, 136, choices=_ON_OFF),
     Param(
         "global",
         0,
@@ -403,7 +416,18 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
     Param("mix", 0, 0, 0, "Channel 1 program number", 0, 127, 7, 80),
     Param("mix", 0, 0, 2, "Channel 1 program type", 0, 1, 4, 87),
     Param(
-        "mix", 0, 0, 3, "Channel 1 enable", 0, 1, 1, 91, verified=True, value_law="raw"
+        "mix",
+        0,
+        0,
+        3,
+        "Channel 1 enable",
+        0,
+        1,
+        1,
+        91,
+        verified=True,
+        value_law="raw",
+        choices=_ON_OFF,
     ),
     Param(
         "mix", 1, 0, 0, "Channel 1 volume", 0, 99, 7, 92, verified=True, value_law="raw"
@@ -491,6 +515,7 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
         136,
         verified=True,
         value_law="raw",
+        choices=_ON_OFF,
     ),
     Param(
         "mix",
@@ -504,6 +529,7 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
         137,
         verified=True,
         value_law="raw",
+        choices=_ON_OFF,
     ),
     Param(
         "mix",
@@ -517,6 +543,7 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
         138,
         verified=True,
         value_law="raw",
+        choices=_ON_OFF,
     ),
     Param(
         "mix",
@@ -530,6 +557,7 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
         139,
         verified=True,
         value_law="raw",
+        choices=_ON_OFF,
     ),
     Param(
         "mix",
@@ -543,6 +571,7 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
         140,
         verified=True,
         value_law="raw",
+        choices=_ON_OFF,
     ),
     Param(
         "mix",
@@ -556,6 +585,7 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
         141,
         verified=True,
         value_law="raw",
+        choices=_ON_OFF,
     ),
     Param(
         "mix",
@@ -569,10 +599,12 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
         142,
         verified=True,
         value_law="raw",
+        choices=_ON_OFF,
     ),
     Param("mix", -1, -1, -1, "Channel 1 Spare", 0, 0, 1, 143),
 )
 
+# Neither the specification nor the manual names the reverb type: it stays numeric.
 EFFECT_COMMON_PARAMS: tuple[Param, ...] = (
     Param("effects", 2, 0, 0, "Effect spare (deleted parameter)", 0, 95, 7, 0),
     Param("effects", 2, 1, 0, "Effect spare (deleted parameter)", 0, 95, 7, 7),
@@ -584,7 +616,24 @@ EFFECT_COMMON_PARAMS: tuple[Param, ...] = (
     Param("effects", 2, 7, 0, "Effect spare (deleted parameter)", 0, 95, 7, 49),
     Param("effects", 2, 8, 0, "Effect spare (deleted parameter)", 0, 95, 7, 56),
     Param("effects", 2, 9, 0, "Effect spare (deleted parameter)", 0, 95, 7, 63),
-    Param("effects", 2, 0, 0, "Effect configuration", 0, 4, 4, 70),
+    Param(
+        "effects",
+        2,
+        0,
+        0,
+        "Effect configuration",
+        0,
+        4,
+        4,
+        70,
+        choices=(
+            "4 sends, 1 reverb",
+            "4 sends, 2 reverb",
+            "4 sends, 1 lezlie",
+            "2 sends, with EQ",
+            "overdrive/chorus/delay/reverb/lezlie",
+        ),
+    ),
 )
 
 # Configuration 0 is conditional: when a pitch type selects chorus/flange
@@ -601,7 +650,19 @@ EFFECT_CONFIG_0_PARAMS: tuple[Param, ...] = (
     Param("effects", 0, 1, 2, "Send 1 pitch depth", 0, 99, 7, 85, sound=0),
     Param("effects", 0, 1, 3, "Send 1 pitch feedback", 0, 99, 7, 92, sound=0),
     Param("effects", 5, 0, 0, "Send 1 pitch mix", 0, 99, 7, 99, sound=0),
-    Param("effects", 4, 0, 0, "Send 1 delay type", 0, 2, 2, 106, sound=0),
+    Param(
+        "effects",
+        4,
+        0,
+        0,
+        "Send 1 delay type",
+        0,
+        2,
+        2,
+        106,
+        sound=0,
+        choices=_DELAY_TYPES,
+    ),
     Param(
         "effects", 4, 1, 0, "Send 1 delay input", -99, 99, 8, 108, offset=-99, sound=0
     ),
@@ -654,7 +715,19 @@ EFFECT_CONFIG_0_PARAMS: tuple[Param, ...] = (
     Param("effects", 0, 1, 2, "Send 2 pitch depth", 0, 99, 7, 257, sound=1),
     Param("effects", 0, 1, 3, "Send 2 pitch feedback", 0, 99, 7, 264, sound=1),
     Param("effects", 5, 0, 0, "Send 2 pitch mix", 0, 99, 7, 271, sound=1),
-    Param("effects", 4, 0, 0, "Send 2 delay type", 0, 2, 2, 278, sound=1),
+    Param(
+        "effects",
+        4,
+        0,
+        0,
+        "Send 2 delay type",
+        0,
+        2,
+        2,
+        278,
+        sound=1,
+        choices=_DELAY_TYPES,
+    ),
     Param(
         "effects", 4, 1, 0, "Send 2 delay input", -99, 99, 8, 280, offset=-99, sound=1
     ),
@@ -889,7 +962,18 @@ PROGRAM_COMMON_PARAMS: tuple[Param, ...] = (
 )
 
 KEYBOARD_SOUND_PARAMS: tuple[Param, ...] = (
-    Param("program", 16, 0, 0, "Keyboard / drum mode (=0)", 0, 1, 1, 0),
+    Param(
+        "program",
+        16,
+        0,
+        0,
+        "Keyboard / drum mode (=0)",
+        0,
+        1,
+        1,
+        0,
+        choices=("keyboard", "drum"),
+    ),
     Param("program", 0, 0, 0, "Sample group", 0, 47, 6, 1),
     Param("program", 0, 0, 2, "Sample number", 0, 127, 7, 7),
     Param(

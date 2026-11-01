@@ -52,6 +52,7 @@ from nanosyned.editor import (
     GlobalEditor,
     GlobalRow,
     ProgramEditor,
+    choice_text,
 )
 from nanosyned.text import literal
 from vinsynlib.ui.confirm import ConfirmScreen
@@ -392,6 +393,7 @@ class MixScreen(ModalScreen[bytes | None]):
         for label, key in (
             ("part / field", "item"),
             ("value", "value"),
+            ("choice", "choice"),
             ("range", "range"),
         ):
             table.add_column(label, key=key)
@@ -429,6 +431,7 @@ class MixScreen(ModalScreen[bytes | None]):
             table.add_row(
                 f"PART {number + 1}",
                 self._summary(channel),
+                "",
                 "expanded" if expanded else "collapsed",
                 key=part_key,
             )
@@ -441,6 +444,7 @@ class MixScreen(ModalScreen[bytes | None]):
                 table.add_row(
                     label,
                     _shown(value),
+                    "" if param is None else choice_text(param, value),
                     f"{param.low}..{param.high}" if param is not None else "read-only",
                     key=f"field:{number}:{label}",
                 )
@@ -751,6 +755,7 @@ class GlobalScreen(ModalScreen[bytes | None]):
         for label, key in (
             ("parameter", "param"),
             ("value", "value"),
+            ("choice", "choice"),
             ("range", "range"),
             ("note", "note"),
         ):
@@ -769,6 +774,7 @@ class GlobalScreen(ModalScreen[bytes | None]):
             table.add_row(
                 literal(entry.param.label),
                 _shown(entry.value),
+                literal(entry.choice),
                 f"{entry.param.low}..{entry.param.high}",
                 "" if entry.writable else literal(entry.refusal or ""),
                 key=str(index),
@@ -997,6 +1003,7 @@ class EffectsScreen(ModalScreen[bytes | None]):
         for label, key in (
             ("parameter", "param"),
             ("value", "value"),
+            ("choice", "choice"),
             ("range", "range"),
             ("note", "note"),
         ):
@@ -1015,6 +1022,7 @@ class EffectsScreen(ModalScreen[bytes | None]):
             table.add_row(
                 literal(entry.param.label),
                 _shown(entry.value),
+                literal(entry.choice),
                 f"{entry.param.low}..{entry.param.high}",
                 "" if entry.writable else literal(entry.refusal or ""),
                 key=str(index),

@@ -30,6 +30,7 @@ from nanosyned.editor import (
     EditRecord,
     EffectsEditor,
     ProgramEditor,
+    choice_text,
 )
 
 
@@ -153,6 +154,30 @@ class TestEffectsEditor:
         labels = [row.param.label for row in editor.rows()]
         assert "Send 1 pitch type" in labels
         assert "Send 1 pitch speed" in labels
+
+    def test_the_configuration_row_shows_the_name_at_the_record_value(self):
+        editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))
+        assert editor.set_value("Effect configuration", 3) is None
+        row = next(
+            row for row in editor.rows() if row.param.label == "Effect configuration"
+        )
+        assert row.value == 3
+        assert row.choice == "2 sends, with EQ"
+
+    def test_a_named_switch_shows_off_and_on(self):
+        enable = p.at("mix", 0, 0, 3)
+        assert enable is not None
+        assert choice_text(enable, 0) == "off"
+        assert choice_text(enable, 1) == "on"
+
+    def test_the_reverb_type_stays_numeric_with_no_choice(self):
+        editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))
+        row = next(row for row in editor.rows() if row.param.label == "Reverb type")
+        assert row.param.choices == ()
+        assert row.value == 0
+        # No source names it: the choice cell is blank, not a guessed name,
+        # and the 0..6 value stays numeric.
+        assert row.choice == ""
 
     def test_set_value_refuses_a_deleted_parameter_and_keeps_the_record(self):
         editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))

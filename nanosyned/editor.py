@@ -56,6 +56,7 @@ __all__ = [
     "GlobalRow",
     "MixEditRecord",
     "ProgramEditor",
+    "choice_text",
 ]
 
 #: The refusal a locked gate gives. One sentence, and it names the gate and
@@ -288,6 +289,11 @@ class GlobalRow:
         """Whether a store may change this row."""
         return self.refusal is None
 
+    @property
+    def choice(self) -> str:
+        """The row's named value, for the screen's choice column."""
+        return choice_text(self.param, self.value)
+
 
 class GlobalEditor:
     """The one global record, and which of its rows a store may change.
@@ -385,6 +391,21 @@ class GlobalEditor:
         return None
 
 
+def choice_text(param: p.Param, value: int | None) -> str:
+    """The row's named value for ``value``, or a dash.
+
+    Rows without names leave the cell blank -- there is nothing to choose
+    from -- and a named row whose value is outside its own list shows ``-``
+    rather than a guess. This is the shape the ``p`` editor's choice column
+    uses, so both editors read a value the same way.
+    """
+    if not param.choices:
+        return ""
+    if value is None or not 0 <= value < len(param.choices):
+        return "-"
+    return param.choices[value]
+
+
 #: The mapping from parameter label to Param for the Effects section,
 #: used by :class:`EffectsEditor.set_value` for O(1) lookups.
 _EFFECT_BY_LABEL: dict[str, p.Param] = {param.label: param for param in p.EFFECT_PARAMS}
@@ -471,6 +492,7 @@ class EffectsEditor:
                 {
                     "param": param,
                     "value": values.get(param.label),
+                    "choice": choice_text(param, values.get(param.label)),
                     "refusal": self.refusal(param),
                     "writable": self.refusal(param) is None,
                 },

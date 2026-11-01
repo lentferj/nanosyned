@@ -314,6 +314,22 @@ class TestEffectsScreen:
             table = screen.query_one("#effects-table", DataTable)
             assert table.row_count == len(rows)
 
+    async def test_the_table_has_a_choice_column_and_a_known_name(self) -> None:
+        editor = EffectsEditor(bytes(rec.EFFECTS_BYTES))
+        assert editor.set_value("Effect configuration", 3) is None
+        seen: list[bytes | None] = []
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            app.push_screen(EffectsScreen(editor), seen.append)
+            await _until(pilot, lambda: isinstance(app.screen, EffectsScreen))
+            await pilot.pause()
+            table = app.screen.query_one("#effects-table", DataTable)
+            assert "choice" in table.columns
+            labels = [row.param.label for row in editor.rows()]
+            index = labels.index("Effect configuration")
+            assert table.get_row_at(index)[2] == "2 sends, with EQ"
+
     async def test_w_toggles_the_gate_and_a_then_s_returns_the_record(
         self,
     ) -> None:

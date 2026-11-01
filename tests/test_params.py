@@ -263,6 +263,54 @@ class TestTheTablesAreTheOnesDocumented:
         assert sound_row.sound is None
 
 
+def _row(label: str) -> params.Param:
+    """The one transcribed row with ``label``."""
+    rows = [row for row in params.PARAMS if row.label == label]
+    assert len(rows) == 1, label
+    return rows[0]
+
+
+class TestTheNamedValues:
+    """The names the sources actually print, and the rows that have none."""
+
+    def test_the_effect_configuration_names_the_five_configurations(self):
+        assert _row("Effect configuration").choices == (
+            "4 sends, 1 reverb",
+            "4 sends, 2 reverb",
+            "4 sends, 1 lezlie",
+            "2 sends, with EQ",
+            "overdrive/chorus/delay/reverb/lezlie",
+        )
+
+    def test_both_sends_name_the_three_delay_types(self):
+        for label in ("Send 1 delay type", "Send 2 delay type"):
+            assert _row(label).choices == (
+                "mono delay",
+                "stereo delay",
+                "ping-pong delay",
+            ), label
+
+    def test_the_switches_name_off_and_on(self):
+        for label in (
+            "Channel 1 enable",
+            "Channel 1 midi in on/off",
+            "Channel 1 midi out on/off",
+            "Channel 1 keyboard on/off **",
+            "Channel 1 wheels on/off",
+            "Channel 1 Aftertouch on/off",
+            "Channel 1 Sustain pedal on/off",
+            "Channel 1 Pedals/controllers on/off",
+            "General MIDI",
+        ):
+            assert _row(label).choices == ("off", "on"), label
+
+    def test_the_keyboard_drum_mode_names_both_banks(self):
+        assert _row("Keyboard / drum mode (=0)").choices == ("keyboard", "drum")
+
+    def test_the_reverb_type_has_no_names_in_any_source(self):
+        assert _row("Reverb type").choices == ()
+
+
 class TestTheValueLaws:
     """The displayed value and the stored bits are two ends of one law."""
 
