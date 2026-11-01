@@ -98,9 +98,9 @@ PROGRAM_THREE = [
 #: rows are the deleted spares, whose 7-bit fields at 0, 7 and 14 flip
 #: from a zeroed record to a legal 95.
 EFFECTS_THREE = [
-    params.at("effects", 2, 0, 0),
-    params.at("effects", 2, 1, 0),
-    params.at("effects", 2, 2, 0),
+    params.at("effects", 2, 0, 0),  # The configuration row
+    params.at("effects", 0, 0, 0, sound=0),  # Send 1 pitch type
+    params.at("effects", 4, 0, 0, sound=0),  # Send 1 delay type
 ]
 
 #: Five rows across all four modes for the ``flip_value`` spot-check: a
@@ -881,6 +881,23 @@ class TestPositiveControl:
                 assert bytes(f.mix_record) == ref
             else:
                 assert bytes(f.program_record) == ref
+
+
+class TestDeletedSpares:
+    def test_the_legacy_slots_are_never_probed(self):
+        row = params.by_label("Effect spare (deleted parameter)")[0]
+        assert (
+            tool.probeable(row, tool.record_size("effects"), strategy="record") is False
+        )
+        assert (
+            tool.probeable(row, tool.record_size("effects"), strategy="edit") is False
+        )
+
+    def test_the_configuration_row_is_probeable_on_the_record_path(self):
+        row = params.by_label("Effect configuration")[0]
+        assert (
+            tool.probeable(row, tool.record_size("effects"), strategy="record") is True
+        )
 
 
 class TestTheDemoWalkThrough:

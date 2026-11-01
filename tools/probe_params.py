@@ -331,6 +331,12 @@ def probeable(param: params.Param, size: int, *, strategy: str = "edit") -> bool
     """
     if param.function < 0:
         return False
+    if "deleted parameter" in param.label:
+        # The ten legacy slots are always sent as zeroes and are not
+        # controls. A write to one proves nothing about the instrument,
+        # and the editor does not offer them either; skip them like the
+        # addressless rows.
+        return False
     if param.mode == BLOCKED and strategy != "record":
         return False
     last = param.bit_address + param.bits - 1

@@ -636,16 +636,16 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
 # The reverb, pitch and delay types are named from the QS6.1 Reference
 # Manual; the specification gives their ranges but no names.
 EFFECT_COMMON_PARAMS: tuple[Param, ...] = (
-    Param("effects", 2, 0, 0, "Effect spare (deleted parameter)", 0, 95, 7, 0),
-    Param("effects", 2, 1, 0, "Effect spare (deleted parameter)", 0, 95, 7, 7),
-    Param("effects", 2, 2, 0, "Effect spare (deleted parameter)", 0, 95, 7, 14),
-    Param("effects", 2, 3, 0, "Effect spare (deleted parameter)", 0, 95, 7, 21),
-    Param("effects", 2, 4, 0, "Effect spare (deleted parameter)", 0, 95, 7, 28),
-    Param("effects", 2, 5, 0, "Effect spare (deleted parameter)", 0, 95, 7, 35),
-    Param("effects", 2, 6, 0, "Effect spare (deleted parameter)", 0, 95, 7, 42),
-    Param("effects", 2, 7, 0, "Effect spare (deleted parameter)", 0, 95, 7, 49),
-    Param("effects", 2, 8, 0, "Effect spare (deleted parameter)", 0, 95, 7, 56),
-    Param("effects", 2, 9, 0, "Effect spare (deleted parameter)", 0, 95, 7, 63),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 0),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 7),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 14),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 21),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 28),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 35),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 42),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 49),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 56),
+    Param("effects", -1, -1, -1, "Effect spare (deleted parameter)", 0, 95, 7, 63),
     Param(
         "effects",
         2,

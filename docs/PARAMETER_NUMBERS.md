@@ -80,6 +80,16 @@ The map holds 178 rows across 4 modes; 75 of them are verified.
 
 | function | page | pot | label | bits | bit address | range | offset | law | verified |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 0 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 7 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 14 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 21 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 28 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 35 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 42 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 49 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 56 | 0..95 | 0 | (inferred) | no |
+| -1 | -1 | -1 | Effect spare (deleted parameter) | 7 | 63 | 0..95 | 0 | (inferred) | no |
 | 0 | 0 | 0 | Send 1 pitch type | 3 | 74 | 0..5 | 0 | (inferred) | no |
 | 0 | 0 | 0 | Send 2 pitch type | 3 | 246 | 0..5 | 0 | (inferred) | no |
 | 0 | 0 | 0 | Send 3 pitch type | 2 | 348 | 0..2 | 0 | (inferred) | no |
@@ -102,16 +112,6 @@ The map holds 178 rows across 4 modes; 75 of them are verified.
 | 1 | 1 | 1 | MIDImod destination 2 | 6 | 492 | 0..36 | 0 | (inferred) | no |
 | 1 | 1 | 2 | MIDImod level 2 | 8 | 498 | -99..99 | -99 | (inferred) | no |
 | 2 | 0 | 0 | Effect configuration | 4 | 70 | 0..4 | 0 | (inferred) | no |
-| 2 | 0 | 0 | Effect spare (deleted parameter) | 7 | 0 | 0..95 | 0 | (inferred) | no |
-| 2 | 1 | 0 | Effect spare (deleted parameter) | 7 | 7 | 0..95 | 0 | (inferred) | no |
-| 2 | 2 | 0 | Effect spare (deleted parameter) | 7 | 14 | 0..95 | 0 | (inferred) | no |
-| 2 | 3 | 0 | Effect spare (deleted parameter) | 7 | 21 | 0..95 | 0 | (inferred) | no |
-| 2 | 4 | 0 | Effect spare (deleted parameter) | 7 | 28 | 0..95 | 0 | (inferred) | no |
-| 2 | 5 | 0 | Effect spare (deleted parameter) | 7 | 35 | 0..95 | 0 | (inferred) | no |
-| 2 | 6 | 0 | Effect spare (deleted parameter) | 7 | 42 | 0..95 | 0 | (inferred) | no |
-| 2 | 7 | 0 | Effect spare (deleted parameter) | 7 | 49 | 0..95 | 0 | (inferred) | no |
-| 2 | 8 | 0 | Effect spare (deleted parameter) | 7 | 56 | 0..95 | 0 | (inferred) | no |
-| 2 | 9 | 0 | Effect spare (deleted parameter) | 7 | 63 | 0..95 | 0 | (inferred) | no |
 | 3 | 0 | 0 | Send 1 reverb input 1 | 1 | 162 | 0..1 | 0 | (inferred) | no |
 | 3 | 0 | 0 | Send 2 reverb input 1 | 1 | 330 | 0..1 | 0 | (inferred) | no |
 | 3 | 0 | 0 | Send 3 reverb input 1 | 1 | 412 | 0..1 | 0 | (inferred) | no |
