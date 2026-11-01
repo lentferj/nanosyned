@@ -16,9 +16,12 @@
 
 """Probe one parameter row, and put its mode's buffer back afterwards.
 
-**What this tool writes: nothing that is kept.** It sends four kinds of
-frame and no others: ``10`` (MIDI Edit), which moves one parameter in
-the unit's volatile buffer; ``02`` (Edit Program Dump), a *load* that
+**What this tool writes: nothing that is kept.** It sends these kinds
+of frame and no others: ``10`` (MIDI Edit), which moves one parameter
+in the unit's volatile buffer; ``09`` (Edit Effects Dump Request),
+which only asks for the 65-byte effects edit buffer; ``08`` (Edit
+Effects Dump), the *load* of that buffer, which is the effects probe's
+edit and its restore; ``02`` (Edit Program Dump), a *load* that
 puts a program edit buffer back to the reference read at the start of
 the run; ``0E`` (Mix Dump) **with number 100 only** -- the load of the
 mix edit buffer; numbers 0-99 are user stores and are never sent; and
@@ -33,13 +36,17 @@ written, not once, by anything on this path.
 
 Each mode keeps its parameters in a **different record** -- the bench
 in ``docs/PARAMETER_VERIFICATION_RUN_LOG.md`` is why -- so a run groups
-its rows by mode and, per mode, picks the one buffer a ``10`` lands
+its rows by mode and, per mode, picks the one buffer the probe lands
 in: the 20-byte global record, the 138-byte mix edit buffer (number
-100), or the 350-byte program edit buffer of the current Mix-mode
-channel (``edit=1`` for channel 0: a program ``10`` is *ignored* in
-Program mode). Effects rows are skipped outright: the unit ignored
-every effects ``10`` the bench sent, so there is nothing to probe and
-nothing to read back.
+100), the 350-byte program edit buffer of the current Mix-mode channel
+(``edit=1`` for channel 0: a program ``10`` is *ignored* in Program
+mode), or the 65-byte effects edit buffer. Global, mix and program
+rows are probed with a ``10``. Effects rows are not: the unit ignored
+every effects ``10`` the bench sent, but its **edit buffer loads** --
+``09 00`` asks for it and ``08`` puts it back -- so an effects row is
+written into a copy of that record, loaded with ``08``, read back with
+``09`` and put back with ``08``. The verdict has the same shape; only
+the edit differs.
 
 The method is ``docs/PARAMETER_VERIFICATION_PLAN.md``'s section 5: put
 the unit in the right mode, read that mode's record. The pre-flight now
@@ -49,8 +56,9 @@ first run was a false positive" because the pre-flight sent the
 reference back, read the same unchanged record, and compared it to
 itself. After that control the record must be byte-identical to the
 reference; then per row -- ``10`` with a value that flips every bit of
-the field, a short settle (the unit is silent under a ``10``), read
-again, diff, restore, read back, compare. The diff is the verdict:
+the field (or, for effects, ``08`` of a copy with that field written),
+a short settle (the unit is silent under both), read again, diff,
+restore, read back, compare. The diff is the verdict:
 
 ``confirmed``
     exactly the row's own bits moved, so the table's address and the
@@ -70,13 +78,14 @@ and promotion to ``verified`` in ``nano/params.py`` is a separate,
 deliberate act (plan V11). This tool does not edit the tables, and it
 does not store anything.
 
-**What it needs from a device** is seven methods -- ``read_global``,
+**What it needs from a device** is nine methods -- ``read_global``,
 ``read_mix``, ``read_edit_program``, ``write_mix``,
-``write_edit_program``, ``midi_edit`` and ``mode_select`` -- and
-pointedly no global store, because there is no safe one.
-``nano.bridge.NanoBridge`` has them; so does ``--demo``'s
-:class:`EditingDemo`, which applies each field to in-process records
-so the walk-through can be read, printed and tested without hardware.
+``write_edit_program``, ``midi_edit``, ``mode_select``, ``request``
+and ``write_edit_effects`` -- and pointedly no global store, because
+there is no safe one. ``nano.bridge.NanoBridge`` has them; so does
+``--demo``'s :class:`EditingDemo`, which applies each field to
+in-process records so the walk-through can be read, printed and tested
+without hardware.
 
 Usage::
 
@@ -100,6 +109,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -129,17 +139,19 @@ MIX_MODE_SELECT = frozenset({MIX_MODE, "program"})
 #: are never sent.
 MIX_EDIT_NUMBER = 100
 
-#: The one mode with no buffer to probe. The unit ignored every effects
-#: ``10`` the bench sent, in both modes, so there is nothing to read
-#: back and nothing to diff; :func:`buffer_for` refuses the mode.
+#: The mode a ``10`` does not reach. The unit ignored every effects
+#: ``10`` the bench sent, in both modes, so the edit strategy skips its
+#: rows. Its edit buffer still loads, which is why the record strategy
+#: exists: ``09`` reads the 65-byte record and ``08`` writes it back.
 BLOCKED = "effects"
 
-#: Each probeable mode's record size, in bytes. ``effects`` is absent
-#: on purpose: :func:`probeable` refuses it before any size matters.
+#: Each probeable mode's record size, in bytes. Effects is probed by
+#: loading its edit buffer, so its size is the record the diff reads.
 _RECORD_BYTES = {
     "global": rec.GLOBAL_BYTES,
     "mix": rec.MIX_BYTES,
     "program": rec.PROGRAM_BYTES,
+    BLOCKED: rec.EFFECTS_BYTES,
 }
 
 #: The backup's filename, inside ``--backup-dir``.
@@ -276,20 +288,42 @@ def record_size(mode: str) -> int:
     return _RECORD_BYTES.get(mode, 0)
 
 
-def probeable(param: params.Param, size: int) -> bool:
+def strategy_for(mode: str, strategy: str) -> str:
+    """The strategy that probes ``mode``: ``record`` for effects, else ``edit``.
+
+    ``auto`` picks per mode -- effects rows load their record, everything
+    else sends a ``10``. ``edit`` keeps the old behaviour everywhere, so
+    an effects row is skipped rather than probed with a message the unit
+    ignores. ``record`` means the same as ``auto`` here, because the
+    effects edit buffer is the only record this tool can *load* as an
+    edit: a global, mix or program row still moves through a ``10``.
+    """
+    if strategy not in {"auto", "edit", "record"}:
+        raise ValueError(
+            f"unknown strategy {strategy!r}; expected auto, edit or record"
+        )
+    if mode == BLOCKED and strategy != "edit":
+        return "record"
+    return "edit"
+
+
+def probeable(param: params.Param, size: int, *, strategy: str = "edit") -> bool:
     """Whether the row may be probed at all. **False is a skip, not a probe.**
 
     ``size`` is the record size of the *row's own mode*'s buffer -- 20
-    for global, 138 for mix, 350 for program -- because that is the
-    record the diff would read; a field that fits the program record
-    but not the global one cannot be checked against a global read.
+    for global, 138 for mix, 350 for program, 65 for effects -- because
+    that is the record the diff would read; a field that fits the
+    program record but not the global one cannot be checked against a
+    global read.
 
     Three rows are out of the question. ``function < 0`` is the
     specification's own mark for a row with no direct-edit address -- the
     spares, the Clock, the ROM identifier -- and sending one would invent
-    an address the unit does not have. Effects rows are refused whatever
-    their address: the unit ignored every effects ``10`` the bench sent,
-    so there is nothing to probe and a skip is the honest answer. And a
+    an address the unit does not have. An effects row is refused under
+    the ``edit`` strategy: the unit ignored every effects ``10`` the
+    bench sent, so there is nothing to probe and a skip is the honest
+    answer. Under the ``record`` strategy its field is written into a
+    copy of the edit buffer, which does load, so it is probeable. And a
     field whose bits fall outside the mode's record cannot be read back,
     so the diff could not mean anything; skipping it is honest where
     probing it would produce a ``mismatch`` that is the layout's fault,
@@ -297,7 +331,7 @@ def probeable(param: params.Param, size: int) -> bool:
     """
     if param.function < 0:
         return False
-    if param.mode == BLOCKED:
+    if param.mode == BLOCKED and strategy != "record":
         return False
     last = param.bit_address + param.bits - 1
     return param.bit_address >= 0 and last >> 3 < size
@@ -441,24 +475,61 @@ class Buffer:
         )
 
 
-def buffer_for(mode: str, *, channel: int = 0) -> Buffer:
-    """The buffer a mode's ``10`` lands in, or a refusal for the mode.
+@dataclass(frozen=True)
+class RecordBuffer:
+    """The effects edit buffer: asked for with ``09``, loaded with ``08``.
+
+    The unit ignores a ``10`` here, but it answers ``09 00`` with the
+    65-byte edit buffer and accepts ``08`` as a load of one. That is the
+    whole record strategy: write one field into a copy of what was read,
+    load the copy, read it back, and diff. The load is the edit and the
+    restore alike -- :meth:`restore_row` has nothing finer to put back,
+    because the record is one thing.
+
+    ``mode`` is ``effects``, ``edit`` is the number the dump carries --
+    always ``0``, the edit buffer is a single thing -- and ``size`` is
+    the record's length, so :func:`probeable` checks a field against the
+    same bytes the read returns.
+    """
+
+    mode: str = BLOCKED
+    edit: int = 0
+    size: int = rec.EFFECTS_BYTES
+
+    def read(self, device) -> bytes:
+        """The edit buffer as the unit holds it: ``09 00``, answered by ``08``."""
+        packet = device.request(
+            m.edit_effects_dump_request(),
+            m.Function.EDIT_EFFECTS_DUMP,
+            number=0,
+        )
+        return bytes(packet.data()[: self.size])
+
+    def load(self, device, record: bytes) -> None:
+        """Load ``record`` with ``08``. **The edit buffer, not a user slot.**"""
+        rec.check_size(record, self.size, "the effects record")
+        device.write_edit_effects(bytes(record)[: self.size])
+
+    def restore_row(self, device, param: params.Param, reference: bytes) -> None:
+        """Put the whole reference back: one record, so one ``08`` load."""
+        self.load(device, reference)
+
+
+def buffer_for(mode: str, *, channel: int = 0) -> Buffer | RecordBuffer:
+    """The buffer a mode's probe lands in, or a refusal for the mode.
 
     ``global`` is the 20-byte global record: read whole, restored per
     row, never loaded. ``mix`` is the mix edit buffer, number 100 --
     the one number past the 99 user stores. ``program`` is the
     program edit buffer of ``channel``: ``channel + 1``, so the
     default channel 0 plays through edit buffer 1, which is what the
-    bench read, edited and restored. ``effects`` raises
-    :class:`ProbeAborted`: the unit ignored every effects ``10`` the
-    bench sent, so there is no buffer to read and nothing to probe.
+    bench read, edited and restored. ``effects`` is the 65-byte edit
+    buffer, read with ``09`` and loaded with ``08``: the unit ignores
+    its ``10``, but the load works, which is why it has a strategy of
+    its own.
     """
     if mode == BLOCKED:
-        raise ProbeAborted(
-            "effects: the unit ignored a 10 in every mode the bench "
-            "tried, so there is no buffer to read, nothing to restore "
-            "and nothing to probe"
-        )
+        return RecordBuffer()
     if mode == MIX_MODE:
         return Buffer(mode, MIX_EDIT_NUMBER)
     if mode == "program":
@@ -496,7 +567,7 @@ def check_restore(
     device,
     reference: bytes,
     *,
-    buffer: Buffer,
+    buffer: Buffer | RecordBuffer,
     rows: list[params.Param],
     preflight: bool,
 ) -> None:
@@ -607,6 +678,114 @@ def positive_control(
     )
 
 
+def record_control(
+    device,
+    buffer: RecordBuffer,
+    reference: bytes,
+    rows: list[params.Param],
+    *,
+    settle: float,
+) -> None:
+    """The record strategy's positive control: flip one field, load, read.
+
+    The same two halves as :func:`positive_control`, with a ``08`` load
+    in place of the ``10``: write one field of a copy, load the copy,
+    read the buffer back and require the field to hold the value
+    written; then load the reference and require it byte-identical. A
+    row that does not move is skipped, because one row's value law is
+    not the whole table's, and if no row moves the load itself is dead
+    and no probe could mean anything.
+    """
+    if not rows:
+        return
+    reference = bytes(reference)
+    for row in rows[:CONTROL_ROWS]:
+        stored = rec.decode_bit_field(reference, row)
+        value = flip_value(row, stored)
+        target = params.stored_for(row, value)
+        modified = bytearray(reference)
+        rec.encode_bit_field(modified, row, target)
+
+        buffer.load(device, bytes(modified))
+        time.sleep(settle)
+        after = buffer.read(device)
+        if rec.decode_bit_field(after, row) != target:
+            if after != reference:
+                check_restore(
+                    device, reference, buffer=buffer, rows=rows, preflight=True
+                )
+            continue
+        buffer.load(device, reference)
+        if buffer.read(device) != reference:
+            raise ProbeAborted(
+                "the record control's restore did not verify: the edits "
+                "record did not come back byte for byte",
+                preflight=True,
+            )
+        return
+    raise ProbeAborted(
+        f"the record control did not move in the first {CONTROL_ROWS} "
+        f"row(s): the 08 load is dead, or every table address tried is "
+        f"wrong, and a probe could not tell the two apart",
+        preflight=True,
+    )
+
+
+def record_probe(  # noqa: PLR0913 -- the reference and settle kwargs
+    device,
+    buffer: RecordBuffer,
+    param: params.Param,
+    value: int,
+    *,
+    settle: float = DEFAULT_SETTLE,
+    reference: bytes | None = None,
+) -> Probe:
+    """Write one field into a copy, load it, read it back, and restore.
+
+    This is :func:`probe` with a record load where the ``10`` would be,
+    for the one mode that ignores a ``10``. ``target`` is the stored
+    field for ``value``; it is written into a copy of ``reference`` with
+    :func:`nano.records.encode_bit_field`, so sibling bits are kept
+    exactly as read. Then the ``08`` load, the settle, the ``09`` read,
+    and the same :func:`classify` as the edit path -- the verdict shape
+    does not change, only the message that moves the field.
+
+    The restore is ``finally``'s ``08`` of the reference and a read-back
+    compared to it. The load waits :data:`nano.bridge.RECORD_GAP` on the
+    wire already; ``settle`` is on top of that and is kept small.
+    """
+    if reference is None:
+        reference = buffer.read(device)
+    reference = bytes(reference)
+    before = reference
+    after = before
+    changed: tuple[int, ...] = ()
+    verdict = "no-change"
+    restored = False
+    target = params.stored_for(param, value)
+    modified = bytearray(reference)
+    rec.encode_bit_field(modified, param, target)
+    try:
+        buffer.load(device, bytes(modified))
+        time.sleep(settle)  # the bridge already waited for the wire
+        after = buffer.read(device)
+        changed = changed_bits(before, after)
+        verdict = classify(param, before, after, target=target)
+    finally:
+        buffer.load(device, reference)
+        restored = buffer.read(device) == reference
+    return Probe(
+        param=param,
+        value=value,
+        target=target,
+        before=before,
+        after=bytes(after),
+        changed=changed,
+        verdict=verdict,
+        restored=restored,
+    )
+
+
 def probe(  # noqa: PLR0913 -- the three positional and three reference kwargs
     device,
     param: params.Param,
@@ -635,7 +814,7 @@ def probe(  # noqa: PLR0913 -- the three positional and three reference kwargs
     result.
     """
     if buffer is None:
-        buffer = buffer_for(param.mode, channel=param.channel or 0)
+        buffer = cast(Buffer, buffer_for(param.mode, channel=param.channel or 0))
     if reference is None:
         reference = buffer.read(device)
     reference = bytes(reference)
@@ -679,6 +858,7 @@ def run(
     rows: list[params.Param],
     *,
     settle: float = DEFAULT_SETTLE,
+    strategy: str = "auto",
 ) -> list[Probe]:
     """Probe every probeable row once, restoring around each one.
 
@@ -691,32 +871,36 @@ def run(
        *and* program, Program mode for global);
     2. read the mode's record -- the restore reference (:func:`buffer_for`
        decides which record that is);
-    3. **positive control, before any probe**: send the same ``10`` a
+    3. **positive control, before any probe**: send the same message a
        probe would, read the record back and require the field to hold
        the value sent, then restore the record and require it
-       byte-identical (:func:`positive_control`). A dead ``10`` or a
-       dead restore raises :class:`ProbeAborted` with
-       ``preflight=True`` *before any probe is attempted*; the bench's
-       false positive occurred because the old pre-flight sent the
-       reference back, read the same unchanged record, and compared it
-       to itself;
-    4. one :func:`probe` per row of the mode, each with its own
-       ``finally`` restore; ``restored is False`` on any of them stops
-       the run immediately;
+       byte-identical (:func:`positive_control`, or
+       :func:`record_control` for effects). A dead edit or a dead
+       restore raises :class:`ProbeAborted` with ``preflight=True``
+       *before any probe is attempted*; the bench's false positive
+       occurred because the old pre-flight sent the reference back, read
+       the same unchanged record, and compared it to itself;
+    4. one :func:`probe` per row of the mode (or :func:`record_probe`
+       for effects), each with its own ``finally`` restore; ``restored
+       is False`` on any of them stops the run immediately;
     5. a final restore check, for the same reason as step 3.
 
-    Rows :func:`probeable` refuses are skipped, not probed, so a spare
-    never reaches a ``midi_edit`` -- and neither does an **effects**
-    row: the unit ignored every effects ``10`` the bench sent, so there
-    is nothing to probe and the row simply is not in the list. A run
-    whose rows are all skips sends nothing at all.
+    ``strategy`` is resolved per mode by :func:`strategy_for`: effects
+    rows load their record with ``08`` because the unit ignores their
+    ``10``, and every other mode keeps the edit path. Rows
+    :func:`probeable` refuses are skipped, not probed, so a spare never
+    reaches a ``midi_edit`` -- and under the ``edit`` strategy neither
+    does an **effects** row. A run whose rows are all skips sends
+    nothing at all.
     """
     targets: list[params.Param] = []
     for row in rows:
-        if not probeable(row, record_size(row.mode)):
-            continue  # spares and effects rows are skipped, never probed
+        use = strategy_for(row.mode, strategy)
+        if not probeable(row, record_size(row.mode), strategy=use):
+            continue  # spares are skipped, never probed
         target = addressed(row)
-        if probeable(target, record_size(target.mode)):
+        use = strategy_for(target.mode, strategy)
+        if probeable(target, record_size(target.mode), strategy=use):
             targets.append(target)
 
     by_mode: dict[str, list[params.Param]] = {}
@@ -726,56 +910,103 @@ def run(
     probes: list[Probe] = []
     try:
         for mode, mode_rows in by_mode.items():
-            # Rule: the mode is chosen before the record is read.
-            select_mode(device, mode)
-            buffer = buffer_for(mode, channel=mode_rows[0].channel or 0)
-            reference = buffer.read(device)
-            positive_control(device, buffer, reference, mode_rows, settle=settle)
-
-            for target in mode_rows:
-                stored = rec.decode_bit_field(reference, target)
-                result = probe(
-                    device,
-                    target,
-                    flip_value(target, stored),
-                    settle=settle,
-                    reference=reference,
-                    buffer=buffer,
-                )
-                if not result.restored:
-                    # A global row can move bits outside its own field,
-                    # and one ``10`` cannot put those back. Try the
-                    # mode's own restore (every row for global, the
-                    # whole record for mix/program) before stopping, so
-                    # the unit is left as clean as the protocol allows,
-                    # and say what could not be undone.
-                    leftover = changed_bits(reference, buffer.read(device))
-                    try:
-                        check_restore(
-                            device,
-                            reference,
-                            buffer=buffer,
-                            rows=mode_rows,
-                            preflight=False,
-                        )
-                    except ProbeAborted:
-                        pass
-                    raise ProbeAborted(
-                        f"{target.label}: the {mode} record did not come "
-                        f"back byte for byte after the probe (leftover "
-                        f"bits {leftover}); the run stops here"
-                    )
-                probes.append(result)
-
-            check_restore(
-                device, reference, buffer=buffer, rows=mode_rows, preflight=False
-            )
+            if strategy_for(mode, strategy) == "record":
+                record_mode(device, mode_rows, settle=settle, probes=probes)
+            else:
+                edit_mode(device, mode, mode_rows, settle=settle, probes=probes)
     except ProbeAborted as exc:
         # Keep what was proved before the abort: an interrupted run is
         # still evidence, and --json exists for the run log.
         exc.probes = list(probes)
         raise
     return probes
+
+
+def _unrestored(  # noqa: PLR0913, PLR0917 -- the row it failed on
+    device,
+    buffer: Buffer | RecordBuffer,
+    reference: bytes,
+    rows: list[params.Param],
+    target: params.Param,
+    mode: str,
+) -> None:
+    """Try the mode's own restore once more, then stop with what is left.
+
+    A global row can move bits outside its own field, and one ``10``
+    cannot put those back. Every mode gets one last restore attempt --
+    every row for global, the whole record for mix, program and effects
+    -- so the unit is left as clean as the protocol allows, and the abort
+    says what could not be undone.
+    """
+    leftover = changed_bits(reference, buffer.read(device))
+    try:
+        check_restore(device, reference, buffer=buffer, rows=rows, preflight=False)
+    except ProbeAborted:
+        pass
+    raise ProbeAborted(
+        f"{target.label}: the {mode} record did not come back byte for "
+        f"byte after the probe (leftover bits {leftover}); the run stops "
+        f"here"
+    )
+
+
+def record_mode(
+    device,
+    rows: list[params.Param],
+    *,
+    settle: float,
+    probes: list[Probe],
+) -> None:
+    """Probe one mode's rows through the ``09``/``08`` record path."""
+    select_mode(device, BLOCKED)  # before the record is read
+    buffer = RecordBuffer()
+    reference = buffer.read(device)
+    record_control(device, buffer, reference, rows, settle=settle)
+
+    for target in rows:
+        stored = rec.decode_bit_field(reference, target)
+        result = record_probe(
+            device,
+            buffer,
+            target,
+            flip_value(target, stored),
+            settle=settle,
+            reference=reference,
+        )
+        if not result.restored:
+            _unrestored(device, buffer, reference, rows, target, BLOCKED)
+        probes.append(result)
+    check_restore(device, reference, buffer=buffer, rows=rows, preflight=False)
+
+
+def edit_mode(
+    device,
+    mode: str,
+    rows: list[params.Param],
+    *,
+    settle: float,
+    probes: list[Probe],
+) -> None:
+    """Probe one mode's rows through the ``10`` edit path."""
+    select_mode(device, mode)  # before the record is read
+    buffer = cast(Buffer, buffer_for(mode, channel=rows[0].channel or 0))
+    reference = buffer.read(device)
+    positive_control(device, buffer, reference, rows, settle=settle)
+
+    for target in rows:
+        stored = rec.decode_bit_field(reference, target)
+        result = probe(
+            device,
+            target,
+            flip_value(target, stored),
+            settle=settle,
+            reference=reference,
+            buffer=buffer,
+        )
+        if not result.restored:
+            _unrestored(device, buffer, reference, rows, target, mode)
+        probes.append(result)
+    check_restore(device, reference, buffer=buffer, rows=rows, preflight=False)
 
 
 def succeeded(probes: list[Probe]) -> bool:
@@ -829,15 +1060,16 @@ class EditingDemo:
     grew. It opens no MIDI port, and it keeps nothing either: the only
     writes it accepts are *loads* of a record, and the frames it
     records in :attr:`sent` are the ones the tool asked it to send --
-    ``10``, ``02``, ``0D`` and ``0E`` with number 100 -- for the same
-    safety check the tests make. There is no global store here at all:
-    opcode ``0A`` is one, and a demo that offered it would let a bug
-    in the tool pass as a restore.
+    ``10``, ``09``, ``08``, ``02``, ``0D`` and ``0E`` with number 100
+    -- for the same safety check the tests make. There is no global
+    store here at all: opcode ``0A`` is one, and a demo that offered it
+    would let a bug in the tool pass as a restore.
 
-    Like the unit, it keeps the three records separately: the 20-byte
-    global record, the 138-byte mix edit buffer (number 100) and the
+    Like the unit, it keeps the four records separately: the 20-byte
+    global record, the 138-byte mix edit buffer (number 100), the
     350-byte program edit buffer the tool addresses as channel 1's
-    (``edit=1``). ``modes`` names the modes this run will probe, and
+    (``edit=1``) and the 65-byte effects edit buffer. ``modes`` names
+    the modes this run will probe, and
     only their fields are seeded: each gets a current value whose flip
     is also in range (a field left at zero whose complement would leave
     the range reports ``partial`` for a reason that is neither the tool
@@ -855,13 +1087,16 @@ class EditingDemo:
         program[-1] = 0x80
         mix = bytearray(rec.MIX_BYTES)
         glob = bytearray(rec.GLOBAL_BYTES)
+        effects = bytearray(rec.EFFECTS_BYTES)
         self._seed(glob, "global", modes)
         self._seed(mix, MIX_MODE, modes)
         self._seed(program, "program", modes)
+        self._seed(effects, BLOCKED, modes)
         self.description = "demo (no MIDI ports opened)"
         self._global = glob
         self._mix = mix
         self._program = program
+        self._effects = effects
         #: Every frame the tool asked to send, in order.
         self.sent: list[bytes] = []
         self.edits: list[tuple[int, int, int, int, int, int, int]] = []
@@ -879,8 +1114,11 @@ class EditingDemo:
         """
         if mode not in modes:
             return
+        strategy = strategy_for(mode, "auto")
         for row in params.PARAMS:
-            if row.mode != mode or not probeable(row, record_size(mode)):
+            if row.mode != mode or not probeable(
+                row, record_size(mode), strategy=strategy
+            ):
                 continue
             target = addressed(row)
             current = rec.decode_bit_field(record, target)
@@ -977,6 +1215,50 @@ class EditingDemo:
         self.sent.append(m.edit_program_dump(record, edit=edit))
         self._program[:] = bytes(record)[: rec.PROGRAM_BYTES]
 
+    def request(
+        self,
+        outgoing: bytes,
+        wanted: int,
+        *,
+        number: int | None = None,
+        timeout: float | None = None,
+    ) -> m.Packet:
+        """Answer the effects edit-buffer request: ``09 00`` -> ``08 00``.
+
+        Only that one request exists here; anything else is refused
+        rather than answered with the wrong record. The request is kept
+        in :attr:`sent`, so the safety scan sees the ``09`` as well as
+        the ``08`` it is answered with.
+        """
+        self._tick()
+        request = m.parse(bytes(outgoing))
+        if (
+            request is None
+            or request.function != m.Function.EDIT_EFFECTS_REQUEST
+            or wanted != m.Function.EDIT_EFFECTS_DUMP
+            or number not in (None, 0)
+        ):
+            raise ValueError(
+                "this demo answers only the effects edit-buffer request "
+                "(09 00) with its 08 dump"
+            )
+        self.sent.append(bytes(outgoing))
+        packet = m.parse(m.edit_effects_dump(bytes(self._effects)))
+        if packet is None:  # pragma: no cover - the encoder always frames
+            raise RuntimeError("the demo built a frame it cannot parse")
+        return packet
+
+    def write_edit_effects(
+        self, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        """Load the effects edit buffer. **A load; user slots are untouched.**"""
+        self._tick()
+        rec.check_size(record, rec.EFFECTS_BYTES, "an effects record")
+        # Built (and range-checked) rather than sent: the frame is kept
+        # so that the safety scan can see exactly what the tool asked for.
+        self.sent.append(m.edit_effects_dump(record))
+        self._effects[:] = bytes(record)[: rec.EFFECTS_BYTES]
+
     def midi_edit(  # noqa: PLR0913 -- the body is the spec's seven fields
         self,
         mode: int,
@@ -1042,9 +1324,10 @@ def select_rows(args: argparse.Namespace) -> tuple[list[params.Param], int]:
 
     The skip count is taken *before* the addressless rows are dropped
     and before ``--limit`` applies, so the plan can say how many there
-    were: it counts the specification's addressless rows **and** the
-    effects rows, which are skipped because the unit ignores a ``10``
-    there. ``--limit 3`` then means three **probed** rows rather than
+    were: it counts the specification's addressless rows and, under the
+    ``edit`` strategy, the effects rows, because the unit ignores a
+    ``10`` there. Under ``auto`` and ``record`` effects rows are
+    selected. ``--limit 3`` then means three **probed** rows rather than
     three rows of which one could not be.
     """
     modes = tuple(params.MODE_NUMBERS) if args.all else (args.mode,)
@@ -1054,7 +1337,15 @@ def select_rows(args: argparse.Namespace) -> tuple[list[params.Param], int]:
         for row in params.PARAMS
         if row.mode in modes and (label is None or label in row.label.casefold())
     ]
-    rows = [addressed(row) for row in wanted if probeable(row, record_size(row.mode))]
+    rows = [
+        addressed(row)
+        for row in wanted
+        if probeable(
+            row,
+            record_size(row.mode),
+            strategy=strategy_for(row.mode, args.strategy),
+        )
+    ]
     skipped = len(wanted) - len(rows)
     if args.limit is not None:
         rows = rows[: args.limit]
@@ -1068,13 +1359,14 @@ def describe_plan(
     print("PROBE PARAMETERS -- A DIFFERENTIAL PROBE OF THE EDIT BUFFERS")
     print("=" * 60)
     print("This tool moves parameters in the unit's volatile buffers and")
-    print("puts them back. It sends only MIDI Edit (10), Edit Program")
-    print("Dump (02, a load), Mix Dump (0E with number 100, the mix edit")
-    print("buffer load) and Mode Select (0D, no memory written); the")
-    print("stores (00, 0A, and 0E with a number below 100) are never")
-    print("built or sent, so the user's bank is not written. Every")
-    print("restore is read back and compared, and a restore that does")
-    print("not verify stops the run.")
+    print("puts them back. It sends only MIDI Edit (10), Edit Effects")
+    print("Dump Request and Dump (09 and 08, the effects edit buffer),")
+    print("Edit Program Dump (02, a load), Mix Dump (0E with number 100,")
+    print("the mix edit buffer load) and Mode Select (0D, no memory")
+    print("written); the stores (06, 00, 0A, and 0E with a number below")
+    print("100) are never built or sent, so the user's bank is not")
+    print("written. Every restore is read back and compared, and a")
+    print("restore that does not verify stops the run.")
     print("")
     target = (
         "the in-process demo (no MIDI port opened)"
@@ -1086,20 +1378,23 @@ def describe_plan(
     json_path = args.json_path or "none (--json writes it)"
     print(f"  target      : {target}")
     print(f"  mode        : {'every mode' if args.all else args.mode}")
+    print(f"  strategy    : {args.strategy} (effects load 08, read 09; the rest 10)")
     print(
         f"  rows        : {len(rows)} selected, {skipped} skipped (no "
-        f"direct-edit address, or effects: the unit ignores a 10 "
-        f"there); limit {limit}"
+        f"direct-edit address, or an effects row under the edit "
+        f"strategy); limit {limit}"
     )
     print(f"  settle      : {args.settle:.3f} s between the edit and the read")
     print(f"  backup      : {backup}")
     print(f"  json        : {json_path}")
     print("  mode select : Mix mode for mix and program (a program 10 is")
     print("                ignored in Program mode), Program mode for")
-    print("                global; not a store, before the record is read")
+    print("                global and effects; not a store, before the")
+    print("                record is read")
     print("  restore     : per mode, from that mode's own record; the")
     print("                global record has no load, so its rows go back")
-    print("                with a 10 each; pre-flight with no probe first,")
+    print("                with a 10 each; effects load the whole record")
+    print("                back with 08; pre-flight with no probe first,")
     print("                then after every probe, then a final check")
 
 
@@ -1151,6 +1446,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="probe every mode, not just --mode",
     )
     parser.add_argument(
+        "--strategy",
+        choices=("auto", "edit", "record"),
+        default="auto",
+        help=(
+            "how a row is moved: edit sends 10 everywhere; record loads "
+            "the effects edit buffer with 08; auto does both (default: auto)"
+        ),
+    )
+    parser.add_argument(
         "--limit",
         metavar="N",
         type=int,
@@ -1195,11 +1499,11 @@ def write_backup(device, rows: list[params.Param], directory: Path) -> Path:
     -- the record the run restores from, framed as that mode's *load*
     message where one exists: an Edit Program Dump (opcode ``02``) for
     a program run, a Mix Dump (opcode ``0E``) with number **100** for a
-    mix run. Global is the bare 20-byte record: the global restore is
-    one ``10`` per row and the record has no load message to frame it
-    in, because opcode ``0A`` is a store. Nothing here writes to the
-    unit, and nothing here is a store: the file is the reference, not a
-    bank.
+    mix run, and an Edit Effects Dump (opcode ``08``) for an effects
+    run. Global is the bare 20-byte record: the global restore is one
+    ``10`` per row and the record has no load message to frame it in,
+    because opcode ``0A`` is a store. Nothing here writes to the unit,
+    and nothing here is a store: the file is the reference, not a bank.
     """
     if not rows:
         raise ValueError("no row is selected, so there is no reference to save")
@@ -1213,6 +1517,8 @@ def write_backup(device, rows: list[params.Param], directory: Path) -> Path:
         path.write_bytes(reference)
     elif mode == MIX_MODE:
         path.write_bytes(m.mix_dump(MIX_EDIT_NUMBER, reference))
+    elif mode == BLOCKED:
+        path.write_bytes(m.edit_effects_dump(reference))
     else:
         path.write_bytes(m.edit_program_dump(reference, edit=buffer.edit))
     return path
@@ -1320,7 +1626,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.backup_dir:
             backup = write_backup(device, rows, Path(args.backup_dir))
             print(f"restore reference written to {backup}", file=sys.stderr)
-        probes = run(device, rows, settle=args.settle)
+        probes = run(device, rows, settle=args.settle, strategy=args.strategy)
     except ProbeAborted as exc:
         print(f"aborted: {exc}", file=sys.stderr)
         if exc.probes:

@@ -57,8 +57,13 @@ tool = _tool()
 #: scan's ``\b`` matters: ``edit_program_dump`` -- the **load** this tool
 #: builds for ``--backup-dir`` -- contains ``program_dump``, but ``_`` is
 #: a word character, so there is no boundary before ``program`` inside it
-#: and the load cannot be mistaken for the store by this pattern.
-_FORBIDDEN = re.compile(r"\b(write_program|write_global|program_dump)\b")
+#: and the load cannot be mistaken for the store by this pattern. The
+#: same applies to ``edit_effects_dump`` versus ``effects_dump`` (the
+#: user effects store, opcode ``06``) and ``write_edit_effects`` versus
+#: ``write_effects``.
+_FORBIDDEN = re.compile(
+    r"\b(write_program|write_global|program_dump|write_effects|effects_dump)\b"
+)
 
 _MODE_BY_NUMBER = {number: name for name, number in params.MODE_NUMBERS.items()}
 
@@ -87,6 +92,15 @@ PROGRAM_THREE = [
     params.at("program", 16, 0, 0),  # Keyboard / drum mode, 1 bit
     params.at("program", 0, 0, 2),  # Sample number, 7 bits
     params.at("program", 2, 0, 1),  # Sound effect bus, 2 bits
+]
+
+#: Three Effects rows, inside the 65-byte edit buffer. The first three
+#: rows are the deleted spares, whose 7-bit fields at 0, 7 and 14 flip
+#: from a zeroed record to a legal 95.
+EFFECTS_THREE = [
+    params.at("effects", 2, 0, 0),
+    params.at("effects", 2, 1, 0),
+    params.at("effects", 2, 2, 0),
 ]
 
 #: Five rows across all four modes for the ``flip_value`` spot-check: a
@@ -246,14 +260,108 @@ class Firmware:
         self.modes.append(mix_mode)
 
 
-def _packets(firmware: Firmware) -> list[m.Packet]:
+class RecordFirmware:
+    """A stand-in unit for the effects record path: ``09`` asks, ``08`` loads.
+
+    It keeps one 65-byte edit buffer and stores every load byte for
+    byte. ``clamp`` is ``(row, at_least, replacement)``: a load whose
+    field reads at least ``at_least`` is normalized to ``replacement``,
+    the shape a unit that rounds a value to its own steps has. The
+    arithmetic is a plain bit loop, deliberately **not**
+    :func:`nano.records.encode_bit_field`, so the fake can disagree with
+    the tool's address. ``ignore_load`` records the frame and changes
+    nothing; ``corrupt_from`` is the number of loads whose content the
+    fake stores wrongly, for the restore-failure test.
+    """
+
+    def __init__(
+        self,
+        *,
+        clamp: tuple[params.Param, int, int] | None = None,
+        ignore_load: bool = False,
+        corrupt_from: int | None = None,
+    ) -> None:
+        self.effects_record = bytearray(rec.EFFECTS_BYTES)
+        self.sent: list[bytes] = []
+        self.events: list[str] = []
+        self.modes: list[bool] = []
+        self.loads = 0
+        self.clamp = clamp
+        self.ignore_load = ignore_load
+        self.corrupt_from = corrupt_from
+
+    @staticmethod
+    def _read_field(record: bytearray, param: params.Param) -> int:
+        value = 0
+        top = param.bit_address + param.bits - 1
+        for step in range(param.bits):
+            at = top - step
+            value = (value << 1) | ((record[at >> 3] >> (at & 7)) & 1)
+        return value
+
+    @staticmethod
+    def _write_field(record: bytearray, param: params.Param, stored: int) -> None:
+        top = param.bit_address + param.bits - 1
+        for step in range(param.bits):
+            at = top - step
+            mask = 1 << (at & 7)
+            if (stored >> (param.bits - 1 - step)) & 1:
+                record[at >> 3] |= mask
+            else:
+                record[at >> 3] &= ~mask & 0xFF
+
+    def close(self) -> None:
+        pass
+
+    def request(
+        self,
+        outgoing: bytes,
+        wanted: int,
+        *,
+        number: int | None = None,
+        timeout: float | None = None,
+    ) -> m.Packet:
+        self.events.append("request")
+        self.sent.append(bytes(outgoing))
+        assert wanted == m.Function.EDIT_EFFECTS_DUMP
+        assert number in (None, 0)
+        packet = m.parse(m.edit_effects_dump(bytes(self.effects_record)))
+        assert packet is not None
+        return packet
+
+    def write_edit_effects(
+        self, record: bytes, *, timeout: float | None = None
+    ) -> None:
+        self.events.append("write")
+        rec.check_size(record, rec.EFFECTS_BYTES, "an effects record")
+        self.sent.append(m.edit_effects_dump(record))
+        if self.ignore_load:
+            self.loads += 1
+            return
+        stored = bytearray(bytes(record)[: rec.EFFECTS_BYTES])
+        if self.corrupt_from is not None and self.loads >= self.corrupt_from:
+            stored[0] ^= 0x01
+        self.loads += 1
+        if self.clamp is not None:
+            param, at_least, replacement = self.clamp
+            if self._read_field(stored, param) >= at_least:
+                self._write_field(stored, param, replacement)
+        self.effects_record[:] = stored
+
+    def mode_select(self, mix_mode: bool) -> None:
+        self.events.append("mode")
+        self.sent.append(m.mode_select(mix_mode))
+        self.modes.append(mix_mode)
+
+
+def _packets(firmware: Firmware | RecordFirmware) -> list[m.Packet]:
     """Every frame parsed, in the order the tool sent it."""
     parsed = [m.parse(frame) for frame in firmware.sent]
     assert all(packet is not None for packet in parsed)
     return [packet for packet in parsed if packet is not None]
 
 
-def _functions(firmware: Firmware) -> list[int]:
+def _functions(firmware: Firmware | RecordFirmware) -> list[int]:
     """Every frame's opcode, in the order the tool sent it."""
     return [packet.function for packet in _packets(firmware)]
 
@@ -606,21 +714,23 @@ class TestSkippedRowsNeverReachTheWire:
         assert firmware.sent == []
         assert firmware.events == []
 
-    def test_effects_rows_are_skipped_and_nothing_is_sent_for_them(self):
+    def test_effects_rows_are_skipped_under_the_edit_strategy(self):
         firmware = Firmware()
         effects = [row for row in params.PARAMS if row.mode == "effects"]
         assert effects, "the tables have effects rows; this proves nothing"
-        probes = tool.run(firmware, effects, settle=0.0)
+        probes = tool.run(firmware, effects, settle=0.0, strategy="edit")
 
         assert probes == []
         assert firmware.edits == []
         assert firmware.sent == []
         assert firmware.events == []
 
-    def test_the_buffer_factory_refuses_the_blocked_mode(self):
-        with pytest.raises(tool.ProbeAborted) as excinfo:
-            tool.buffer_for("effects")
-        assert "ignored a 10" in str(excinfo.value)
+    def test_the_buffer_factory_returns_the_effects_record(self):
+        buffer = tool.buffer_for("effects")
+        assert buffer == tool.RecordBuffer()
+        assert buffer.mode == "effects"
+        assert buffer.edit == 0
+        assert buffer.size == rec.EFFECTS_BYTES == 65
 
 
 class TestTheBufferFactory:
@@ -833,12 +943,15 @@ class TestTheDemoWalkThrough:
         assert out.count("confirmed restored") == 2
         assert "program" in out
 
-    def test_the_effects_demo_says_skipped_rather_than_crashing(self, capsys):
-        code = tool.main(["--demo", "--mode", "effects", "--limit", "2"])
+    def test_the_effects_demo_confirms_through_the_record(self, capsys):
+        code = tool.main(
+            ["--demo", "--mode", "effects", "--limit", "2", "--settle", "0"]
+        )
 
-        assert code == 1  # nothing was probed, so nothing was confirmed
+        assert code == 0
         captured = capsys.readouterr()
-        assert "skipped" in captured.out
+        assert captured.out.count("confirmed restored") == 2
+        assert "09" in captured.out and "08" in captured.out
         assert "aborted" not in captured.err
 
     def test_a_real_port_without_yes_sends_nothing(self, monkeypatch, capsys):
@@ -848,3 +961,85 @@ class TestTheDemoWalkThrough:
         monkeypatch.setattr(tool.b.NanoBridge, "open", explode)
         assert tool.main(["--port", "X:1", "--mode", "global", "--limit", "3"]) == 0
         assert "dry run" in capsys.readouterr().out
+
+
+class TestTheRecordStrategy:
+    """Effects are proved through ``09``/``08``, not the ignored ``10``."""
+
+    def test_three_effects_rows_confirm_and_the_record_came_back(self):
+        firmware = RecordFirmware()
+        reference = bytes(firmware.effects_record)
+        probes = tool.run(firmware, EFFECTS_THREE, settle=0.0)
+
+        assert [p.verdict for p in probes] == ["confirmed"] * 3
+        assert [p.restored for p in probes] == [True] * 3
+        assert tool.succeeded(probes) is True
+        assert bytes(firmware.effects_record) == reference
+        # No 10 was sent: effects use the load, and the mode is selected
+        # in Program mode before the record is read.
+        assert firmware.modes == [False]
+        assert "edit" not in firmware.events
+
+    def test_the_wire_carries_only_08_09_and_0d(self):
+        firmware = RecordFirmware()
+        tool.run(firmware, EFFECTS_THREE, settle=0.0)
+        opcodes = set(_functions(firmware))
+
+        assert opcodes <= {0x08, 0x09, 0x0D}
+        for forbidden in (0x06, 0x00, 0x0A, 0x02, 0x0E):
+            assert forbidden not in opcodes
+        # Every load is the edit buffer: number 0, never a user slot.
+        loads = [packet for packet in _packets(firmware) if packet.function == 0x08]
+        assert loads
+        assert all(packet.number == 0 for packet in loads)
+
+    def test_a_normalizing_unit_reads_partial(self):
+        row = EFFECTS_THREE[0]
+        # Any load whose field reads at least 1 is stored as 1: the
+        # probe's target 95 comes back as 1, inside the field, so the
+        # verdict is partial rather than a wrong address.
+        firmware = RecordFirmware(clamp=(row, 1, 1))
+        probes = tool.run(firmware, EFFECTS_THREE, settle=0.0)
+
+        assert probes[0].verdict == "partial"
+        assert probes[0].restored is True
+        assert [p.verdict for p in probes[1:]] == ["confirmed"] * 2
+        assert tool.succeeded(probes) is False
+
+    def test_a_unit_that_ignores_the_load_reads_no_change(self):
+        row = EFFECTS_THREE[0]
+        firmware = RecordFirmware(ignore_load=True)
+        buffer = tool.buffer_for("effects")
+        reference = buffer.read(firmware)
+        stored = rec.decode_bit_field(reference, row)
+        result = tool.record_probe(
+            firmware,
+            buffer,
+            row,
+            tool.flip_value(row, stored),
+            settle=0.0,
+            reference=reference,
+        )
+
+        assert result.verdict == "no-change"
+        assert result.changed == ()
+        assert result.restored is True
+        assert bytes(firmware.effects_record) == reference
+
+    def test_a_record_restore_that_does_not_verify_aborts_the_run(self):
+        # The control's two loads and the probe's load land; the probe's
+        # restore is the fourth load and does not.
+        firmware = RecordFirmware(corrupt_from=3)
+        with pytest.raises(tool.ProbeAborted) as excinfo:
+            tool.run(firmware, EFFECTS_THREE, settle=0.0)
+        assert excinfo.value.preflight is False
+        assert "effects record did not come back" in str(excinfo.value)
+
+    def test_the_demo_records_never_build_a_user_effects_store(self):
+        demo = tool.EditingDemo(modes=("effects",))
+        probes = tool.run(demo, EFFECTS_THREE, settle=0.0)
+        assert [p.verdict for p in probes] == ["confirmed"] * 3
+
+        opcodes = set(_functions(demo))
+        assert opcodes <= {0x08, 0x09, 0x0D}
+        assert 0x06 not in opcodes
