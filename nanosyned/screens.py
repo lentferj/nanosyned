@@ -92,12 +92,20 @@ class KeyHints(_LibraryKeyHints):
     The library widget re-wraps its text on mount and on resize but never
     asks for a layout, so ``height: auto`` keeps whatever height the first
     render gave it. That first render happens before the widget has a width:
-    the wrap falls back to its minimum, the whole legend stacks into about a
-    dozen lines, and the footer stays that tall -- a band of empty panel
-    under the keys -- until the terminal is resized. Requesting the layout
-    after each re-wrap keeps the footer only as tall as the wrapped text,
-    which is the point of wrapping it here at all.
+    the wrap falls back to its minimum, the whole legend stacks one hint per
+    line -- a dozen of them before the library capped the footer at
+    ``MAX_LINES`` -- and the footer stays that tall until something resizes
+    it. Requesting the layout after each re-wrap keeps the footer only as
+    tall as the wrapped text, which is the point of wrapping it here at all.
     """
+
+    # The family caps the legend and lets an app pick the cap. The default of
+    # two lines is right for the canonical list, but this browser's is longer:
+    # at a hundred columns it needs four, and a two-line cap would hide the
+    # whole write path -- ``g global``, ``w write gate``, ``z undo``,
+    # ``Z undo all`` -- and ``? help`` behind the pointer. Four shows the
+    # whole list at that width and still caps it on a narrow terminal.
+    MAX_LINES = 4
 
     def on_mount(self) -> None:
         super().on_mount()

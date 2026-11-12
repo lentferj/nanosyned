@@ -15,8 +15,9 @@
 
 """The legend, the workers, and the file the app writes its state to.
 
-Neither the wrapping nor the AST checks need an event loop, so they live
-outside the asyncio-marked module. The family properties here are p2ked's
+Neither the wrapping nor the AST checks need an event loop; only the two
+tests that mount the footer to prove its cap do, and pytest's auto asyncio
+mode supplies the loop. The family properties here are p2ked's
 ``tests/test_legend.py``, retargeted:
 
 * a footer that truncates teaches the user its last keys do not exist;
@@ -35,7 +36,10 @@ import ast
 import os
 import shutil
 
+from textual.app import App
+
 from nanosyned.app import KEY_HINTS, NanosynedApp, wrap_blocks
+from nanosyned.screens import KeyHints
 from vinsynlib import devchecks, keys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -186,6 +190,75 @@ class TestTheLegendFollowsTheFamily:
         assert not (extra_keys & family_keys)
         bound = {binding.key for binding in NanosynedApp.BINDINGS}
         assert {"S", "asterisk", "V"} <= bound
+
+
+# --- the capped footer --------------------------------------------------------
+
+
+class _LegendApp(App):
+    """A bare screen holding the footer, so its width is the screen's."""
+
+    def compose(self):
+        yield KeyHints(KEY_HINTS)
+
+
+class TestTheFooterIsCapped:
+    """The library caps the shared legend; this tool chooses where.
+
+    The default of two lines is right for the canonical list, but this
+    tool's legend is longer: at a hundred columns it needs four, and a
+    two-line cap would hide the write path behind the pointer.
+    """
+
+    def test_the_cap_is_four_lines(self):
+        assert KeyHints.MAX_LINES == 4
+
+    def test_the_whole_legend_needs_four_lines_at_a_hundred_columns(self):
+        """Four is the measured need, not a round number.
+
+        ``98`` is the usable width of a hundred-column terminal -- the
+        width the family sizes its footers for -- and the wrapped legend
+        is exactly four lines there, so the cap hides nothing at that
+        width.
+        """
+        packed = wrap_blocks(KEY_HINTS, 98)
+        assert len(packed.splitlines()) == 4
+        assert _unpack(packed) == list(KEY_HINTS)
+
+    async def test_a_hundred_columns_renders_everything_with_no_pointer(self):
+        """The widget's usable width is the screen less four columns.
+
+        Two are the widget's own padding, which ``size`` already excludes,
+        and two the library subtracts again in ``_render_hints``. A
+        102-column screen is therefore the 98 above -- the width at which
+        the whole legend must render, with no ``MORE``.
+        """
+        async with _LegendApp().run_test(size=(102, 12)) as pilot:
+            await pilot.pause()
+            content = pilot.app.query_one(KeyHints).content
+            assert len(content.splitlines()) <= KeyHints.MAX_LINES
+            assert KeyHints.MORE not in content
+            assert _unpack(content) == list(KEY_HINTS)
+
+    async def test_a_narrow_footer_is_cut_and_points_at_the_rest(self):
+        """Forty columns cannot fit the legend, so it is cut, not dropped.
+
+        What is shown is whole hints and then the pointer -- never half a
+        hint -- and never more than the cap.
+        """
+        async with _LegendApp().run_test(size=(40, 12)) as pilot:
+            await pilot.pause()
+            widget = pilot.app.query_one(KeyHints)
+            lines = widget.content.split("\n")
+            assert 1 < len(lines) <= KeyHints.MAX_LINES
+            assert lines[-1].endswith(KeyHints.MORE)
+            visible = lines[-1][: -len(KeyHints.MORE)].rstrip()
+            for line in [*lines[:-1], visible]:
+                for piece in line.split(keys.LEGEND_SEPARATOR):
+                    assert piece.strip() in KEY_HINTS, piece
+            # The cut really happened: untruncated, this width needs more.
+            wrapped = wrap_blocks(KEY_HINTS, widget.size.width - 2)
+            assert len(wrapped.splitlines()) > len(lines)
 
 
 # --- the workers -------------------------------------------------------------
