@@ -59,7 +59,7 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Header, Static
 
-from nano import banks, livenames, verify
+from nano import banks, importplan, livenames, verify
 from nano import catalog as cat
 from nano import config as cfg
 from nano import records as rec
@@ -75,6 +75,9 @@ from nanosyned.editor import (
     MixEditRecord,
     ProgramEditor,
 )
+from nanosyned.importbank import WholeBankScreen
+from nanosyned.importflow import run_import_flow
+from nanosyned.importsingle import SingleMappingScreen
 from nanosyned.paramsui import ParameterScreen
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
 from nanosyned.screens import (
@@ -262,6 +265,7 @@ class NanosynedApp(App):
         Binding("z", "undo", "Undo"),
         Binding("Z", "undo_all", "Undo all"),
         Binding("i", "device_info", "Device"),
+        Binding("I", "import", "Import"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
         Binding("q", "quit", "Quit"),
@@ -320,6 +324,7 @@ class NanosynedApp(App):
         #: write action asks :meth:`EditGate.check` on the main thread
         #: before a worker exists, so a locked gate sends nothing at all.
         self._write_gate = EditGate(armed=allow_write)
+        self._last_import_plan = None
         #: The family's undo log. ``plan``/``settle`` are the doors used
         #: here: the re-send runs on a worker, so the entries leave the log
         #: as the plan is taken, on the main thread, and ``settle`` reports
@@ -2400,6 +2405,80 @@ class NanosynedApp(App):
         lines.append(_build_line())
         self.push_screen(ReportScreen("Device", "\n".join(lines)))
 
+    def action_import(self) -> None:
+        """Open the import flow: picker, source bank, whole bank or single.
+
+        The flow is read-only up to the screens it pushes, so a locked gate
+        does not stop it; the screens show the gate state and re-check it
+        before any plan leaves them. ``None`` as the starting path lets the
+        picker consult its remembered folder rather than overriding it.
+        """
+        run_import_flow(
+            self,
+            None,  # type: ignore[arg-type]
+            open_whole_bank=self._open_whole_bank,
+            open_single=self._open_single,
+        )
+
+    def _open_whole_bank(self, plan) -> None:
+        """Push the whole-bank screen; run the plan when it confirms."""
+
+        def done(result) -> None:
+            if result is None:
+                return
+            self._import_plan(result)
+
+        self.push_screen(
+            WholeBankScreen(plan, gate=self._write_gate, catalog=self.catalog),
+            done,
+        )
+
+    def _open_single(self, bank) -> None:
+        """Push the mapping screen; plan its assignments when it confirms."""
+
+        def done(result) -> None:
+            if not result:
+                return
+            try:
+                plan = importplan.plan_single(bank, list(result))
+            except ValueError as exc:
+                self.notify_status(str(exc), refused=True)
+                return
+            self._import_plan(plan)
+
+        def preview(record) -> None:
+            self._preview_import(record)
+
+        self.push_screen(
+            SingleMappingScreen(
+                bank=bank,
+                gate=self._write_gate,
+                catalog=self.catalog,
+                on_preview=preview,
+            ),
+            done,
+        )
+
+    def _import_plan(self, plan) -> None:
+        """Hand a confirmed plan to the import worker.
+
+        T12 owns the real worker, the progress screen and the refresh; until
+        it lands this keeps the callback shape the screens answer to and
+        records that a plan was accepted, so the flow stays testable without
+        a device.
+        """
+        self._last_import_plan = plan
+        self.notify_status(f"import plan accepted: {len(plan.steps)} step(s)")
+
+    def _preview_import(self, record) -> None:
+        """Load a source record into the program edit buffer (no store)."""
+        try:
+            self.device.write_edit_program(record, edit=0)
+        except Exception as exc:
+            self.notify_status(f"preview: {exc}", refused=True)
+            return
+        self.notify_status("loaded into the edit buffer; nothing stored")
+
     def action_help(self) -> None:
         self.push_screen(ReportScreen("nanosyned", f"{_HELP}\n\n{_build_line()}"))
 
@@ -2445,6 +2524,7 @@ Keys
   w         arm or lock the write gate
   z Z       undo / undo all of this session's stores
   i         what the unit says it is
+  I         import programs from a .syx / .sqs file
   q         quit
 
 Writing

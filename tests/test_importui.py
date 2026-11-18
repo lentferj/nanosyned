@@ -44,6 +44,7 @@ from nanosyned.app import NanosynedApp
 from nanosyned.demo import DemoDevice
 from nanosyned.editor import EditGate
 from nanosyned.importbank import WholeBankScreen
+from nanosyned.importsingle import SingleMappingScreen
 from nanosyned.picker import FilePickerScreen
 from vinsynlib.ui.confirm import ConfirmScreen
 from vinsynlib.ui.modals import ChoiceScreen
@@ -523,3 +524,229 @@ class TestTheWholeBankInTheFlow:
         plan = answers[0]
         assert [step.target for step in plan.steps] == [3]
         assert plan.skipped == ("source 127 is hardwired silent",)
+
+
+# --- the single / multiple mapping screen ---------------------------------
+
+
+async def _open_single(pilot, screen, seen) -> None:
+    """Push a single-mapping screen over the running app and wait for it."""
+    app = pilot.app
+    app.push_screen(screen, seen.append)
+    await _until(pilot, lambda: isinstance(app.screen, SingleMappingScreen))
+    await _until(pilot, lambda: len(app.screen.query("#single-table")) == 1)
+
+
+class TestTheSingleMappingScreen:
+    """The slot map, its validation, and the two questions."""
+
+    async def test_assign_one_slot(self, tmp_path):
+        bank = _bank((0, "Src0"), (1, "Src1"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("space")
+            await pilot.pause()
+            assert screen.assignments == [(0, 0)]
+            table = screen.query_one("#single-table", DataTable)
+            assert str(table.get_row_at(0)[2]) == "[b]000[/b]"
+
+    async def test_a_duplicate_target_is_refused(self, tmp_path):
+        bank = _bank((0, "Src0"), (1, "Src1"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("0", "0", "5")
+            await pilot.pause()
+            await pilot.press("down")
+            await pilot.pause()
+            await pilot.press("0", "0", "5")
+            await pilot.pause()
+            status = screen.query_one("#single-status", Static)
+            assert "assigned twice" in str(status.content)
+
+    async def test_target_127_is_refused(self, tmp_path):
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("1", "2", "7")
+            await pilot.pause()
+            status = screen.query_one("#single-status", Static)
+            assert "hardwired silent" in str(status.content)
+
+    async def test_an_out_of_range_target_is_refused(self, tmp_path):
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("1", "2", "8")
+            await pilot.pause()
+            status = screen.query_one("#single-status", Static)
+            assert "outside 0-126" in str(status.content)
+
+    async def test_auto_assign_skips_used_slots(self, tmp_path):
+        bank = _bank((0, "Src0"), (1, "Src1"))
+        catalog = _catalog((0, "Old0"), (1, "Old1"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True), catalog=catalog)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("A")
+            await pilot.pause()
+            targets = [target for _, target in screen.assignments]
+            assert 0 not in targets
+            assert 1 not in targets
+
+    async def test_unassign(self, tmp_path):
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("space")
+            await pilot.pause()
+            assert screen.assignments == [(0, 0)]
+            await pilot.press("u")
+            await pilot.pause()
+            assert screen.assignments == []
+
+    async def test_clear(self, tmp_path):
+        bank = _bank((0, "Src0"), (1, "Src1"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("space")
+            await pilot.press("down")
+            await pilot.press("space")
+            await pilot.pause()
+            assert len(screen.assignments) == 2
+            await pilot.press("U")
+            await pilot.pause()
+            assert screen.assignments == []
+
+    async def test_gate_kept(self, tmp_path):
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=False))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("space")
+            await pilot.pause()
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, SingleMappingScreen)
+            assert seen == []
+            status = screen.query_one("#single-status", Static)
+            assert "write gate is locked" in str(status.content)
+
+    async def test_cancel_typed_target_then_screen(self, tmp_path):
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("1")
+            await pilot.pause()
+            assert screen._slot_entry == "1"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert screen._slot_entry == ""
+            assert isinstance(app.screen, SingleMappingScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert seen == [None]
+
+    async def test_two_confirmations_answer_the_assignments(self, tmp_path):
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("space")
+            await pilot.pause()
+            await pilot.press("ctrl+s")
+            await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+            assert "import 1 programs into the User bank?" in app.screen.prompt_text
+            await pilot.press("y")
+            await _until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConfirmScreen)
+                    and "these User slots will be overwritten" in app.screen.prompt_text
+                ),
+            )
+            await pilot.press("y")
+            await _until(pilot, lambda: bool(seen))
+            assert seen == [[(0, 0)]]
+            await _until(pilot, lambda: not isinstance(app.screen, SingleMappingScreen))
+
+    async def test_a_gate_locked_between_the_confirms_refuses(self, tmp_path):
+        bank = _bank((0, "Src0"))
+        gate = EditGate(armed=True)
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=gate)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            await pilot.press("space")
+            await pilot.pause()
+            await pilot.press("ctrl+s")
+            await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+            await pilot.press("y")
+            await _until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConfirmScreen)
+                    and "these User slots will be overwritten" in app.screen.prompt_text
+                ),
+            )
+            gate.toggle()
+            await pilot.press("y")
+            await _until(pilot, lambda: isinstance(app.screen, SingleMappingScreen))
+            assert seen == []
+            status = screen.query_one("#single-status", Static)
+            assert "write gate is locked" in str(status.content)
+
+    async def test_non_printing_digits_do_not_crash(self, tmp_path):
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        seen: list = []
+        screen = SingleMappingScreen(bank, gate=EditGate(armed=True))
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open_single(pilot, screen, seen)
+            # Press a non-digit printable and an arrow while not typing.
+            await pilot.press("a")
+            await pilot.press("down")
+            await pilot.pause()
+            assert screen._slot_entry == ""
+            await pilot.press("escape")
+            await pilot.pause()
+            assert seen == [None]
