@@ -884,6 +884,28 @@ def _cmd_import(device, args) -> int:
     if not plan.steps:
         _usage("nothing selected; nothing sent")
 
+    # Notes: a part flag given for a part the file does not carry, and
+    # the records the plan skipped (source 127, mix 100 the edit buffer).
+    if args.all:
+        bank = _select_bank(source, args)
+        if args.effects and not bank.effects:
+            print(
+                "note: the file carries no effects patches; --effects skipped",
+                file=sys.stderr,
+            )
+        if args.mixes and not bank.mixes:
+            print(
+                "note: the file carries no mixes; --mixes skipped",
+                file=sys.stderr,
+            )
+        if args.global_ and bank.globals_ is None:
+            print(
+                "note: the file carries no global settings; --global skipped",
+                file=sys.stderr,
+            )
+    for note in plan.skipped:
+        print(f"note: {note}", file=sys.stderr)
+
     if args.dry_run:
         _import_dry_run(device, args, plan)
         return 0
@@ -896,10 +918,29 @@ def _import_plan(source: importing.ImportSource, args) -> importplan.ImportPlan:
     bank = _select_bank(source, args)
     try:
         if args.all:
-            return importplan.plan_bank(bank)
+            plan = importplan.plan_bank(bank)
+            # Add bank parts if requested
+            if args.effects:
+                plan = _combine_plans(plan, importplan.plan_all_effects(bank))
+            if args.mixes:
+                plan = _combine_plans(plan, importplan.plan_all_mixes(bank))
+            if args.global_:
+                plan = _combine_plans(plan, importplan.plan_all_global(bank))
+            return plan
         return importplan.plan_single(bank, _program_pairs(args.program))
     except ValueError as exc:
         _usage(str(exc))
+
+
+def _combine_plans(
+    base: importplan.ImportPlan, part: importplan.ImportPlan
+) -> importplan.ImportPlan:
+    """Combine a base plan with a part plan (effects/mixes/global)."""
+    return importplan.ImportPlan(
+        steps=base.steps + part.steps,
+        skipped=base.skipped + part.skipped,
+        overwrites=base.overwrites + part.overwrites,
+    )
 
 
 def _import_list(source: importing.ImportSource, args) -> int:
@@ -953,17 +994,21 @@ def _import_dry_run(device, args, plan: importplan.ImportPlan) -> None:
     catalog = _catalog(args)
     for step in plan.steps:
         target = step.target
-        if step.kind != "program" or target is None:
-            continue
+        kind = step.kind
         try:
-            previous = read_record(device, "program", target)
+            previous = read_record(device, kind, target)
         except Exception as exc:
             raise SystemExit(
                 f"error: cannot read destination {target}: {exc}"
             ) from None
-        old = record_name("program", previous) or catalog.display_name("USER", target)
-        new = record_name("program", step.record) or step.source_label
-        print(f"  {label('program', target, old)} -> {label('program', target, new)}")
+        if kind == "program":
+            old = record_name(kind, previous) or catalog.display_name(
+                "USER", cast(int, target)
+            )
+        else:
+            old = record_name(kind, previous)
+        new = record_name(kind, step.record) or step.source_label
+        print(f"  {label(kind, target, old)} -> {label(kind, target, new)}")
 
 
 def _import_write(device, args, plan: importplan.ImportPlan) -> int:

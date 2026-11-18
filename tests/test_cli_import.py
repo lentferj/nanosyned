@@ -71,6 +71,24 @@ def _program(number, name):
     return m.program_dump(number, record)
 
 
+def _effects(number, fill=0x40):
+    """One effects patch of rec.EFFECTS_BYTES."""
+    return m.effects_dump(number, bytes([fill]) * rec.EFFECTS_BYTES)
+
+
+def _mix(number, name=None):
+    """One mix of rec.MIX_BYTES."""
+    record = bytearray(rec.MIX_BYTES)
+    if name is not None:
+        m.encode_name(record, name, bit_offset=rec.MIX_NAME_BIT_OFFSET)
+    return m.mix_dump(number, record)
+
+
+def _global(fill=0x00):
+    """One global settings dump of rec.GLOBAL_BYTES."""
+    return m.global_dump(bytes([fill]) * rec.GLOBAL_BYTES)
+
+
 def run(capsys, *argv):
     code = 0
     try:
@@ -428,3 +446,210 @@ class TestImportWrite:
         assert code == 1
         assert device.program_writes == []
         assert len(bk.list_backups()) == 0
+
+
+class PartsDemo(PersistentDemo):
+    """A demo whose effects writes update the read-back store.
+
+    The base :class:`DemoDevice` records an effects write but does not
+    update ``_effects``, so a read-back would compare against the old
+    value. A real unit reads back what it stored; this keeps the demo
+    honest for the parts tests.
+    """
+
+    def write_effects(self, number, record, *, timeout=None):
+        super().write_effects(number, record, timeout=timeout)
+        self._effects[number] = bytes(record)
+
+
+class TestImportParts:
+    """``--effects``, ``--mixes`` and ``--global`` extend a bank import."""
+
+    def test_all_three_flags_write_the_parts_too(
+        self, config_path, tmp_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, PartsDemo())
+        path = tmp_path / "bank.syx"
+        path.write_bytes(
+            _program(3, "Invented3") + _effects(5) + _mix(10, "Bank10") + _global()
+        )
+        code, out, _err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--effects",
+            "--mixes",
+            "--global",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert [number for number, _ in device.program_writes] == [3]
+        assert [number for number, _ in device.effect_writes] == [5]
+        assert [number for number, _ in device.mix_writes] == [10]
+        assert len(device.global_writes) == 1
+        assert "4 record(s) to write" in out
+
+    def test_each_part_flag_alone_writes_only_that_part(
+        self, config_path, tmp_path, monkeypatch, capsys
+    ):
+        # --effects alone: programs + effects.
+        device = use_device(monkeypatch, PartsDemo())
+        path = tmp_path / "one.syx"
+        path.write_bytes(_program(7, "Invented7") + _effects(5))
+        code, _out, _err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--effects",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert [number for number, _ in device.program_writes] == [7]
+        assert [number for number, _ in device.effect_writes] == [5]
+        assert device.mix_writes == []
+        assert device.global_writes == []
+
+        # --mixes alone: programs + mixes.
+        device2 = use_device(monkeypatch, PersistentDemo())
+        path = tmp_path / "two.syx"
+        path.write_bytes(_program(3, "Alpha") + _mix(0, "MixA"))
+        code, _out, _err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--mixes",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert [number for number, _ in device2.program_writes] == [3]
+        assert [number for number, _ in device2.mix_writes] == [0]
+        assert device2.effect_writes == []
+        assert device2.global_writes == []
+
+        # --global alone: programs + global.
+        device3 = use_device(monkeypatch, PersistentDemo())
+        path = tmp_path / "three.syx"
+        path.write_bytes(_program(9, "Gamma") + _global())
+        code, _out, _err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--global",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert [number for number, _ in device3.program_writes] == [9]
+        assert len(device3.global_writes) == 1
+
+    def test_missing_part_is_a_note_not_error(
+        self, config_path, tmp_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, PersistentDemo())
+        path = tmp_path / "noeffects.syx"
+        path.write_bytes(_program(7, "OnlyProgram"))
+        code, _out, _err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--effects",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert device.effect_writes == []
+        assert [number for number, _ in device.program_writes] == [7]
+
+    def test_mix_100_is_skipped_with_a_note(
+        self, config_path, tmp_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, PersistentDemo())
+        path = tmp_path / "mix100.syx"
+        path.write_bytes(_program(3, "Alpha") + _mix(100, "EditBuffer"))
+        code, _out, err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--mixes",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert "edit buffer" in err.lower()
+        assert device.mix_writes == []
+        assert [number for number, _ in device.program_writes] == [3]
+
+    def test_global_last_in_order(self, config_path, tmp_path, monkeypatch, capsys):
+        _device = use_device(monkeypatch, PartsDemo())
+        path = tmp_path / "allparts.syx"
+        path.write_bytes(
+            _program(1, "One") + _effects(5) + _mix(10, "Mix10") + _global()
+        )
+        code, out, _err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--effects",
+            "--mixes",
+            "--global",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        prog_pos = out.find("user program")
+        eff_pos = out.find("effects patch")
+        mix_pos = out.find("mix 010")
+        glob_pos = out.find("the global settings")
+        assert prog_pos < eff_pos < mix_pos < glob_pos
+
+    def test_effect_and_mix_read_back(self, config_path, tmp_path, monkeypatch, capsys):
+        device = use_device(monkeypatch, PartsDemo())
+        path = tmp_path / "readback.syx"
+        path.write_bytes(_program(3, "Program3") + _effects(5) + _mix(10, "Mix10"))
+        code, _out, _err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--effects",
+            "--mixes",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert [number for number, _ in device.effect_writes] == [5]
+        assert [number for number, _ in device.mix_writes] == [10]
