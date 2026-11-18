@@ -212,12 +212,33 @@ class TestSendGate:
                 str(tmp_path / "missing.json"),
             )
 
-    def test_send_refuses_the_hardwired_silent_program(
+    def test_send_skips_the_hardwired_silent_program_in_a_bank(
         self, config_path, tmp_path, capsys
     ):
-        path = str(tmp_path / "silent.syx")
+        path = str(tmp_path / "bank.syx")
         with open(path, "wb") as handle:
+            handle.write(m.program_dump(3, bytes(rec.PROGRAM_BYTES)))
             handle.write(m.program_dump(127, bytes(rec.PROGRAM_BYTES)))
+        code, out, err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "--allow-write",
+            "--yes",
+            "send",
+            path,
+        )
+        assert code == 0
+        assert "1 record(s) to write" in out
+        assert "user program 127 is hardwired silent; skipped" in err
+
+    def test_send_refuses_naming_the_hardwired_silent_program(
+        self, config_path, tmp_path, capsys
+    ):
+        path = str(tmp_path / "one.syx")
+        with open(path, "wb") as handle:
+            handle.write(m.program_dump(3, bytes(rec.PROGRAM_BYTES)))
         with pytest.raises(SystemExit, match="hardwired silent"):
             run(
                 capsys,
@@ -228,6 +249,8 @@ class TestSendGate:
                 "--yes",
                 "send",
                 path,
+                "--program",
+                "127",
             )
 
 
@@ -255,6 +278,31 @@ class TestSend:
         assert "read back byte-for-byte" in out
         read_back = device.read_program(3)[: rec.PROGRAM_BYTES]
         assert read_back == before[: rec.PROGRAM_BYTES]
+
+    def test_send_skips_the_mix_edit_buffer(
+        self, config_path, tmp_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, PersistentDemo())
+        before = bytes(device.read_mix(0))[: rec.MIX_BYTES]
+        path = str(tmp_path / "bank.syx")
+        with open(path, "wb") as handle:
+            handle.write(m.program_dump(3, bytes(rec.PROGRAM_BYTES)))
+            handle.write(m.mix_dump(100, bytes(rec.MIX_BYTES)))
+
+        code, out, err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "send",
+            path,
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        assert "1 record(s) to write" in out
+        assert "mix 100 is the edit buffer" in err
+        assert bytes(device.read_mix(0))[: rec.MIX_BYTES] == before
 
     def test_send_backs_up_the_destination_before_writing(
         self, config_path, tmp_path, monkeypatch, capsys

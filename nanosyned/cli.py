@@ -229,8 +229,13 @@ RECORD_NAMES = {
     "global": "global settings",
 }
 
+#: The mix edit buffer: loadable, never storable. A bank that carries it
+#: (an All Dump or a MidiQuest file may) skips it rather than refusing the
+#: whole file.
+EDIT_MIX = 100
+
 #: The numbered kinds, and the slots each has. Mix 100 is the edit buffer,
-#: not a slot and not readable, so it is outside the range a write may name.
+#: not a slot, so it is outside the range a write may name.
 NUMBER_RANGES = {
     "program": (0, 127),
     "mix": (0, 99),
@@ -420,6 +425,10 @@ def _send_plan(library: dumps.Library, args) -> list[_Write]:
             plan.append(_Write(kind, override, record))
             continue
         for number, data in sorted(records.items()):
+            if kind == "mix" and number == EDIT_MIX:
+                continue
+            if kind == "program" and number == banks.SILENT_PROGRAM[1]:
+                continue
             _check_number(kind, number)
             plan.append(_Write(kind, number, _truncate(kind, data, what)))
     if library.globals_ is not None:
@@ -458,6 +467,17 @@ def _cmd_send(device, args) -> int:
     except OSError as exc:
         raise SystemExit(f"error: cannot read {args.file}: {exc}") from None
     plan = _send_plan(library, args)
+    if EDIT_MIX in library.mixes:
+        print(
+            "note: mix 100 is the edit buffer, not a stored mix; skipped",
+            file=sys.stderr,
+        )
+    if banks.SILENT_PROGRAM[1] in library.programs:
+        print(
+            f"note: user program {banks.SILENT_PROGRAM[1]} is hardwired "
+            f"silent; skipped",
+            file=sys.stderr,
+        )
     for write in plan:
         if write.kind == "program" and write.number == banks.SILENT_PROGRAM[1]:
             raise SystemExit(
