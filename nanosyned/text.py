@@ -19,7 +19,7 @@
 # FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
 # details.
 
-"""Textual renders widget text as console markup, so unit text is escaped.
+r"""Textual renders widget text as console markup, so unit text is escaped.
 
 Any string that came from the instrument -- a User-bank program name, a
 tag, a note, a search hit -- can contain `[`, and an unclosed markup tag
@@ -45,7 +45,7 @@ __all__ = ["literal"]
 
 
 def literal(text: str) -> str:
-    """``text`` escaped so markup renders it exactly as written.
+    r"""``text`` escaped so markup renders it exactly as written.
 
     Every ``[`` becomes ``\[``, Textual 8.x's escape a literal bracket. A
     backslash *immediately before* a bracket needs one more of its own
