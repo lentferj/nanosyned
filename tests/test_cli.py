@@ -21,6 +21,8 @@ import json
 import pytest
 
 from nano import banks
+from nano import messages as m
+from nano import records as rec
 from nanosyned import cli
 
 
@@ -34,6 +36,13 @@ def run(capsys, *argv):
     code = cli.main(list(argv))
     captured = capsys.readouterr()
     return code, captured.out, captured.err
+
+
+def sqs_container(body: bytes) -> bytes:
+    """One MidiQuest BODY, for a file whose SysEx is ``body``."""
+    body_chunk = b"BODY" + len(body).to_bytes(4, "big") + body
+    form = b"FORM" + len(body_chunk).to_bytes(4, "big") + body_chunk
+    return b"LIST" + (len(form) + 4).to_bytes(4, "big") + b"    " + form
 
 
 class TestOfflineCommands:
@@ -74,6 +83,22 @@ class TestOfflineCommands:
         code, out, _ = run(capsys, "syx", str(path))
         assert code == 0
         assert "0 program(s)" in out
+
+    def test_syx_reads_an_sqs_bank_like_the_syx_it_holds(self, tmp_path, capsys):
+        record = bytearray(rec.PROGRAM_BYTES)
+        m.encode_name(record, "Invented0")
+        raw = m.program_dump(0, record) + m.global_dump(bytes(rec.GLOBAL_BYTES))
+        syx_path = tmp_path / "bank.syx"
+        sqs_path = tmp_path / "bank.sqs"
+        syx_path.write_bytes(raw)
+        sqs_path.write_bytes(sqs_container(raw))
+        code, syx_out, _ = run(capsys, "syx", str(syx_path))
+        assert code == 0
+        code, sqs_out, _ = run(capsys, "syx", str(sqs_path))
+        assert code == 0
+        assert sqs_out.replace(str(sqs_path), "") == syx_out.replace(str(syx_path), "")
+        assert "1 program(s)" in sqs_out
+        assert "Invented0" in sqs_out
 
     def test_fav_and_tags_need_no_device(self, config_path, tmp_path, capsys):
         store = str(tmp_path / "favorites.db")

@@ -20,13 +20,17 @@ An All Dump is not one message. It is 357 of them -- 128 user programs,
 file holding one is simply those messages concatenated. Reading it means
 splitting on the message boundaries and sorting by opcode, not seeking to
 offsets.
+
+A MidiQuest ``.sqs`` bank is the same messages inside a container. Its
+``BODY`` chunks hold plain Alesis SysEx, so the reader unwraps the
+container first and then treats the result as the ``.syx`` it is.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from nano import banks
+from nano import banks, sqs
 from nano import messages as m
 from nano import records as rec
 
@@ -122,14 +126,20 @@ def split_messages(raw: bytes) -> list[bytes]:
 
 
 def read_syx_file(path: str) -> Library:
-    """Load one ``.syx`` file.
+    """Load one ``.syx`` file, or a MidiQuest ``.sqs`` bank.
 
-    Foreign messages are counted and skipped rather than raising: a file
-    somebody assembled may carry other devices' data, and that is their
-    business.
+    The container is unwrapped first, because what it holds is exactly a
+    ``.syx``: its ``BODY`` chunks are that file's bytes with a header
+    around them. A container with no Alesis messages unwraps to nothing,
+    and an empty ``.syx`` is not an error here either -- the library comes
+    back empty and the caller says so. Foreign messages are counted and
+    skipped rather than raising: a file somebody assembled may carry other
+    devices' data, and that is their business.
     """
     with open(path, "rb") as handle:
         raw = handle.read()
+    if sqs.is_sqs(raw):
+        raw = sqs.extract_sysex(raw)
     return read_bytes(raw)
 
 
