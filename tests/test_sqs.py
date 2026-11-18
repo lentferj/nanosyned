@@ -82,3 +82,64 @@ class TestExtractingTheMessages:
     def test_a_container_of_foreign_messages_extracts_nothing(self):
         raw = _container(m.identity_request())
         assert sqs.extract_sysex(raw) == b""
+
+
+class TestReadingBanks:
+    def test_two_banks_same_slot_stay_distinct(self):
+        first = _program(0, "BankZero")
+        second = _program(0, "BankOne")
+        raw = _container(first, second)
+        banks = sqs.read_banks(raw)
+        assert len(banks) == 2
+        assert banks[0] == first
+        assert banks[1] == second
+
+    def test_form_bytes_inside_a_packed_message_do_not_split(self):
+        # A "FORM" signature that falls inside an Alesis message span must
+        # not become a bank boundary.
+        embedded = sqs.HEADER + b"FORM" + b"\xf7"
+        other = _program(1, "Other")
+        raw = _container(embedded, other)
+        banks = sqs.read_banks(raw)
+        assert len(banks) == 2
+        assert banks[0] == embedded
+        assert banks[1] == other
+
+    def test_junk_and_foreign_sysex_are_ignored(self):
+        program = _program(0, "Kept")
+        foreign = bytes([0xF0, 0x41, 0x10, 0x42, 0xF7])
+        raw = _container(foreign + b"junk\x00\x01" + program + foreign)
+        banks = sqs.read_banks(raw)
+        assert len(banks) == 1
+        assert banks[0] == program
+
+    def test_a_missing_f7_drops_that_message_only(self):
+        first = _program(0, "First")
+        second = _program(1, "Second")
+        # A header with no terminator between two valid messages.
+        raw = _container(first + sqs.HEADER + b"\x00\x01" + second)
+        banks = sqs.read_banks(raw)
+        assert len(banks) == 1
+        assert banks[0] == first + second
+
+    def test_a_bank_with_no_alesis_message_is_empty(self):
+        program = _program(0, "Only")
+        raw = _container(b"", program)
+        banks = sqs.read_banks(raw)
+        assert len(banks) == 2
+        assert banks[0] == b""
+        assert banks[1] == program
+
+    def test_a_list_with_one_form_is_one_bank(self):
+        program = _program(0, "Solo")
+        raw = _container(program)
+        banks = sqs.read_banks(raw)
+        assert len(banks) == 1
+        assert banks[0] == program
+
+    def test_extract_sysex_matches_concatenation(self):
+        first = _program(0, "A")
+        second = _program(1, "B")
+        raw = _container(first, b"", second)
+        assert sqs.extract_sysex(raw) == first + second
+        assert sqs.extract_sysex(raw) == b"".join(sqs.read_banks(raw))
