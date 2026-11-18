@@ -40,6 +40,18 @@ from nano import config as cfg
 from nano import favorites as favmod
 from nano import messages as m
 from nano import records as rec
+from nano.writing import (
+    RECORD_BYTES,
+    RECORD_NAMES,
+    frame,
+    label,
+    read_record,
+    record_name,
+    run,
+    save_backup,
+    truncate,
+    write_record,
+)
 from vinsynlib.cli import (
     add_common_arguments,
     channel_of,
@@ -209,29 +221,16 @@ def _cmd_mixes(device, _args) -> None:
 # --- records, on both sides of the wire -------------------------------------
 #
 # One table of sizes and one set of readers/writers, so a dump, a send and a
-# restore cannot disagree about what a mix is or how many bytes it has. The
-# sizes are the unpacked ones: what a dump carries and what the store
+# restore cannot disagree about what a mix is or how many bytes it has. They
+# live in nano.writing, together with the loop that uses them -- so the CLI
+# and the browser's import write and read a record the same way, and a dump
+# cannot describe a record differently from the store that follows it. The
+# sizes there are the unpacked ones: what a dump carries and what the store
 # encoders pack again.
-
-#: The four record kinds the write commands speak, and the byte size of each.
-RECORD_BYTES = {
-    "program": rec.PROGRAM_BYTES,
-    "mix": rec.MIX_BYTES,
-    "effects": rec.EFFECTS_BYTES,
-    "global": rec.GLOBAL_BYTES,
-}
-
-#: What a person calls each kind, for a line that has to name one.
-RECORD_NAMES = {
-    "program": "user program",
-    "mix": "mix",
-    "effects": "effects patch",
-    "global": "global settings",
-}
 
 #: The mix edit buffer: loadable, never storable. A bank that carries it
 #: (an All Dump or a MidiQuest file may) skips it rather than refusing the
-#: whole file.
+#: whole file. The skip is the planner's or this file's, not the writer's.
 EDIT_MIX = 100
 
 #: The numbered kinds, and the slots each has. Mix 100 is the edit buffer,
@@ -245,12 +244,16 @@ NUMBER_RANGES = {
 
 @dataclass
 class _Write:
-    """One record to store, and what the destination held before it."""
+    """One record to store, in the order the plan will print it.
+
+    What the destination held before it is not kept here: the reader that
+    talks to the unit owns that, and it comes back in a
+    :class:`nano.writing.Result`.
+    """
 
     kind: str
     number: int | None
     record: bytes
-    current: bytes = b""
 
 
 def _check_number(kind: str, number: int) -> None:
@@ -260,109 +263,6 @@ def _check_number(kind: str, number: int) -> None:
         raise SystemExit(
             f"error: {RECORD_NAMES[kind]} {number} is outside {low}-{high}"
         )
-
-
-def _truncate(kind: str, data: bytes, what: str) -> bytes:
-    """A record at its documented size, or ``ProtocolError``.
-
-    A dump is padded to a whole packing group, so the tail is dropped. A
-    *short* record is refused: writing one would put whatever follows it in
-    the buffer into the slot.
-    """
-    size = RECORD_BYTES[kind]
-    rec.check_size(data, size, what)
-    return bytes(data[:size])
-
-
-def _record_name(kind: str, record: bytes) -> str:
-    """The name inside a record, or ``""`` for a kind that has none."""
-    if kind == "program":
-        return rec.program_name(record).rstrip()
-    if kind == "mix":
-        return rec.mix_name(record).rstrip()
-    return ""
-
-
-def _label(kind: str, number: int | None, name: str = "") -> str:
-    """One destination, by the name the unit itself uses for it."""
-    if kind == "global":
-        return "the global settings"
-    where = f"{RECORD_NAMES[kind]} {number:03d}"
-    return f"{where} {name!r}" if name else where
-
-
-def _read_effects(device, number: int) -> bytes:
-    """One effects patch, through whichever read the device offers.
-
-    ``nano.bridge`` has no ``read_effects``: the request/reply pair is the
-    same one ``read_program`` uses, so the bridge's own ``request`` serves
-    it without a second copy of the policy here. A device that cannot answer
-    -- the demo is one -- says so rather than inventing bytes.
-    """
-    reader = getattr(device, "read_effects", None)
-    if reader is not None:
-        return bytes(reader(number))
-    request = getattr(device, "request", None)
-    if request is None:
-        raise LookupError(
-            "this device cannot read an effects patch; only the MIDI bridge "
-            "answers that request"
-        )
-    packet = request(
-        m.effects_dump_request(number),
-        m.Function.USER_EFFECTS_DUMP,
-        number=number,
-    )
-    data = packet.data()
-    rec.check_size(data, rec.EFFECTS_BYTES, "an effects patch")
-    return bytes(data[: rec.EFFECTS_BYTES])
-
-
-def _read_record(device, kind: str, number: int | None) -> bytes:
-    """Read one record off the unit, by kind. Silent."""
-    if kind == "program":
-        return bytes(device.read_program(number))
-    if kind == "mix":
-        return bytes(device.read_mix(number))
-    if kind == "effects":
-        return _read_effects(device, number)  # type: ignore[arg-type]
-    return bytes(device.read_global())
-
-
-def _frame(kind: str, number: int | None, record: bytes) -> bytes:
-    """The Alesis message that carries ``record`` back to the unit."""
-    if kind == "program":
-        return m.program_dump(number, record)  # type: ignore[arg-type]
-    if kind == "mix":
-        return m.mix_dump(number, record)  # type: ignore[arg-type]
-    if kind == "effects":
-        return m.effects_dump(number, record)  # type: ignore[arg-type]
-    return m.global_dump(record)
-
-
-def _write_record(device, kind: str, number: int | None, record: bytes) -> None:
-    """Store one record. **The unit keeps this.**"""
-    if kind == "program":
-        device.write_program(number, record)
-    elif kind == "mix":
-        device.write_mix(number, record)
-    elif kind == "effects":
-        device.write_effects(number, record)
-    else:
-        device.write_global(record)
-
-
-def _backup(kind: str, number: int | None, record: bytes) -> str:
-    """Save the destination's current bytes before anything replaces them."""
-    name = _record_name(kind, record) or _label(kind, number)
-    slot = "GLOBAL" if number is None else f"{kind.upper()}:{number:03d}"
-    return bk.save(
-        slot,
-        kind=kind,
-        name=name,
-        blocks={kind: record},
-        source="nanocli (before write)",
-    )
 
 
 def _cmd_dump(device, args) -> None:
@@ -379,19 +279,19 @@ def _cmd_dump(device, args) -> None:
         if number is None:
             raise SystemExit(f"error: `dump {kind}` needs a slot number")
         _check_number(kind, number)
-    record = _truncate(
-        kind, _read_record(device, kind, number), f"the {RECORD_NAMES[kind]} dump"
+    record = truncate(
+        kind, read_record(device, kind, number), f"the {RECORD_NAMES[kind]} dump"
     )
-    message = _frame(kind, number, record)
+    message = frame(kind, number, record)
     try:
         with open(args.file, "wb") as handle:
             handle.write(message)
     except OSError as exc:
         raise SystemExit(f"error: cannot write {args.file}: {exc}") from None
-    name = _record_name(kind, record)
+    name = record_name(kind, record)
     print(
         f"wrote {len(message)} bytes ({len(record)}-byte {RECORD_NAMES[kind]}): "
-        f"{_label(kind, number, name)} -> {args.file}"
+        f"{label(kind, number, name)} -> {args.file}"
     )
 
 
@@ -421,7 +321,7 @@ def _send_plan(library: dumps.Library, args) -> list[_Write]:
                     f"{args.file} must hold exactly one {RECORD_NAMES[kind]}; "
                     f"it holds {len(records)}"
                 )
-            record = _truncate(kind, next(iter(records.values())), what)
+            record = truncate(kind, next(iter(records.values())), what)
             plan.append(_Write(kind, override, record))
             continue
         for number, data in sorted(records.items()):
@@ -430,13 +330,13 @@ def _send_plan(library: dumps.Library, args) -> list[_Write]:
             if kind == "program" and number == banks.SILENT_PROGRAM[1]:
                 continue
             _check_number(kind, number)
-            plan.append(_Write(kind, number, _truncate(kind, data, what)))
+            plan.append(_Write(kind, number, truncate(kind, data, what)))
     if library.globals_ is not None:
         plan.append(
             _Write(
                 "global",
                 None,
-                _truncate("global", library.globals_, "the global dump"),
+                truncate("global", library.globals_, "the global dump"),
             )
         )
     if not plan:
@@ -458,6 +358,13 @@ def _cmd_send(device, args) -> int:
     3. back every destination up;
     4. send the stores;
     5. read each back and compare, naming the bytes that differ.
+
+    Those five steps are :func:`nano.writing.run` with ``read_first`` on --
+    the batched order is the point, because the plan is printed between the
+    reads and the first store. What is left here is this command's wording
+    and exit code: a failed read, backup, store or read-back still stops it
+    where it stopped before the loop moved out, and a MISMATCH is counted
+    while the remaining records are still written.
 
     The gate (``--allow-write`` and ``--yes``) is checked in :func:`main`
     before a port is opened, so a refusal costs nothing.
@@ -481,7 +388,7 @@ def _cmd_send(device, args) -> int:
     for write in plan:
         if write.kind == "program" and write.number == banks.SILENT_PROGRAM[1]:
             raise SystemExit(
-                f"error: {_label(write.kind, write.number)} is hardwired "
+                f"error: {label(write.kind, write.number)} is hardwired "
                 f"silent and cannot be changed; nothing sent"
             )
     if library.foreign or library.skipped:
@@ -490,53 +397,48 @@ def _cmd_send(device, args) -> int:
             f"{args.file} are not records this command writes; ignored",
             file=sys.stderr,
         )
-    # 1. Read every destination before writing any of them.
-    for write in plan:
-        write.current = _truncate(
-            write.kind,
-            _read_record(device, write.kind, write.number),
-            f"the {RECORD_NAMES[write.kind]} at {_label(write.kind, write.number)}",
-        )
-    # 2. Say exactly what will be replaced.
-    print(f"{args.file}: {len(plan)} record(s) to write")
-    for write in plan:
-        old = _record_name(write.kind, write.current)
-        new = _record_name(write.kind, write.record)
-        print(
-            f"  {_label(write.kind, write.number, old)}"
-            f" -> {_label(write.kind, write.number, new)}"
-        )
-    # 3. Back every destination up, before the first store.
-    paths = []
-    for write in plan:
-        path = _backup(write.kind, write.number, write.current)
-        paths.append(path)
-        print(f"  backup {path}")
-    # 4 and 5. Store, then read back.
     failed = 0
-    for write, path in zip(plan, paths, strict=True):
-        _write_record(device, write.kind, write.number, write.record)
-        read_back = _truncate(
-            write.kind,
-            _read_record(device, write.kind, write.number),
-            f"the {RECORD_NAMES[write.kind]} at {_label(write.kind, write.number)}",
-        )
-        sentence = verify.describe(
-            write.record,
-            read_back,
-            what=_label(
-                write.kind,
-                write.number,
-                _record_name(write.kind, write.record),
-            ),
-        )
-        if verify.mismatches(write.record, read_back):
+
+    def stop(result) -> None:
+        """A stage that failed stops the command, as it always has."""
+        raise SystemExit(f"error: {result.failure}")
+
+    def on_phase(name, results) -> None:
+        """The batch lines: the plan before any backup, then the paths."""
+        if name == "read":
+            for result in results:
+                if result.failure is not None:
+                    stop(result)
+            print(f"{args.file}: {len(results)} record(s) to write")
+            for result in results:
+                old = record_name(result.kind, result.previous)
+                new = record_name(result.kind, result.record)
+                print(
+                    f"  {label(result.kind, result.number, old)}"
+                    f" -> {label(result.kind, result.number, new)}"
+                )
+        elif name == "backup":
+            for result in results:
+                if result.failure is not None:
+                    stop(result)
+                print(f"  backup {result.backup}")
+
+    def on_result(result) -> None:
+        """One record's outcome: the write, the read-back and the mismatch."""
+        nonlocal failed
+        if result.stage in ("read", "backup"):
+            return  # the phase above has already said it, or stopped
+        if result.failure is not None and result.stage != "verify":
+            stop(result)
+        if result.failure is not None:
             failed += 1
-            print(f"verify   MISMATCH: {sentence}; the backup is {path}")
-            continue
-        message = _frame(write.kind, write.number, write.record)
-        print(f"wrote    {len(message)} bytes to {_label(write.kind, write.number)}")
-        print(f"verify   {sentence}; the backup is {path}")
+            print(f"verify   MISMATCH: {result.failure}; the backup is {result.backup}")
+            return
+        message = frame(result.kind, result.number, result.record)
+        print(f"wrote    {len(message)} bytes to {label(result.kind, result.number)}")
+        print(f"verify   {result.sentence}; the backup is {result.backup}")
+
+    run(device, plan, on_phase=on_phase, on_result=on_result)
     return 1 if failed else 0
 
 
@@ -614,30 +516,30 @@ def _cmd_backup_restore(device, args) -> int:
             f"error: {args.file} is a {kind} backup with no {kind!r} block; "
             f"nothing to restore"
         )
-    record = _truncate(kind, backup.blocks[kind], f"the {RECORD_NAMES[kind]} backup")
+    record = truncate(kind, backup.blocks[kind], f"the {RECORD_NAMES[kind]} backup")
     number = _restore_number(kind, backup, getattr(args, "number", None))
     if kind == "program" and number == banks.SILENT_PROGRAM[1]:
         raise SystemExit(
             f"error: user program {number} is hardwired silent and cannot be "
             f"changed; nothing sent"
         )
-    current = _truncate(
+    current = truncate(
         kind,
-        _read_record(device, kind, number),
-        f"the {RECORD_NAMES[kind]} at {_label(kind, number)}",
+        read_record(device, kind, number),
+        f"the {RECORD_NAMES[kind]} at {label(kind, number)}",
     )
-    old = _record_name(kind, current)
-    new = _record_name(kind, record) or backup.name
-    print(f"{args.file}: {_label(kind, number, old)} -> {_label(kind, number, new)}")
-    path = _backup(kind, number, current)
+    old = record_name(kind, current)
+    new = record_name(kind, record) or backup.name
+    print(f"{args.file}: {label(kind, number, old)} -> {label(kind, number, new)}")
+    path = save_backup(kind, number, current)
     print(f"  backup {path}")
-    _write_record(device, kind, number, record)
-    read_back = _truncate(
+    write_record(device, kind, number, record)
+    read_back = truncate(
         kind,
-        _read_record(device, kind, number),
-        f"the {RECORD_NAMES[kind]} at {_label(kind, number)}",
+        read_record(device, kind, number),
+        f"the {RECORD_NAMES[kind]} at {label(kind, number)}",
     )
-    sentence = verify.describe(record, read_back, what=_label(kind, number, new))
+    sentence = verify.describe(record, read_back, what=label(kind, number, new))
     if verify.mismatches(record, read_back):
         print(f"verify   MISMATCH: {sentence}; the backup is {path}")
         return 1
