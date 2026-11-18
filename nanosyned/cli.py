@@ -30,11 +30,12 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn, cast
 
 from nano import backup as bk
-from nano import banks, config, dumps, params, verify
+from nano import banks, config, dumps, importing, importplan, params, verify
 from nano import catalog as cat
 from nano import config as cfg
 from nano import favorites as favmod
@@ -52,6 +53,7 @@ from nano.writing import (
     truncate,
     write_record,
 )
+from nano.writing import Step as WStep
 from vinsynlib.cli import (
     add_common_arguments,
     channel_of,
@@ -814,6 +816,211 @@ def _cmd_syx(_device, args) -> None:
         print(table(["#", "mix"], rows, empty="(nothing)"))
 
 
+def _usage(msg: str) -> NoReturn:
+    """Refuse a command line before anything is stored, with exit code 2."""
+    print(f"error: {msg}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _select_bank(source: importing.ImportSource, args) -> importing.SourceBank:
+    """The one source bank this command works on, or a refusal.
+
+    ``--bank N`` picks a bank by its index. Without it, a file with a
+    single program bank needs no choice; a file with more does, and the
+    error lists the banks so the retry can name one.
+    """
+    banks = source.banks
+    if args.bank is None:
+        if len(banks) > 1:
+            available = ", ".join(str(bank.index) for bank in banks)
+            _usage(
+                f"{args.file} holds {len(banks)} banks ({available}); "
+                f"choose one with --bank"
+            )
+        return banks[0]
+    for bank in banks:
+        if bank.index == args.bank:
+            return bank
+    available = ", ".join(str(bank.index) for bank in banks)
+    _usage(f"bank {args.bank} is not in {args.file}; available bank(s): {available}")
+
+
+def _program_pairs(program_list: list[str]) -> list[tuple[int, int]]:
+    """``--program SRC=DST`` tokens as ``(source_slot, target_slot)`` pairs."""
+    pairs: list[tuple[int, int]] = []
+    for item in program_list:
+        src_text, sep, dst_text = item.partition("=")
+        if not sep:
+            _usage(f"--program wants SRC=DST, not {item!r}")
+        try:
+            pairs.append((int(src_text), int(dst_text)))
+        except ValueError:
+            _usage(f"--program wants SRC=DST, not {item!r}")
+    return pairs
+
+
+def _cmd_import(device, args) -> int:
+    """Import programs from a file, or list one offline.
+
+    ``--list`` prints each source bank, what it holds, and every program as
+    ``slot  name``. A ``.syx`` is one synthetic bank; a ``.sqs`` keeps its
+    banks distinct. ``--program SRC=DST`` maps source slots to User
+    destinations 000-126. ``--all`` writes the whole bank. ``--dry-run``
+    reads the destinations and prints what would be replaced, then stops;
+    it opens the port but does not need the write gate.
+    """
+    try:
+        source = importing.read_import(args.file)
+    except OSError as exc:
+        raise SystemExit(f"error: cannot read {args.file}: {exc}") from None
+
+    if args.list:
+        return _import_list(source, args)
+
+    if not args.program and not args.all:
+        _usage("nothing selected; nothing sent (use --program or --all)")
+
+    plan = _import_plan(source, args)
+    if not plan.steps:
+        _usage("nothing selected; nothing sent")
+
+    if args.dry_run:
+        _import_dry_run(device, args, plan)
+        return 0
+
+    return _import_write(device, args, plan)
+
+
+def _import_plan(source: importing.ImportSource, args) -> importplan.ImportPlan:
+    """Build the program plan, or a refusal."""
+    bank = _select_bank(source, args)
+    try:
+        if args.all:
+            return importplan.plan_bank(bank)
+        return importplan.plan_single(bank, _program_pairs(args.program))
+    except ValueError as exc:
+        _usage(str(exc))
+
+
+def _import_list(source: importing.ImportSource, args) -> int:
+    """Print what the import file holds, offline. Returns exit code."""
+    banks = source.banks
+    if args.bank is not None:
+        matches = [bank for bank in banks if bank.index == args.bank]
+        if not matches:
+            available = ", ".join(str(bank.index) for bank in banks)
+            raise SystemExit(
+                f"error: bank {args.bank} is not in {args.file}; "
+                f"available bank(s): {available}"
+            )
+        banks = matches
+    print(f"{args.file}: {source.summary()}")
+    for bank in banks:
+        print()
+        print(f"{bank.label} — {len(bank.programs)} program(s)")
+        for number in sorted(bank.programs):
+            program = bank.programs[number]
+            print(f"  {program.slot:3d}  {program.name}")
+        for number in sorted(bank.effects):
+            print(f"  effects {number:03d}")
+        for number in sorted(bank.mixes):
+            print(f"  mix {number:03d}")
+        if bank.globals_ is not None:
+            print("  global")
+        if bank.duplicates:
+            print(
+                "  duplicate slot(s): "
+                + ", ".join(str(number) for number in bank.duplicates)
+            )
+        if (
+            not bank.programs
+            and not bank.effects
+            and not bank.mixes
+            and bank.globals_ is None
+        ):
+            print("  (empty bank)")
+    return 0
+
+
+def _import_dry_run(device, args, plan: importplan.ImportPlan) -> None:
+    """Read the destinations and print the plan; store nothing.
+
+    The lines are the write's own: each destination's current name, then the
+    source program's name. Nothing is backed up or stored, and the write
+    gate is not needed because nothing changes.
+    """
+    print(f"{args.file}: {len(plan.steps)} record(s) to write")
+    catalog = _catalog(args)
+    for step in plan.steps:
+        target = step.target
+        if step.kind != "program" or target is None:
+            continue
+        try:
+            previous = read_record(device, "program", target)
+        except Exception as exc:
+            raise SystemExit(
+                f"error: cannot read destination {target}: {exc}"
+            ) from None
+        old = record_name("program", previous) or catalog.display_name("USER", target)
+        new = record_name("program", step.record) or step.source_label
+        print(f"  {label('program', target, old)} -> {label('program', target, new)}")
+
+
+def _import_write(device, args, plan: importplan.ImportPlan) -> int:
+    """Read, back up, store and verify every planned program.
+
+    The plan is executed by :func:`nano.writing.run` with ``read_first=True``
+    (the default). Every destination is read first; a slot that cannot be read
+    is not written. The on_phase and on_result hooks print the plan lines and
+    record outcomes, matching the family's ``send`` output style.
+    """
+    failed = 0
+
+    def stop(result) -> None:
+        raise SystemExit(f"error: {result.failure}")
+
+    def on_phase(name: str, results: list) -> None:
+        if name == "read":
+            for result in results:
+                if result.failure is not None:
+                    stop(result)
+            print(f"{args.file}: {len(results)} record(s) to write")
+            for result in results:
+                old = record_name(result.kind, result.previous)
+                new = record_name(result.kind, result.record)
+                print(
+                    f"  {label(result.kind, result.number, old)}"
+                    f" -> {label(result.kind, result.number, new)}"
+                )
+        elif name == "backup":
+            for result in results:
+                if result.failure is not None:
+                    stop(result)
+                print(f"  backup {result.backup}")
+
+    def on_result(result) -> None:
+        nonlocal failed
+        if result.stage in ("read", "backup"):
+            return
+        if result.failure is not None and result.stage != "verify":
+            stop(result)
+        if result.failure is not None:
+            failed += 1
+            print(f"verify   MISMATCH: {result.failure}; the backup is {result.backup}")
+            return
+        message = frame(result.kind, result.number, result.record)
+        print(f"wrote    {len(message)} bytes to {label(result.kind, result.number)}")
+        print(f"verify   {result.sentence}; the backup is {result.backup}")
+
+    run(
+        device,
+        cast("Sequence[WStep]", plan.steps),
+        on_phase=on_phase,
+        on_result=on_result,
+    )
+    return 1 if failed else 0
+
+
 def _cmd_find(_device, args) -> None:
     """Search the names this program knows. Touches no hardware."""
     catalog = _catalog(args)
@@ -1022,6 +1229,7 @@ def _cmd_tags(_device, args) -> None:
 OFFLINE = {
     "ports",
     "banks",
+    "import",
     "list",
     "syx",
     "find",
@@ -1037,11 +1245,22 @@ def _needs_device(args) -> bool:
 
     ``backup list`` is the one command inside a group that needs nothing:
     judging by the group's name alone would open a port to list files on
-    disk.
+    disk. ``import`` is offline for ``--list``, the read-only preview; every
+    other import path reads or stores, so it opens the unit.
     """
     listing = (
         args.command == "backup" and getattr(args, "backup_command", None) == "list"
     )
+    if args.command == "backup" and listing:
+        # The list half of a group is the one thing inside it that reads no
+        # port; judging by the group's name alone would open one to list files.
+        return False
+    if args.command == "import" and getattr(args, "list", False):
+        # --list only reads a file on disk; the write and dry-run paths below
+        # read or store, so they open the unit.
+        return False
+    if args.command == "import":
+        return True
     return args.command not in OFFLINE and not listing
 
 
@@ -1049,6 +1268,10 @@ def _writes(args) -> bool:
     """True for the commands that change the unit or what it plays."""
     if args.command in ("send", "set"):
         return True
+    if args.command == "import":
+        # --list and --dry-run read; only a real import writes. The write
+        # path is a stub until T6, but the gate is checked before it runs.
+        return not (args.list or args.dry_run)
     return (
         args.command == "backup" and getattr(args, "backup_command", None) == "restore"
     )
@@ -1239,6 +1462,65 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
     sp = sub.add_parser("syx", help="read a .syx file (no hardware)")
     sp.add_argument("file")
     sp.add_argument("--mixes", action="store_true", help="list mixes too")
+    sp = sub.add_parser(
+        "import",
+        help="preview an import file --list, or write it with --program/--all",
+    )
+    sp.add_argument("file", metavar="FILE")
+    sp.add_argument(
+        "--list",
+        action="store_true",
+        default=False,
+        help="print each source bank, its counts, and every program as "
+        "`slot  name` (offline)",
+    )
+    sp.add_argument(
+        "--bank",
+        type=int,
+        default=None,
+        metavar="N",
+        help="source bank number, when the file holds more than one program bank",
+    )
+    sp.add_argument(
+        "--program",
+        action="append",
+        default=None,
+        metavar="SRC=DST",
+        help="repeatable: map source slot SRC to User destination DST (000-126)",
+    )
+    sp.add_argument(
+        "--all",
+        action="store_true",
+        default=False,
+        help="write every program in the selected bank to its own slot "
+        "(not yet implemented)",
+    )
+    sp.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="read the destinations and print what would be replaced, then stop",
+    )
+    sp.add_argument(
+        "--effects",
+        action="store_true",
+        default=False,
+        help="also import effects patches (bank import only)",
+    )
+    sp.add_argument(
+        "--mixes",
+        action="store_true",
+        default=False,
+        help="also import mixes (bank import only)",
+    )
+    sp.add_argument(
+        "--global",
+        action="store_true",
+        default=False,
+        dest="global_",
+        help="also import the global settings (bank import only)",
+    )
+    _write_flags(sp)
     sp = sub.add_parser("find", help="search known names (no hardware)")
     sp.add_argument("name")
     sp = sub.add_parser(
@@ -1304,6 +1586,7 @@ COMMANDS = {
     "params": _cmd_params,
     "select": _cmd_select,
     "syx": _cmd_syx,
+    "import": _cmd_import,
     "find": _cmd_find,
     "fav": _cmd_fav,
     "favorites": _cmd_fav,
