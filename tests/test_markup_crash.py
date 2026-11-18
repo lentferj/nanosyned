@@ -15,23 +15,47 @@
 
 """Unit-supplied text survives markup: escaping, before a pane dies."""
 
+from textual.content import Content
+
 from nanosyned.text import literal
 
 
 class TestLiteral:
-    """Every '[' doubled is Textual's own escape for a literal one."""
+    """Every ``[`` escaped with a backslash, Textual 8.x's own escape."""
 
     def test_a_markup_tag_renders_as_itself(self):
-        assert literal("[b]x[/b]") == "[[b]x[[/b]"
+        assert literal("[b]x[/b]") == r"\[b]x\[/b]"
 
     def test_plain_text_copies_through(self):
         assert literal("plain") == "plain"
 
-    def test_a_lone_open_bracket_is_doubled(self):
-        assert literal("a[b") == "a[[b"
+    def test_a_lone_open_bracket_is_escaped(self):
+        assert literal("a[b") == r"a\[b"
 
-    def test_no_unescaped_bracket_survives(self):
-        """Whatever the name carries, a markup parse has no tag to choke on."""
-        for name in ("[g <`-^^", "[b]x[/b]", "[/dim]", "[quicksort]  "):
-            escaped = literal(name)
-            assert "[" not in escaped.replace("[[", "")
+    def test_every_name_round_trips_through_the_parser(self):
+        names = (
+            # The name the returned unit held, which crashed the detail pane:
+            # its '[' swallowed the [dim] that followed.
+            "/?q[uc?\x7fQE",
+            "[b]x[/b]",
+            "[/dim]",
+            "[quicksort]  ",
+            "[g <`-^^",
+            "a \\ b",
+            "a \\[ b",
+            "\\[",
+            "no brackets",
+        )
+        for name in names:
+            assert Content.from_markup(literal(name)).plain == name, name
+
+    def test_the_crashing_name_parses_in_the_real_sentence(self):
+        name = "/?q[uc?\x7fQE"
+        content = f"[b]User 000[/b]  {literal(name)}   [dim]Piano[/dim]"
+        rendered = Content.from_markup(content)
+        assert rendered.plain.endswith("Piano")
+        assert name in rendered.plain
+
+    def test_a_backslash_before_a_bracket_keeps_its_backslash(self):
+        assert literal("\\[") == r"\\["
+        assert Content.from_markup(literal("\\[")).plain == "\\["

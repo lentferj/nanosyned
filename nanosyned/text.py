@@ -22,12 +22,18 @@
 """Textual renders widget text as console markup, so unit text is escaped.
 
 Any string that came from the instrument -- a User-bank program name, a
-tag, a note, a search hit -- can contain `[, and an unclosed markup tag
+tag, a note, a search hit -- can contain `[`, and an unclosed markup tag
 kills the pane. Names read from hardware are user-editable, so this is
 reachable: nobody stops a panel from naming a program `[quicksort]`.
 Everything from the device or the user goes through `literal()` before it
 meets a markup-parsing widget; the project's own `[b]`/`[dim]` styling
 does not, because the project knows what it wrote.
+
+**Textual's escape is a backslash, not a doubled bracket.** From 8.x,
+`Content.from_markup` (which `Static.update` uses) treats `\[` as a
+literal `[`; a doubled `[[` is not an escape, and a stray `[` swallows the
+next real tag -- which is how a unit name like `/?q[uc?` crashed the
+detail pane with "closing tag '[/dim]' does not match any open tag".
 
 This module imports nothing from the rest of :mod:`nanosyned`, so any part
 of the app can quote it without a cycle.
@@ -41,9 +47,20 @@ __all__ = ["literal"]
 def literal(text: str) -> str:
     """``text`` escaped so markup renders it exactly as written.
 
-    The reliable escape is to double every ``[`` -- Textual's documented
-    markup escape for a literal bracket, since a doubled ``[[`` displays
-    as ``[``. A closing ``]`` carries no state on its own, so it and every
-    other character copy through untouched.
+    Every ``[`` becomes ``\[``, Textual 8.x's escape a literal bracket. A
+    backslash *immediately before* a bracket needs one more of its own
+    (``\\[``), because the parser consumes the pair; every other
+    backslash copies through. A closing ``]`` carries no state on its own.
     """
-    return str(text).replace("[", "[[")
+    chars = str(text)
+    out: list[str] = []
+    index = 0
+    while index < len(chars):
+        char = chars[index]
+        if char == "\\" and index + 1 < len(chars) and chars[index + 1] == "[":
+            out.append("\\\\[")
+            index += 2
+            continue
+        out.append("\\[" if char == "[" else char)
+        index += 1
+    return "".join(out)

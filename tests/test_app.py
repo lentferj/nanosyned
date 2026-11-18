@@ -299,9 +299,9 @@ class TestSearch:
         rows = app._search_rows(
             "[b]pad", {"names": False, "tags": True, "notes": False}
         )
-        assert rows[("GM", 3)] == ["tags [[b]pad"]
+        assert rows[("GM", 3)] == [r"tags \[b]pad"]
         rows = app._search_rows("soft", {"names": False, "tags": False, "notes": True})
-        assert rows[("GM", 3)] == ["note [[i]soft"]
+        assert rows[("GM", 3)] == [r"note \[i]soft"]
         store.close()
 
 
