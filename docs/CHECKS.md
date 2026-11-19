@@ -145,6 +145,13 @@ individual checks `strict` would enable — `disallow_untyped_defs`,
   behind `NANOSYNED_HW_PARAMS=1` and stores nothing. `make check` contains
   no hardware step, so CI never drives the unit. It runs serially — never
   two at once, never while another session drives the unit.
+- **Hardware import check (opt-in, human-run).** Behind
+  `NANOSYNED_HW_WRITE=1`, never part of `make check`: import one source
+  record into a spare User slot over MIDI, read the slot back byte for
+  byte, then restore the previous bytes from the backup the import wrote.
+  The result (slot, name, read-back verdict) is recorded in
+  `docs/CHECKS.md` by hand; a failed read-back or a mismatched backup
+  restore is a failed check, not a retry.
 - The demo path (`--demo`) is the synthetic stand-in everywhere else.
 
 ## The detect-secrets trap

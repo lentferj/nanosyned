@@ -186,6 +186,7 @@ beside a session that is driving the hardware.
 | `m` | edit a mix: its sixteen channels |
 | `M` | set the sound mode, Program or Mix — **a write, and it changes what plays** |
 | `g` | edit the global record |
+| `I` | import programs (and effects, mixes, global) from a `.syx` / `.sqs` file |
 | `w` | arm / lock the write gate |
 | `z` / `Z` | undo / undo all — put back what a store replaced |
 | `i` / `?` / `q` | device identity / help / quit |
@@ -371,6 +372,37 @@ rows that did not confirm, and the Effects mode the unit ignores -- are in
 family gap and is out of scope for this branch.
 
   ![The program editor](docs/screenshots/editor.png)
+
+## Importing programs
+
+`nanocli import` reads a `.syx` (one bank of 128) or `.sqs` (Alesis factory
+banks) file and sends each record to a chosen User slot, backing up and
+verifying each one. In the browser, `I` opens the file picker.
+
+```
+nanocli --demo --allow-write --yes import FILE --program 0=5
+                                       # one source program -> User slot 5
+nanocli --demo --allow-write --yes import FILE --all
+                                       # every program in the source -> the
+                                       #   same User slot, in order
+nanocli --demo --allow-write --yes import FILE --all --effects
+                                       # every program and every effects patch
+nanocli --demo import FILE --program 0=5 --dry-run
+                                       # show the plan; send nothing
+```
+
+The browser: `I` opens the file picker; choose a file, then map source
+programs to User slots on the screen that follows (or press `ctrl+s` to
+import the whole bank with no mapping). The write gate must be armed; a
+locked gate refuses the import with no message sent.
+
+Source 127 is hardwired silent and is skipped on bank import; destination
+127 is refused as a destination everywhere. Mix slot 100 is the edit
+buffer's own slot and is never stored. Every store is backed up (once per
+slot per session), read back, and compared byte for byte; only an agreed
+read-back is recorded for undo, so `z` restores a whole import as one
+entry, and a partial failure keeps a reduced entry for the slots that did
+not come back.
 
 ## The bench, real hardware
 

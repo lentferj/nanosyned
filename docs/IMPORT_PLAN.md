@@ -701,22 +701,22 @@ fallback ladder is in `docs/IMPORT_PROMPT.md`.
 
 ## 11. Definition of done
 
-- [ ] `nanocli import FILE --list` works offline for `.syx` and `.sqs`.
-- [ ] `nanocli import FILE --program SRC=DST` writes one or many with
+- [x] `nanocli import FILE --list` works offline for `.syx` and `.sqs`.
+- [x] `nanocli import FILE --program SRC=DST` writes one or many with
       gate, confirm, backup, read-back and honest failures.
-- [ ] `nanocli import FILE --all --bank N` imports a whole bank; `--dry-run`
+- [x] `nanocli import FILE --all --bank N` imports a whole bank; `--dry-run`
       names every overwrite.
-- [ ] `--effects`, `--mixes`, `--global` extend a bank import, off by
+- [x] `--effects`, `--mixes`, `--global` extend a bank import, off by
       default; mix 100 skipped.
-- [ ] `I` opens the picker, remembers the folder, asks for a source bank
+- [x] `I` opens the picker, remembers the folder, asks for a source bank
       when needed, and offers whole-bank and single/multiple flows.
-- [ ] Mapping validates duplicates, range and 127 before any send.
-- [ ] `w` works inside both import screens and keeps assignments.
-- [ ] Two confirmations; the gate is re-checked after the second.
-- [ ] Progress with a cooperative cancel; written records are verified
+- [x] Mapping validates duplicates, range and 127 before any send.
+- [x] `w` works inside both import screens and keeps assignments.
+- [x] Two confirmations; the gate is re-checked after the second.
+- [x] Progress with a cooperative cancel; written records are verified
       and undoable, unwritten ones are not claimed.
-- [ ] One `z` undoes a whole import; a partial undo keeps a reduced entry.
-- [ ] `l` previews into the edit buffer and stores nothing.
-- [ ] `make check` is green and hardware-free; the opt-in hardware check
+- [x] One `z` undoes a whole import; a partial undo keeps a reduced entry.
+- [x] `l` previews into the edit buffer and stores nothing.
+- [x] `make check` is green and hardware-free; the opt-in hardware check
       is documented and has been run once.
-- [ ] README and `_HELP` name every new key and flag.
+- [x] README and `_HELP` name every new key and flag.
