@@ -216,6 +216,75 @@ class TestFavouritesActOnTheRowNotThePane:
             assert p2_row[3] == ""
         store.close()
 
+    async def test_f_keeps_the_cursor_row(self, tmp_path):
+        """Marking a favourite keeps the cursor where it was, not at the end."""
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Add several favourites so the all-favourites view has rows
+            # in the middle to land on.
+            for n in (0, 1, 2, 3, 4):
+                store.add("P2", n, name=f"Prog {n}")
+            app.view_mode = VIEW_ALL_FAVOURITES
+            app._fill("P2")
+            await pilot.pause()
+            table = app.query_one("#slot-table")
+            assert len(app._current) == 5
+            # Put the cursor on the middle row.
+            table.move_cursor(row=2)
+            await pilot.pause()
+            assert table.cursor_row == 2
+            # Mark it as a favourite (it already is; toggling removes it).
+            app.query_one("#slot-table").focus()
+            await pilot.press("f")
+            for _ in range(4):
+                await pilot.pause()
+            # The view stays put: the cursor is still on the same slot,
+            # now gone, so it clamps to the row that took its place.
+            assert table.cursor_row == 2
+            assert [e.number for e in app._current] == [0, 1, 3, 4]
+            # The scroll offset must also stay: a refill that cleared and
+            # re-added every row used to leave the table scrolled to the
+            # bottom, so the row under the cursor was off-screen.
+            assert table.scroll_y == 0 or table.scroll_y < 4
+        store.close()
+
+    async def test_f_keeps_scroll_with_long_list(self, tmp_path):
+        """Scroll position is preserved with a long favourite list."""
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Add many favourites to make a long list that scrolls.
+            for n in range(20):
+                store.add("P2", n, name=f"Prog {n}")
+            app.view_mode = VIEW_ALL_FAVOURITES
+            app._fill("P2")
+            await pilot.pause()
+            table = app.query_one("#slot-table")
+            assert len(app._current) == 20
+            # Scroll down so the cursor is on row 10 but visually the table
+            # is scrolled (rows 0-9 are off-screen).
+            table.move_cursor(row=10)
+            await pilot.pause()
+            # In the test harness the DataTable may not report a scroll offset
+            # unless we use keyboard navigation, so simulate down-arrow.
+            for _ in range(10):
+                await pilot.press("down")
+            await pilot.pause()
+            cursor_before = table.cursor_row
+            scroll_before = table.scroll_y
+            # Toggle favourite on the current row.
+            await pilot.press("f")
+            for _ in range(4):
+                await pilot.pause()
+            # Cursor and scroll should stay on the same visual position.
+            assert table.cursor_row == cursor_before
+            # The scroll should not jump to the end.
+            assert table.scroll_y <= scroll_before + 1
+        store.close()
+
 
 class TestTheLegendIsComplete:
     def _app_source(self):

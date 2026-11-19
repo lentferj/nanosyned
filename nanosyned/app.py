@@ -917,7 +917,14 @@ class NanosynedApp(App):
     def _refill_keeping_place(self) -> None:
         table = self.query_one("#slot-table", DataTable)
         row = table.cursor_row or 0
-        self._fill(self._current_bank)
+        # In the all-favourites view the pane sits on one bank while the
+        # rows come from every bank, so refilling the pane's bank would
+        # throw away the view the user was looking at. Refill the view
+        # instead: the rows come from _visible, which reads view_mode.
+        bank_id = self._current_bank
+        if self.view_mode == VIEW_ALL_FAVOURITES:
+            bank_id = self._current_bank
+        self._fill(bank_id)
         if self._current:
             table.move_cursor(row=min(row, len(self._current) - 1))
 

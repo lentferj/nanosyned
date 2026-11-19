@@ -166,6 +166,17 @@ class FilePickerScreen(ModalScreen[str | None]):
             return
         if event.key == "q":
             self.action_cancel()
+            return
+        if not self._filtering and event.is_printable and event.key.isalpha():
+            # Jump to the first entry starting with the pressed letter,
+            # without narrowing the listing: the filter is a separate,
+            # deliberate mode (``/``), this is one keystroke of type-ahead.
+            letter = event.key.casefold()
+            table = self.query_one("#picker-table", DataTable)
+            for index, (_, name) in enumerate(self._rows):
+                if name.casefold().startswith(letter):
+                    table.move_cursor(row=index)
+                    break
 
     def _start_path(self) -> str:
         """The remembered folder, or the home directory when it is gone.

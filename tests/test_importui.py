@@ -209,6 +209,85 @@ class TestTheFilePicker:
             await _until(pilot, lambda: not isinstance(app.screen, FilePickerScreen))
 
 
+class TestLetterNavigation:
+    """Letter keys jump to the first matching entry when not filtering."""
+
+    async def test_letter_jumps_to_first_matching_entry(self, tmp_path):
+        (tmp_path / "alpha.syx").touch()
+        (tmp_path / "beta.syx").touch()
+        (tmp_path / "gamma.syx").touch()
+        app = make(tmp_path)
+        seen: list[str | None] = []
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open(pilot, FilePickerScreen(path=str(tmp_path)), seen)
+            screen = app.screen
+            table = screen.query_one("#picker-table", DataTable)
+            assert table.row_count == 3
+
+            # Press 'g' - should jump to gamma.syx
+            await pilot.press("g")
+            await pilot.pause()
+            assert table.cursor_row == 2  # gamma is 3rd (index 2)
+
+            # Press 'a' - should jump to alpha.syx
+            await pilot.press("a")
+            await pilot.pause()
+            assert table.cursor_row == 0  # alpha is 1st
+
+    async def test_letter_case_insensitive(self, tmp_path):
+        (tmp_path / "Alpha.syx").touch()
+        (tmp_path / "beta.syx").touch()
+        app = make(tmp_path)
+        seen: list[str | None] = []
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open(pilot, FilePickerScreen(path=str(tmp_path)), seen)
+            table = app.screen.query_one("#picker-table", DataTable)
+            assert table.row_count == 2
+
+            # Uppercase 'A' should still find alpha (case insensitive)
+            await pilot.press("A")
+            await pilot.pause()
+            assert table.cursor_row == 0  # Alpha is 1st
+
+    async def test_letter_does_nothing_when_filtering(self, tmp_path):
+        (tmp_path / "alpha.syx").touch()
+        (tmp_path / "bongo.syx").touch()
+        app = make(tmp_path)
+        seen: list[str | None] = []
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open(pilot, FilePickerScreen(path=str(tmp_path)), seen)
+            table = app.screen.query_one("#picker-table", DataTable)
+            assert table.row_count == 2
+
+            # Start filtering with '/'
+            await pilot.press("slash")
+            await pilot.pause()
+            # Now 'a' should be part of filter, not jump
+            await pilot.press("a")
+            await pilot.pause()
+            # Filter narrows to entries containing 'a': alpha only
+            assert table.row_count == 1
+            assert str(table.get_row_at(0)[0]) == "alpha.syx"
+
+    async def test_q_cancels_not_jumps(self, tmp_path):
+        (tmp_path / "qtest.syx").touch()
+        app = make(tmp_path)
+        seen: list[str | None] = []
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await _open(pilot, FilePickerScreen(path=str(tmp_path)), seen)
+            table = app.screen.query_one("#picker-table", DataTable)
+            assert table.row_count == 1
+
+            # Press 'q' - should cancel, not jump to qtest.syx
+            await pilot.press("q")
+            await _until(pilot, lambda: bool(seen))
+            assert seen == [None]
+
+
 # --- the whole-bank screen -------------------------------------------------
 
 
