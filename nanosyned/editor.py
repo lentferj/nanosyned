@@ -54,6 +54,7 @@ __all__ = [
     "GlobalEditRecord",
     "GlobalEditor",
     "GlobalRow",
+    "ImportRecord",
     "MixEditRecord",
     "ProgramEditor",
     "choice_text",
@@ -250,6 +251,23 @@ class GlobalEditRecord:
     def label(self) -> str:
         """What the undo history calls this edit."""
         return "the global settings"
+
+
+@dataclass(frozen=True, slots=True)
+class ImportRecord:
+    """One import session's undo entry, carrying every edited slot.
+
+    ``z`` restores every record newest-first; a partial failure keeps a
+    reduced batch entry with only the edits that succeeded, so ``Z`` still
+    undoes the whole session but individual ``z`` may stop early.
+    """
+
+    edits: tuple[EditRecord, ...]
+
+    @property
+    def label(self) -> str:
+        """What the undo history calls this batch."""
+        return f"import ({len(self.edits)} edit(s))"
 
 
 #: The global rows a store must not present as editable, and the model the

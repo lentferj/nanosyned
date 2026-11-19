@@ -59,7 +59,7 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Header, Static
 
-from nano import banks, importplan, livenames, verify
+from nano import banks, importplan, livenames, verify, writing
 from nano import catalog as cat
 from nano import config as cfg
 from nano import records as rec
@@ -72,11 +72,13 @@ from nanosyned.editor import (
     EffectsEditRecord,
     GlobalEditor,
     GlobalEditRecord,
+    ImportRecord,
     MixEditRecord,
     ProgramEditor,
 )
 from nanosyned.importbank import WholeBankScreen
 from nanosyned.importflow import run_import_flow
+from nanosyned.importprogress import ImportProgressScreen
 from nanosyned.importsingle import SingleMappingScreen
 from nanosyned.paramsui import ParameterScreen
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
@@ -179,6 +181,7 @@ WRITE_HINTS: tuple[str, ...] = (
     "M program/mix mode",
     "g global",
     "w write gate",
+    "I import",
     "z undo",
     "Z undo all",
 )
@@ -324,7 +327,6 @@ class NanosynedApp(App):
         #: write action asks :meth:`EditGate.check` on the main thread
         #: before a worker exists, so a locked gate sends nothing at all.
         self._write_gate = EditGate(armed=allow_write)
-        self._last_import_plan = None
         #: The family's undo log. ``plan``/``settle`` are the doors used
         #: here: the re-send runs on a worker, so the entries leave the log
         #: as the plan is taken, on the main thread, and ``settle`` reports
@@ -1303,8 +1305,37 @@ class NanosynedApp(App):
         sentences: list[str] = []
         try:
             with self._busy_gate, self._lock:
-                for record in records:
+                for i in range(len(records)):
+                    record = records[i]
                     edit = record.payload
+                    if isinstance(edit, ImportRecord):
+                        failed_edits: list = []
+                        detail_sentences: list[str] = []
+                        for item in reversed(edit.edits):
+                            try:
+                                read_back = self._rewrite(item)
+                            except _BRIDGE_ERRORS as exc:
+                                failed_edits.append(item)
+                                detail_sentences.append(f"{item.label}: {exc}")
+                                continue
+                            if verify.mismatches(item.previous, read_back):
+                                failed_edits.append(item)
+                                detail_sentences.append(
+                                    verify.describe(
+                                        item.previous,
+                                        read_back,
+                                        what=item.label,
+                                    )
+                                )
+                        if failed_edits:
+                            reduced = ImportRecord(edits=tuple(failed_edits))
+                            records[i] = Record(edit.label, reduced)
+                            results.append(False)
+                            sentences.append(", ".join(detail_sentences))
+                            continue
+                        results.append(True)
+                        sentences.append("")
+                        continue
                     if not isinstance(
                         edit, (EditRecord, MixEditRecord, GlobalEditRecord)
                     ):
@@ -1352,6 +1383,10 @@ class NanosynedApp(App):
             edit = record.payload
             if isinstance(edit, EditRecord):
                 self.catalog.set_live_name("USER", edit.number, edit.name)
+            elif isinstance(edit, ImportRecord):
+                for item in edit.edits:
+                    if isinstance(item, EditRecord):
+                        self.catalog.set_live_name("USER", item.number, item.name)
         if self._current_bank == "USER":
             self._refill_keeping_place()
 
@@ -2462,13 +2497,163 @@ class NanosynedApp(App):
     def _import_plan(self, plan) -> None:
         """Hand a confirmed plan to the import worker.
 
-        T12 owns the real worker, the progress screen and the refresh; until
-        it lands this keeps the callback shape the screens answer to and
-        records that a plan was accepted, so the flow stays testable without
-        a device.
+        The gate is asked here, on the main thread, before a port is opened:
+        a locked gate means nothing is sent and the refusal names what to do
+        next. The progress screen is pushed before the worker starts so the
+        user can cancel between records.
+
+        ``None`` as the starting path lets the picker consult its remembered
+        folder rather than overriding it.
         """
-        self._last_import_plan = plan
-        self.notify_status(f"import plan accepted: {len(plan.steps)} step(s)")
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        cancel = threading.Event()
+        progress = ImportProgressScreen(total=len(plan.steps), on_stop=cancel.set)
+        self.push_screen(progress)
+        self._import_worker(plan, progress, cancel)
+
+    @work(thread=True)
+    def _import_worker(self, plan, progress, cancel) -> None:
+        """**MIDI only.** Import a plan one record at a time with a progress screen.
+
+        Each step is read, backed up, stored and read back in turn; the
+        progress screen is updated between steps so a cooperative cancel can
+        stop before the next record starts. Only an agreed read-back is
+        recorded for undo, and a partial failure keeps a reduced batch entry
+        with only the edits that succeeded.
+        """
+        results: list[writing.Result] = []
+        try:
+            with self._busy_gate, self._lock:
+                for index, step in enumerate(plan.steps):
+                    if cancel.is_set():
+                        break
+                    number = step.target
+                    name = self._step_name(step)
+                    failures = sum(1 for r in results if r.failure)
+                    progress.call_from_thread(
+                        progress.set_progress,
+                        index,
+                        len(plan.steps),
+                        number or 0,
+                        name,
+                        failures,
+                    )
+                    results.append(self._import_one_step(step, number))
+        finally:
+            self._exchange.release()
+        self.call_from_thread(self._import_done, plan, results, progress)
+
+    def _import_one_step(self, step, number: int | None) -> writing.Result:
+        """Read, back up, store and verify one step; never raises."""
+        result = writing.Result(
+            kind=step.kind, number=number, record=bytes(step.record)
+        )
+        what = (
+            f"the {writing.RECORD_NAMES[step.kind]} "
+            f"at {writing.label(step.kind, number)}"
+        )
+        try:
+            previous = writing.read_record(self.device, step.kind, number)
+        except _BRIDGE_ERRORS as exc:
+            result.failure = str(exc)
+            result.stage = "read"
+            return result
+        result.previous = writing.truncate(step.kind, previous, what)
+        try:
+            result.backup = writing.save_backup(step.kind, number, result.previous)
+        except _BRIDGE_ERRORS as exc:
+            result.failure = str(exc)
+            result.stage = "backup"
+            return result
+        try:
+            writing.write_record(self.device, step.kind, number, step.record)
+        except _BRIDGE_ERRORS as exc:
+            result.failure = str(exc)
+            result.stage = "store"
+            return result
+        result.sent = True
+        try:
+            read_back = writing.read_record(self.device, step.kind, number)
+            result.read_back = writing.truncate(step.kind, read_back, what)
+        except _BRIDGE_ERRORS as exc:
+            result.failure = str(exc)
+            result.stage = "read-back"
+            return result
+        result.sentence = verify.describe(
+            step.record,
+            result.read_back,
+            what=writing.label(step.kind, number, self._step_name(step)),
+        )
+        if verify.mismatches(step.record, result.read_back):
+            result.failure = result.sentence
+            result.stage = "verify"
+        else:
+            result.stage = "verified"
+        return result
+
+    @staticmethod
+    def _step_name(step) -> str:
+        """The name inside a step's record, or ``""`` for a kind that has none."""
+        if step.kind == "program":
+            return rec.program_name(step.record).rstrip()
+        if step.kind == "mix":
+            return rec.mix_name(step.record).rstrip()
+        return ""
+
+    def _import_done(self, plan, results, progress) -> None:
+        """Main thread: refresh names, push undo, report the summary."""
+        if progress is not None:
+            try:
+                progress.dismiss(None)
+            except Exception:
+                pass
+        agreed = [r for r in results if r.stage == "verified"]
+        failed = [r for r in results if r.failure]
+        for result in agreed:
+            name = self._step_name_for(result)
+            if result.kind == "program" and result.number is not None:
+                self.catalog.set_live_name("USER", result.number, name)
+        if self._current_bank == "USER":
+            self._refill_keeping_place()
+        # One undo entry for the whole session; an edit's name is the name
+        # that was there before the store, so `z` restores both bytes and name.
+        edits = tuple(
+            EditRecord(
+                number=r.number,
+                previous=r.previous,
+                name=writing.record_name(r.kind, r.previous),
+            )
+            for r in agreed
+            if r.kind == "program" and r.number is not None
+        )
+        if edits:
+            self._undo_log.push(Record("import", ImportRecord(edits=edits)))
+        if failed:
+            first = failed[0]
+            self.notify_status(
+                f"import: {len(agreed)} of {len(results)} stored; {first.failure}",
+                refused=True,
+            )
+        else:
+            self.notify_status(f"import: {len(agreed)} of {len(results)} stored")
+
+    @staticmethod
+    def _step_name_for(result: writing.Result) -> str:
+        """The name inside a result's record, or ``""`` for a kind that has none."""
+        if result.kind == "program":
+            return rec.program_name(result.record).rstrip()
+        if result.kind == "mix":
+            return rec.mix_name(result.record).rstrip()
+        return ""
 
     def _preview_import(self, record) -> None:
         """Load a source record into the program edit buffer (no store)."""

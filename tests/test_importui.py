@@ -750,3 +750,32 @@ class TestTheSingleMappingScreen:
             await pilot.press("escape")
             await pilot.pause()
             assert seen == [None]
+
+    async def test_l_loads_into_the_edit_buffer_without_storing(self, tmp_path):
+        """`l` previews: it loads (opcode 02) into the edit buffer, stores nothing."""
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        previews: list = []
+        screen = SingleMappingScreen(
+            bank, gate=EditGate(armed=True), on_preview=previews.append
+        )
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            seen: list = []
+            app.push_screen(screen, seen.append)
+            await _until(pilot, lambda: isinstance(app.screen, SingleMappingScreen))
+            await _until(pilot, lambda: len(app.screen.query("#single-table")) == 1)
+            await pilot.press("down")  # ensure a row is focused
+            await pilot.press("l")
+            await pilot.pause()
+            assert len(previews) == 1
+            assert previews[0] == bank.programs[0].record
+            # The app's own preview loads and never stores.
+            app._preview_import(previews[0])
+            await pilot.pause()
+            assert len(app.device.edit_program_writes) == 1
+            assert (
+                app.device.edit_program_writes[0]
+                == bytes(bank.programs[0].record)[: rec.PROGRAM_BYTES]
+            )
+            assert app.device.program_writes == []
