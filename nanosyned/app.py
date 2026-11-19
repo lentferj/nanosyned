@@ -404,6 +404,13 @@ class NanosynedApp(App):
                     self.rating_filter = RatingFilter(
                         stars=saved_stars, at_least=bool(saved_at_least)
                     )
+                # Restore the remembered MIDI channel for the device.
+                saved_channel = _cfg.load_channel(self._config_path)
+                if saved_channel is not None and 0 <= saved_channel <= 15:
+                    try:
+                        self.device.channel = saved_channel
+                    except Exception:
+                        pass
             except Exception:
                 # The cache is best-effort; a bad read is a default
                 # startup.
@@ -747,6 +754,7 @@ class NanosynedApp(App):
         now = self.favorites.toggle(bank_id, entry.program_change, name=name)
         self.notify_status(f"{'favourited' if now else 'unfavourited'} {literal(name)}")
         self._refill_keeping_place()
+        self._refresh_bank_fav_count(bank_id)
 
     def _favourite_under_cursor(self):
         """The favourite row for the slot under the cursor, if there is one.
@@ -830,6 +838,7 @@ class NanosynedApp(App):
                 return
             self.favorites.set_rating(entry.bank_id, entry.program_change, value)
             self._refill_keeping_place()
+            self._refresh_bank_fav_count(entry.bank_id)
             self.notify_status(
                 f"{entry.display} rated {value}"
                 if value
@@ -911,6 +920,12 @@ class NanosynedApp(App):
         self._fill(self._current_bank)
         if self._current:
             table.move_cursor(row=min(row, len(self._current) - 1))
+
+    def _refresh_bank_fav_count(self, bank_id: str) -> None:
+        """Update the favourite counter in the bank-table column for *bank_id*."""
+        table = self.query_one("#bank-table", DataTable)
+        marked = len(self._favorite_keys(bank_id))
+        table.update_cell(bank_id, "fav", str(marked) if marked else "")
 
     def _fill(self, bank_id: str) -> None:
         table = self.query_one("#slot-table", DataTable)

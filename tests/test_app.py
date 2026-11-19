@@ -186,6 +186,36 @@ class TestFavouritesActOnTheRowNotThePane:
             assert store.get("P2", 5) is None, "P2:5 should be unfavourited"
         store.close()
 
+    async def test_the_bank_table_count_updates_on_toggle(self, tmp_path):
+        """Toggling a favourite on a Preset updates the bank-table counter."""
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            bank_table = app.query_one("#bank-table")
+            # Find the P2 row's initial count (should be empty).
+            p2_row = bank_table.get_row("P2")
+            assert p2_row[3] == ""  # no favourites in P2 yet
+
+            app._fill("P2")
+            await pilot.pause()
+            app.query_one("#slot-table").focus()
+            await pilot.press("f")
+            for _ in range(4):
+                await pilot.pause()
+
+            # The count column should now show "1".
+            p2_row = bank_table.get_row("P2")
+            assert p2_row[3] == "1"
+
+            # Toggle off: count goes back to empty.
+            await pilot.press("f")
+            for _ in range(4):
+                await pilot.pause()
+            p2_row = bank_table.get_row("P2")
+            assert p2_row[3] == ""
+        store.close()
+
 
 class TestTheLegendIsComplete:
     def _app_source(self):
@@ -401,6 +431,38 @@ class TestRatings:
         assert cfg.load_ui_int("rating_stars", path) is None
         assert cfg.load_ui_bool("rating_at_least", path) is None
         store.close()
+
+    async def test_the_channel_is_remembered_across_restarts(self, tmp_path):
+        """The last send channel survives a restart, like the other UI state.
+
+        The channel is written by ``_remember_channel`` and read by
+        ``main`` for hardware, but the TUI never loaded it back, so a
+        session that moved off channel 1 opened on channel 1 again.
+        """
+        path = str(tmp_path / "config.toml")
+
+        def open_app():
+            return NanosynedApp(
+                DemoDevice(),
+                catalog=cat.empty(),
+                config_path=path,
+            )
+
+        app = open_app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_channel(7)
+            await pilot.pause()
+
+        assert cfg.load_channel(path) == 7
+
+        again = open_app()
+        assert again._channel() == 7
+
+        # A bad value is not trusted: the app opens on the default.
+        cfg.save_channel(99, path)
+        third = open_app()
+        assert third._channel() == 0
 
 
 class TestScan:
