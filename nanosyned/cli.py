@@ -1104,6 +1104,85 @@ def _import_write(device, args, plan: importplan.ImportPlan) -> int:
     return 1 if failed else 0
 
 
+def _cmd_init_bank(device, args) -> int:
+    """**Initialise** the User bank: replace slots 000-126 with the unit's Init program.
+
+    The command reads User 127, builds the Init record from it, plans every
+    writable slot, and runs the same read/backup/store/verify fence as ``send``
+    and ``import``.  ``127`` is never written.
+
+    Returns 1 if any slot fails to read, back up, store or verify; 0 when all
+    127 agree.  ``--dry-run`` prints the plan and stores nothing; the write
+    gate is not required.
+    """
+    from nano import importplan
+    from nano.initbank import init_record
+
+    # read User 127 (already imported: read_record, truncate)
+    off_record = truncate(
+        "program",
+        read_record(device, "program", 127),
+        "the 127 Off record",
+    )
+    # build init_record
+    template = init_record(off_record)
+    # build plan_init
+    plan = importplan.plan_init(template)
+    # print the range/count
+    print("127 programs, 000-126; 127 untouched")
+    if args.dry_run:
+        print(f"{len(plan.steps)} record(s) to write (init bank)")
+        return 0
+    # otherwise run writing.run with the existing read/backup/store/verify style
+    failed = 0
+
+    def stop(result) -> None:
+        nonlocal failed
+        raise SystemExit(f"error: {result.failure}")
+
+    def on_phase(name, results):
+        if name == "read":
+            for result in results:
+                if result.failure is not None:
+                    stop(result)
+            print("127 programs, 000-126; 127 untouched")
+            for result in results:
+                old = record_name(result.kind, result.previous)
+                new = record_name(result.kind, result.record)
+                print(
+                    f"  {label(result.kind, result.number, old)}"
+                    f" -> {label(result.kind, result.number, new)}"
+                )
+        elif name == "backup":
+            for result in results:
+                if result.failure is not None:
+                    stop(result)
+                print(f"  backup {result.backup}")
+
+    def on_result(result):
+        nonlocal failed
+        if result.stage in ("read", "backup"):
+            return
+        if result.failure is not None and result.stage != "verify":
+            stop(result)
+        if result.failure is not None:
+            failed += 1
+            print(f"verify   MISMATCH: {result.failure}; the backup is {result.backup}")
+            return
+        message = frame(result.kind, result.number, result.record)
+        print(f"wrote    {len(message)} bytes to {label(result.kind, result.number)}")
+        print(f"verify   {result.sentence}; the backup is {result.backup}")
+
+    results = run(
+        device,
+        cast("Sequence[WStep]", plan.steps),
+        on_phase=on_phase,
+        on_result=on_result,
+    )
+    _remember_init_results(args, results)
+    return 1 if failed else 0
+
+
 def _cmd_find(_device, args) -> None:
     """Search the names this program knows. Touches no hardware."""
     catalog = _catalog(args)
@@ -1154,6 +1233,53 @@ def _memory(args) -> preset_memory.PresetMemory | None:
     if path is None and getattr(args, "demo", False):
         return None
     return preset_memory.PresetMemory(path or preset_memory.default_path())
+
+
+def _remember_init_results(args, results) -> None:
+    """Preserve the replaced slots' favourite content, then forget the slots.
+
+    Init is an overwrite: if a destination still carried an active favourite
+    mark, the old bytes were favourite content. Remember that identity and
+    its annotations before the slot mark is cleared, then bind the new Init
+    content as seen (never favourite). This is the same rule the browser's
+    ``_remember_program`` follows.
+    """
+    programs = [
+        result
+        for result in results
+        if result.stage == "verified"
+        and result.kind == "program"
+        and result.number is not None
+    ]
+    if not programs:
+        return
+    memory = _memory(args)
+    if memory is None:
+        return
+    favorites = None
+    try:
+        favorites = _favorites(args)
+        for result in programs:
+            number = cast(int, result.number)
+            old = result.previous
+            if old:
+                old_favourite = favorites.get("USER", number)
+                if old_favourite is not None:
+                    old_entry = memory.remember(old, name=record_name("program", old))
+                    memory.set_favourite(
+                        old_entry.digest,
+                        True,
+                        rating=old_favourite.rating,
+                        tags=old_favourite.tags,
+                        note=old_favourite.note,
+                    )
+            entry = memory.remember(result.record, name="Init")
+            memory.bind_slot("USER", number, entry.digest)
+            favorites.remove("USER", number)
+    finally:
+        if favorites is not None:
+            favorites.close()
+        memory.close()
 
 
 def _remember_results(args, results) -> tuple[int, int]:
@@ -1425,6 +1551,8 @@ def _writes(args) -> bool:
         return not (args.list or args.dry_run)
     if args.command == "dump" and getattr(args, "dump_command", None) == "favourites":
         return False
+    if args.command == "init-bank":
+        return not args.dry_run
     return (
         args.command == "backup" and getattr(args, "backup_command", None) == "restore"
     )
@@ -1695,6 +1823,18 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
     )
     _write_flags(sp)
     _inherit(sp, "preset_memory")
+    sp = sub.add_parser(
+        "init-bank",
+        help="initialise the User bank: replace slots 000-126 with Init",
+    )
+    sp.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="read the destinations and print what would be replaced, then stop",
+    )
+    _write_flags(sp)
+    _inherit(sp, "preset_memory")
     sp = sub.add_parser("find", help="search known names (no hardware)")
     sp.add_argument("name")
     sp = sub.add_parser(
@@ -1756,6 +1896,7 @@ COMMANDS = {
     "dump": _cmd_dump,
     "send": _cmd_send,
     "backup": _cmd_backup,
+    "init-bank": _cmd_init_bank,
     "set": _cmd_set,
     "params": _cmd_params,
     "select": _cmd_select,
