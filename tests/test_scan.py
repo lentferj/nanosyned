@@ -175,12 +175,8 @@ class TestTheOfferIsRemembered:
             assert await _until(
                 pilot, lambda: not isinstance(app.screen, ScanOfferScreen)
             )
-            assert (
-                config.load_ui_bool(
-                    "scan_offer_dismissed", str(tmp_path / "config.toml")
-                )
-                is True
-            )
+            ui_path = config.ui_state_path(str(tmp_path / "config.toml"))
+            assert config.load_ui_bool("scan_offer_dismissed", ui_path) is True
 
             # A check re-armed after the answer must find the dismissal
             # settled rather than push the modal a second time.
@@ -208,10 +204,8 @@ class TestTheOfferIsRemembered:
             assert await _until(
                 pilot, lambda: not isinstance(app.screen, ScanOfferScreen)
             )
-        assert (
-            config.load_ui_bool("scan_offer_dismissed", str(tmp_path / "config.toml"))
-            is None
-        )
+        ui_path = config.ui_state_path(str(tmp_path / "config.toml"))
+        assert config.load_ui_bool("scan_offer_dismissed", ui_path) is None
 
         second = make(tmp_path)
         async with second.run_test() as pilot:

@@ -179,7 +179,7 @@ beside a session that is driving the hardware.
 | `/` | search names, tags and notes |
 | `[` / `]` / `c` | previous / next send channel, or type one |
 | `f` | favourite this slot |
-| `v` | cycle the view: all slots → this bank's favourites → every favourite |
+| `F` | cycle the view: all slots → this bank's favourites → every favourite |
 | `t` / `n` / `*` | tags / note / rating, 0–5 stars (on a favourite) |
 | `V` | filter by rating — exactly that many, or that many and up |
 | `e` | edit the User program under the cursor — **only while the gate is armed** |
@@ -455,7 +455,7 @@ believes, which is why the bench exists.
 
 The frames in this README live in `docs/screenshots/`, each as a `.png` with
 its `.svg` source beside it: `browser` (the five banks and the slot pane),
-`detail` (the row under the cursor), `favourites` (the `v` views), `search`
+`detail` (the row under the cursor), `favourites` (the `F` views), `search`
 (`/`), `scan-offer` (the `S` scan), `editor`, `device` (the `i` report) and
 `help` (`?`). They are captured from `--demo` with invented names, so no real
 unit's contents appear in them.

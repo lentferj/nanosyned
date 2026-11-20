@@ -64,11 +64,8 @@ def _app_tree():
 
 
 def _family_blocks():
-    """``keys.CANONICAL_LEGEND`` with this tool's one rename applied."""
-    return tuple(
-        "v favourites view" if block == "F favourites view" else block
-        for block in keys.CANONICAL_LEGEND
-    )
+    """The family's shared legend, unchanged."""
+    return keys.CANONICAL_LEGEND
 
 
 def _extras():
@@ -154,24 +151,15 @@ class TestTheLegendFollowsTheFamily:
         assert set(REQUIRED_EXTRAS) <= set(_extras())
         assert len(set(KEY_HINTS)) == len(KEY_HINTS), "a hint is shown twice"
 
-    def test_v_takes_the_family_favourites_slot(self):
-        """``f`` writes the store and ``F`` does not; ``v`` has no twin.
-
-        The family asks a tool that renames a shared key to say why --
-        see :mod:`tests.test_conformance`.
-        """
-        assert "F favourites view" not in KEY_HINTS
+    def test_F_takes_the_family_favourites_slot(self):
+        assert "F favourites view" in KEY_HINTS
         assert (
-            KEY_HINTS.index("v favourites view") == KEY_HINTS.index("f favourite") + 1
+            KEY_HINTS.index("F favourites view") == KEY_HINTS.index("f favourite") + 1
         )
 
     def test_the_legend_is_the_library_builder_with_the_declared_extras(self):
         extras = _extras()
-        expected = tuple(
-            "v favourites view" if block == "F favourites view" else block
-            for block in keys.legend(extras=extras)
-        )
-        assert expected == KEY_HINTS
+        assert tuple(keys.legend(extras=extras)) == KEY_HINTS
 
     def test_the_extras_do_not_take_a_key_the_family_already_shows(self):
         """A tool's own key must not mean two things in the same tool.

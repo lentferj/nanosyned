@@ -147,22 +147,6 @@ VIEW_LABELS = {
 }
 
 
-def _view_key(blocks: tuple[str, ...]) -> tuple[str, ...]:
-    """Swap the family's ``F favourites view`` for this tool's ``v``.
-
-    ``f`` writes the favourites database and ``F`` does not, so the
-    family's shift-pair left a write one slip away from a read; ``v`` has
-    no such twin. rxved and p2ked made the same swap, and the family asks
-    a tool that renames a shared key to say why in its own test -- see
-    tests/test_conformance.py, where the whole divergence is two
-    sentences.
-    """
-    return tuple(
-        "v favourites view" if block == "F favourites view" else block
-        for block in blocks
-    )
-
-
 #: The legend. Every binding the app has, in the order somebody meets them.
 #: Built from the family's shared legend rather than hand-written: it used
 #: to be a tuple of its own, in its own order. ``keys.legend`` puts this
@@ -171,8 +155,7 @@ def _view_key(blocks: tuple[str, ...]) -> tuple[str, ...]:
 #: rating keys, and the ones the write path adds (edit program, mix, global,
 #: mode select, gate, undo, undo all). ``w``/``z``/``Z`` are the family's
 #: canonical editor keys, spelled the family's way; this browser legend has
-#: no editor tier, so they are carried here as this tool's hints. `v` apart,
-#: every other key it binds is a shared one, which `_view_key` renames.
+#: no editor tier, so they are carried here as this tool's hints.
 WRITE_HINTS: tuple[str, ...] = (
     "e edit program",
     "x effects",
@@ -185,8 +168,8 @@ WRITE_HINTS: tuple[str, ...] = (
     "z undo",
     "Z undo all",
 )
-KEY_HINTS = _view_key(
-    keys.legend(extras=("S scan device", "* rating", "V rating filter", *WRITE_HINTS))
+KEY_HINTS = keys.legend(
+    extras=("S scan device", "* rating", "V rating filter", *WRITE_HINTS)
 )
 
 
@@ -243,11 +226,7 @@ class NanosynedApp(App):
         Binding("right_square_bracket", "channel_up", "Channel +"),
         Binding("c", "pick_channel", "Set channel"),
         Binding("f", "toggle_favorite", "Favourite"),
-        # `v`, not the family's `F`: `f` writes the favourites database and
-        # `F` does not, so the family's shift-pair left a write one slip away
-        # from a read. `v` has no such twin. rxved and p2ked made the same
-        # swap; the rename is declared in tests/test_conformance.py.
-        Binding("v", "cycle_favorites", "Favourites view"),
+        Binding("F", "cycle_favorites", "Favourites view"),
         Binding("t", "edit_tags", "Tags"),
         Binding("n", "edit_note", "Note"),
         Binding("asterisk", "edit_rating", "Rating"),
@@ -274,7 +253,7 @@ class NanosynedApp(App):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(  # noqa: PLR0913 -- one keyword per injection point
+    def __init__(  # noqa: PLR0913, PLR0915 -- one keyword per injection point
         self,
         device,
         *,
@@ -294,6 +273,15 @@ class NanosynedApp(App):
         #: in tests, so a test cannot drop a config into the
         #: working directory.
         self._config_path = config_path
+        #: Where the screen remembers where it was: ``ui-state.toml``
+        #: beside the settings file, not inside it. The settings writer
+        #: refuses a file holding tables or lists, so mixing screen state
+        #: into it is what wedged the cache when an older build wrote a
+        #: dotted key unquoted. ``None`` when no settings path was given,
+        #: which keeps the no-path, no-file rule for tests.
+        self._ui_state_path = (
+            cfg.ui_state_path(config_path) if config_path is not None else None
+        )
         #: Which catalog file this browser is pointed at. The live-names
         #: sidecar travels beside it -- see :func:`nano.livenames.path_for`
         #: -- so a run against another catalog reads that catalog's names.
@@ -354,7 +342,7 @@ class NanosynedApp(App):
         self._last_mode_sent: bool | None = None
         #: Restore the remembered browser state: which bank the left pane
         #: was on, which row the right pane's cursor was on, and where the
-        #: cycling ``v`` view stood. Loaded here, not in ``on_mount``,
+        #: cycling ``F`` view stood. Loaded here, not in ``on_mount``,
         #: because the first ``_fill`` down there builds its rows out of
         #: ``view_mode`` and ``_current_bank``; restoring anything later
         #: would mean filling twice. An injected path only -- ``None``
@@ -373,34 +361,34 @@ class NanosynedApp(App):
         self._restoring = False
         self._remembered_bank = self._current_bank
         self._remembered_slot: int | None = None
-        if self._config_path is not None:
+        ui_path = self._ui_state_path
+        if self._config_path is not None and ui_path is not None:
             from nano import config as _cfg
 
             try:
-                saved_view = _cfg.load_ui_state(
-                    "view_mode", self._config_path, default=UNSET
-                )
+                # An older build wrote ``import.folder`` unquoted into
+                # the settings file, which TOML reads as a table and the
+                # settings writer then refuses. Move it out first, so the
+                # channel and port can be saved again.
+                _cfg.migrate_legacy_ui_state(self._config_path, ui_path)
+                saved_view = _cfg.load_ui_state("view_mode", ui_path, default=UNSET)
                 # Never trust a stored value: a view this build renamed
                 # or a stale bank index is ignored, and the app opens on
                 # its defaults.
                 if saved_view is not UNSET and saved_view in VIEW_CYCLE:
                     self.view_mode = saved_view
-                saved_bank = _cfg.load_ui_int("bank_index", self._config_path)
+                saved_bank = _cfg.load_ui_int("bank_index", ui_path)
                 if saved_bank is not None and 0 <= saved_bank < len(self._bank_ids):
                     self._current_bank = self._bank_ids[saved_bank]
-                self._saved_slot_cursor = _cfg.load_ui_int(
-                    "slot_cursor", self._config_path
-                )
-                saved_mix = _cfg.load_ui_int("mix_number", self._config_path)
+                self._saved_slot_cursor = _cfg.load_ui_int("slot_cursor", ui_path)
+                saved_mix = _cfg.load_ui_int("mix_number", ui_path)
                 if saved_mix is not None and 0 <= saved_mix < banks.MIXES:
                     self._mix_number = saved_mix
                 # The rating filter, likewise clamped rather than trusted:
                 # a hand-edited 9 stars is not a filter, it is a typo.
-                saved_stars = _cfg.load_ui_int("rating_stars", self._config_path)
+                saved_stars = _cfg.load_ui_int("rating_stars", ui_path)
                 if saved_stars is not None and 0 <= saved_stars <= 5:
-                    saved_at_least = _cfg.load_ui_bool(
-                        "rating_at_least", self._config_path
-                    )
+                    saved_at_least = _cfg.load_ui_bool("rating_at_least", ui_path)
                     self.rating_filter = RatingFilter(
                         stars=saved_stars, at_least=bool(saved_at_least)
                     )
@@ -686,7 +674,8 @@ class NanosynedApp(App):
         programming error (a list where an int belongs) raises and is
         heard.
         """
-        if self._config_path is None:
+        path = self._ui_state_path
+        if path is None:
             return
         from nano import config as _cfg
 
@@ -702,7 +691,7 @@ class NanosynedApp(App):
             ):
                 if value is UNSET:
                     continue
-                _cfg.save_ui_state(key, value, self._config_path)
+                _cfg.save_ui_state(key, value, path)
         except OSError:
             pass
 
@@ -753,8 +742,20 @@ class NanosynedApp(App):
         # fresh add this destroyed all four, and this is one keystroke.
         now = self.favorites.toggle(bank_id, entry.program_change, name=name)
         self.notify_status(f"{'favourited' if now else 'unfavourited'} {literal(name)}")
-        self._refill_keeping_place()
-        self._refresh_bank_fav_count(bank_id)
+
+        # In VIEW_ALL mode (not favourites views), only update the favourite
+        # cell to avoid refilling the entire table and losing scroll position.
+        if self.view_mode == VIEW_ALL:
+            table = self.query_one("#slot-table", DataTable)
+            new_marker = "[b]♥[/b]" if now else ""
+            table.update_cell(entry.key, "fav", new_marker)
+            self._refresh_bank_fav_count(bank_id)
+        else:
+            # In favourites views (VIEW_BANK_FAVOURITES, VIEW_ALL_FAVOURITES),
+            # we need to refresh the whole table because the visible rows may
+            # change (add/remove rows), so do the existing behaviour.
+            self._refill_keeping_place()
+            self._refresh_bank_fav_count(bank_id)
 
     def _favourite_under_cursor(self):
         """The favourite row for the slot under the cursor, if there is one.
@@ -917,14 +918,7 @@ class NanosynedApp(App):
     def _refill_keeping_place(self) -> None:
         table = self.query_one("#slot-table", DataTable)
         row = table.cursor_row or 0
-        # In the all-favourites view the pane sits on one bank while the
-        # rows come from every bank, so refilling the pane's bank would
-        # throw away the view the user was looking at. Refill the view
-        # instead: the rows come from _visible, which reads view_mode.
-        bank_id = self._current_bank
-        if self.view_mode == VIEW_ALL_FAVOURITES:
-            bank_id = self._current_bank
-        self._fill(bank_id)
+        self._fill(self._current_bank)
         if self._current:
             table.move_cursor(row=min(row, len(self._current) - 1))
 
@@ -2179,7 +2173,8 @@ class NanosynedApp(App):
         access at all, so there is nowhere to remember "never" and nothing
         to offer against; the real launch always has a path.
         """
-        if self._config_path is None or self._busy:
+        path = self._ui_state_path
+        if path is None or self._busy:
             return
         if self._scan_offer_shown:
             return
@@ -2188,9 +2183,7 @@ class NanosynedApp(App):
         from nano import config as _cfg
 
         try:
-            if _cfg.load_ui_bool(
-                "scan_offer_dismissed", self._config_path, default=False
-            ):
+            if _cfg.load_ui_bool("scan_offer_dismissed", path, default=False):
                 return
         except Exception:
             pass
@@ -2561,7 +2554,7 @@ class NanosynedApp(App):
                     number = step.target
                     name = self._step_name(step)
                     failures = sum(1 for r in results if r.failure)
-                    progress.call_from_thread(
+                    self.call_from_thread(
                         progress.set_progress,
                         index,
                         len(plan.steps),
@@ -2720,7 +2713,7 @@ Keys
   [ ]       previous / next MIDI channel
   c         set the MIDI channel
   f         favourite the slot under the cursor
-  v         all slots / favourites here / every favourite
+  F         all slots / favourites here / every favourite
   t n       tags, note
   *         rate the slot under the cursor, 0-5
   V         show only slots at/above a star rating

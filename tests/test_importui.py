@@ -31,12 +31,13 @@ file rather than somebody's.
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 from textual.widgets import DataTable, Static
 
 from nano import catalog as cat
-from nano import config, importing, importplan
+from nano import config, importing, importplan, writing
 from nano import messages as m
 from nano import records as rec
 from nanosyned import importflow
@@ -44,6 +45,7 @@ from nanosyned.app import NanosynedApp
 from nanosyned.demo import DemoDevice
 from nanosyned.editor import EditGate
 from nanosyned.importbank import WholeBankScreen
+from nanosyned.importprogress import ImportProgressScreen
 from nanosyned.importsingle import SingleMappingScreen
 from nanosyned.picker import FilePickerScreen
 from vinsynlib.ui.confirm import ConfirmScreen
@@ -143,9 +145,8 @@ class TestTheFilePicker:
 
     async def test_the_folder_is_remembered_across_two_mounts(self, tmp_path):
         (tmp_path / "qesence1.syx").touch()
-        config.save_ui_state(
-            "import.folder", str(tmp_path), str(tmp_path / "config.toml")
-        )
+        ui_path = config.ui_state_path(str(tmp_path / "config.toml"))
+        config.save_ui_state("import.folder", str(tmp_path), ui_path)
         seen: list[str | None] = []
         app = make(tmp_path)
         async with app.run_test(size=(160, 50)) as pilot:
@@ -157,9 +158,7 @@ class TestTheFilePicker:
             await _until(pilot, lambda: bool(seen))
             assert seen == [str(tmp_path / "qesence1.syx")]
             await _until(pilot, lambda: not isinstance(app.screen, FilePickerScreen))
-        assert config.load_ui_str(
-            "import.folder", str(tmp_path / "config.toml")
-        ) == str(tmp_path)
+        assert config.load_ui_str("import.folder", ui_path) == str(tmp_path)
 
         app = make(tmp_path)
         async with app.run_test(size=(160, 50)) as pilot:
@@ -168,9 +167,8 @@ class TestTheFilePicker:
             assert app.screen.folder == str(tmp_path)
 
     async def test_a_remembered_folder_that_is_gone_falls_back_to_home(self, tmp_path):
-        config.save_ui_state(
-            "import.folder", str(tmp_path / "absent"), str(tmp_path / "config.toml")
-        )
+        ui_path = config.ui_state_path(str(tmp_path / "config.toml"))
+        config.save_ui_state("import.folder", str(tmp_path / "absent"), ui_path)
         app = make(tmp_path)
         seen: list[str | None] = []
         async with app.run_test(size=(160, 50)) as pilot:
@@ -858,3 +856,51 @@ class TestTheSingleMappingScreen:
                 == bytes(bank.programs[0].record)[: rec.PROGRAM_BYTES]
             )
             assert app.device.program_writes == []
+
+
+class TestTheImportWorker:
+    """The worker hands progress to the app, never to a screen's method."""
+
+    async def test_progress_is_handed_to_the_app_thread(self, tmp_path):
+        """``call_from_thread`` belongs to the app; a screen has no such
+        method, and the first progress report used to end the worker with
+        ``AttributeError`` before a single record was stored.
+        """
+        app = make(tmp_path)
+        record = bytes(rec.PROGRAM_BYTES)
+        plan = importplan.ImportPlan(
+            steps=(
+                importplan.Step(
+                    kind="program",
+                    target=0,
+                    record=record,
+                    old_name=None,
+                    source_label="bank 2 program 000",
+                ),
+            ),
+            skipped=(),
+            overwrites=(),
+        )
+        progress = ImportProgressScreen(total=1, on_stop=lambda: None)
+        cancel = threading.Event()
+        app._import_one_step = lambda step, number: writing.Result(
+            kind=step.kind,
+            number=number,
+            record=bytes(step.record),
+            previous=record,
+            read_back=record,
+            stage="verified",
+        )
+        app._exchange.acquire()
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            app.push_screen(progress)
+            await pilot.pause()
+            app._import_worker(plan, progress, cancel)
+            await _until(
+                pilot,
+                lambda: not isinstance(app.screen, ImportProgressScreen),
+            )
+        # ``set_progress`` ran on the app thread before the first record.
+        assert progress.current_slot == 0
+        assert progress.total == 1

@@ -124,9 +124,9 @@ class FilePickerScreen(ModalScreen[str | None]):
         return self._path
 
     @property
-    def _config_path(self) -> str | None:
-        """The injected config path, so a screen without one remembers nothing."""
-        return getattr(self.app, "_config_path", None)
+    def _ui_state_path(self) -> str | None:
+        """The injected ui-state path, so a screen without one remembers nothing."""
+        return getattr(self.app, "_ui_state_path", None)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-dialog"):
@@ -196,7 +196,7 @@ class FilePickerScreen(ModalScreen[str | None]):
 
     def _remembered(self) -> str | None:
         """The folder the user last picked from, from the ui state."""
-        return cfg.load_ui_str("import.folder", self._config_path)
+        return cfg.load_ui_str("import.folder", self._ui_state_path)
 
     def _usable(self, path: str) -> bool:
         """Whether the folder is there and readable by this user."""
@@ -205,7 +205,7 @@ class FilePickerScreen(ModalScreen[str | None]):
     def _save_folder(self) -> None:
         """Remember the folder the user is in; never the file they chose."""
         try:
-            cfg.save_ui_state("import.folder", self._path, self._config_path)
+            cfg.save_ui_state("import.folder", self._path, self._ui_state_path)
         except OSError:
             # A read-only cache must not cost the picker its memory.
             pass

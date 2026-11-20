@@ -285,6 +285,51 @@ class TestFavouritesActOnTheRowNotThePane:
             assert table.scroll_y <= scroll_before + 1
         store.close()
 
+    async def test_f_in_view_all_updates_only_the_heart_cell(self, tmp_path):
+        """In the default view, ``f`` toggles one heart and nothing else.
+
+        The screenshot showed the whole table re-rendered, which scrolled
+        the row under the cursor to the bottom. The fix updates just the
+        cell, so the cursor and scroll stay put.
+        """
+        store = fav.Favorites(str(tmp_path / "f.db"))
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), favorites=store)
+        async with app.run_test(size=(80, 12)) as pilot:
+            await pilot.pause()
+            # A long list so the table can scroll; put the cursor on a row
+            # that is not the first one.
+            for n in range(20):
+                store.add("P2", n, name=f"Prog {n}")
+            app._fill("P2")
+            await pilot.pause()
+            table = app.query_one("#slot-table")
+            assert len(app._current) == banks.PROGRAMS_PER_BANK
+            # Move the cursor to row 10 and scroll down so it is not at
+            # the top of the visible area.
+            for _ in range(10):
+                await pilot.press("down")
+            await pilot.pause()
+            cursor_before = table.cursor_row
+            scroll_before = table.scroll_y
+            # The heart column for the current row should be empty.
+            assert str(table.get_row_at(cursor_before)[0]) == ""
+
+            await pilot.press("f")
+            for _ in range(4):
+                await pilot.pause()
+            # The cursor and scroll stay put.
+            assert table.cursor_row == cursor_before
+            assert table.scroll_y == scroll_before
+            # The heart cell is now filled, and only that one changed.
+            assert str(table.get_row_at(cursor_before)[0]) == "[b]♥[/b]"
+            # Toggling back clears it, still without moving.
+            await pilot.press("f")
+            for _ in range(4):
+                await pilot.pause()
+            assert table.cursor_row == cursor_before
+            assert str(table.get_row_at(cursor_before)[0]) == ""
+        store.close()
+
 
 class TestTheLegendIsComplete:
     def _app_source(self):
@@ -475,6 +520,7 @@ class TestRatings:
 
     def test_the_filter_is_remembered_and_forgotten(self, tmp_path):
         path = str(tmp_path / "config.toml")
+        ui_path = cfg.ui_state_path(path)
         store = fav.Favorites(str(tmp_path / "f.db"))
 
         def open_app():
@@ -490,15 +536,15 @@ class TestRatings:
         app._save_rating_filter()
         again = open_app()
         assert again.rating_filter == RatingFilter(stars=3, at_least=True)
-        assert cfg.load_ui_int("rating_stars", path) == 3
-        assert cfg.load_ui_bool("rating_at_least", path) is True
+        assert cfg.load_ui_int("rating_stars", ui_path) == 3
+        assert cfg.load_ui_bool("rating_at_least", ui_path) is True
 
         again.rating_filter = None
         again._save_rating_filter()
         third = open_app()
         assert third.rating_filter is None
-        assert cfg.load_ui_int("rating_stars", path) is None
-        assert cfg.load_ui_bool("rating_at_least", path) is None
+        assert cfg.load_ui_int("rating_stars", ui_path) is None
+        assert cfg.load_ui_bool("rating_at_least", ui_path) is None
         store.close()
 
     async def test_the_channel_is_remembered_across_restarts(self, tmp_path):
@@ -575,6 +621,7 @@ class TestScan:
 
     async def test_never_is_remembered(self, tmp_path):
         path = str(tmp_path / "config.toml")
+        ui_path = cfg.ui_state_path(path)
         app = NanosynedApp(
             DemoDevice(),
             catalog=cat.empty(),
@@ -590,7 +637,9 @@ class TestScan:
             app._maybe_offer_scan()
             await pilot.pause()
             assert not isinstance(app.screen, ScanOfferScreen)
-            assert cfg.load_ui_bool("scan_offer_dismissed", path, default=False) is True
+            assert (
+                cfg.load_ui_bool("scan_offer_dismissed", ui_path, default=False) is True
+            )
 
     async def test_the_scan_screen_returns_the_names(self):
         def read(on_progress, cancel):

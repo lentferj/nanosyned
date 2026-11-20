@@ -275,15 +275,15 @@ shows a row the spec documents for another model and will not write it,
 because a store writes the whole record and reporting success over a
 value the unit is documented to ignore would be a lie about what happened.
 
-## 14. Why `v` is the favourites view and not `F`
+## 14. The favourites view is `F`
 
-The family's shift-pair is `f` set / `F` view. Here `f` writes the
-favourites database and `F` does not, so the pair left a write one slip
-away from a read — and in a tool whose whole discipline is "the cursor
-sends nothing", a shift-pair that puts a write next to a read is the
-wrong shape. `v` has no such twin. rxved and p2ked made the same swap,
-and `tests/test_conformance.py` pins the whole divergence in two
-sentences, as the family asks.
+The family's shift-pair is `f` set / `F` view, and this tool follows it.
+`F` is the family's canonical key, so the binding and the legend need no
+per-tool rename. Some siblings — rxved, p2ked, emorphed and ensqsqed —
+move the view to `v` because `f` writes the favourites database and `F`
+only reads; that is their safety argument, not part of this tool's
+contract. `tests/test_conformance.py` checks the binding and the legend
+against the family with no divergence.
 
 ## 15. The catalog's key grammar: `offset=0`, and reading a legacy file
 

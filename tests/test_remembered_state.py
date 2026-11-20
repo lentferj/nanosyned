@@ -33,6 +33,7 @@ opened: the demo device is the only device here.
 from __future__ import annotations
 
 import os
+import tomllib
 
 import pytest
 from textual.widgets import DataTable
@@ -60,8 +61,13 @@ FAVOURITES = 8
 
 
 def config_path(tmp_path) -> str:
-    """The one file both the channel and the ui state live in."""
+    """The settings file: the channel and the port live here."""
     return str(tmp_path / "config.toml")
+
+
+def ui_state_path(tmp_path) -> str:
+    """The ui-state sidecar beside the injected settings file."""
+    return config.ui_state_path(config_path(tmp_path))
 
 
 def catalog_path(tmp_path) -> str:
@@ -117,7 +123,7 @@ class TestTheStoreRoundTrips:
     """
 
     def test_each_scalar_type_round_trips(self, tmp_path):
-        path = config_path(tmp_path)
+        path = ui_state_path(tmp_path)
         config.save_ui_state("bank_index", 3, path)
         config.save_ui_state("slot_cursor", 17, path)
         config.save_ui_state("view_mode", VIEW_BANK_FAVOURITES, path)
@@ -138,7 +144,7 @@ class TestTheStoreRoundTrips:
         assert config.load_ui_str("view_mode", missing) is None
 
     def test_a_missing_key_is_nothing_remembered(self, tmp_path):
-        path = config_path(tmp_path)
+        path = ui_state_path(tmp_path)
         config.save_ui_state("view_mode", VIEW_ALL, path)
         assert config.load_ui_int("bank_index", path) is None
         assert config.load_ui_bool("scan_offer_dismissed", path) is None
@@ -149,7 +155,7 @@ class TestTheStoreRoundTrips:
         A filter remembered as ``False`` would come back as a filter that
         matches nothing but its own tombstone.
         """
-        path = config_path(tmp_path)
+        path = ui_state_path(tmp_path)
         config.save_ui_state("rating_stars", 3, path)
         config.save_ui_state("rating_stars", None, path)
         assert config.load_ui_int("rating_stars", path) is None
@@ -160,7 +166,7 @@ class TestTheStoreRoundTrips:
         A hand-edited ``rating_stars = true`` must not come back as one
         star, and ``rating_at_least = 3`` is not a bool.
         """
-        path = config_path(tmp_path)
+        path = ui_state_path(tmp_path)
         config.save_ui_state("rating_stars", True, path)
         config.save_ui_state("rating_at_least", 3, path)
         assert config.load_ui_int("rating_stars", path) is None
@@ -168,7 +174,7 @@ class TestTheStoreRoundTrips:
 
     def test_a_non_scalar_is_refused_not_rounded(self, tmp_path):
         with pytest.raises(TypeError):
-            config.save_ui_state("view_mode", ["all"], config_path(tmp_path))
+            config.save_ui_state("view_mode", ["all"], ui_state_path(tmp_path))
 
 
 class TestSavingOneKeyLeavesTheOthersAlone:
@@ -188,7 +194,7 @@ class TestSavingOneKeyLeavesTheOthersAlone:
         config.save_ui_state("rating_at_least", False, path)
 
     def test_saving_a_fourth_key_keeps_three(self, tmp_path):
-        path = config_path(tmp_path)
+        path = ui_state_path(tmp_path)
         self._deposit(path)
         config.save_ui_state("view_mode", VIEW_ALL_FAVOURITES, path)
         assert config.load_ui_int("bank_index", path) == 2
@@ -198,7 +204,7 @@ class TestSavingOneKeyLeavesTheOthersAlone:
         assert config.load_ui_str("view_mode", path) == VIEW_ALL_FAVOURITES
 
     def test_clearing_the_filter_keeps_the_position(self, tmp_path):
-        path = config_path(tmp_path)
+        path = ui_state_path(tmp_path)
         self._deposit(path)
         config.save_ui_state("rating_stars", None, path)
         config.save_ui_state("rating_at_least", None, path)
@@ -206,6 +212,56 @@ class TestSavingOneKeyLeavesTheOthersAlone:
         assert config.load_ui_int("slot_cursor", path) == 40
         assert config.load_ui_int("rating_stars", path) is None
         assert config.load_ui_bool("rating_at_least", path) is None
+
+
+class TestAnOldSettingsFileIsMigrated:
+    """The pre-sidecar file must heal, not wedge every later save."""
+
+    async def test_old_screen_keys_move_to_the_ui_state_file(self, tmp_path):
+        folder = str(tmp_path / "programs")
+        (tmp_path / "programs").mkdir()
+        settings = tmp_path / "config.toml"
+        settings.write_text(
+            "# nanosyned local config - gitignored, safe to delete.\n"
+            'port = "Invented Port"\n'
+            "channel = 4\n"
+            "bank_index = 2\n"
+            "slot_cursor = 33\n"
+            "mix_number = 0\n"
+            f'import.folder = "{folder}"\n',
+            encoding="utf-8",
+        )
+        app = make(tmp_path)
+        async with app.run_test(size=(200, 50)) as pilot:
+            await pilot.pause()
+            assert app._ui_state_path is not None
+            assert config.load_ui_str("import.folder", app._ui_state_path) == folder
+            assert config.load_ui_int("bank_index", app._ui_state_path) == 2
+            assert config.load_ui_int("slot_cursor", app._ui_state_path) == 33
+            assert config.load_ui_int("mix_number", app._ui_state_path) == 0
+            text = settings.read_text(encoding="utf-8")
+            for key in ("bank_index", "slot_cursor", "mix_number", "import.folder"):
+                assert key not in text
+            data = tomllib.loads(text)
+            assert not any(isinstance(value, (dict, list)) for value in data.values())
+            # The settings writer accepts the file again, which is the
+            # half the warning was about.
+            config.save_channel(7, str(settings))
+            assert config.load_channel(str(settings)) == 7
+
+    def test_a_newer_sidecar_value_wins(self, tmp_path):
+        """Migrating must not undo where the user has been since."""
+        settings = tmp_path / "config.toml"
+        settings.write_text(
+            "# nanosyned local config - gitignored, safe to delete.\nbank_index = 2\n",
+            encoding="utf-8",
+        )
+        ui_path = config.ui_state_path(str(settings))
+        config.save_ui_state("bank_index", 4, ui_path)
+
+        assert config.migrate_legacy_ui_state(str(settings), ui_path) == ("bank_index",)
+        assert config.load_ui_int("bank_index", ui_path) == 4
+        assert "bank_index" not in settings.read_text(encoding="utf-8")
 
 
 class TestTheAppStartsWhereItLeftOff:
@@ -228,10 +284,12 @@ class TestTheAppStartsWhereItLeftOff:
                     view_mode=VIEW_ALL_FAVOURITES,
                 )
 
-            assert config.load_ui_int("bank_index", config_path(tmp_path)) == BANK_ROW
-            assert config.load_ui_int("slot_cursor", config_path(tmp_path)) == SLOT_ROW
+            assert config.load_ui_int("bank_index", ui_state_path(tmp_path)) == BANK_ROW
             assert (
-                config.load_ui_str("view_mode", config_path(tmp_path))
+                config.load_ui_int("slot_cursor", ui_state_path(tmp_path)) == SLOT_ROW
+            )
+            assert (
+                config.load_ui_str("view_mode", ui_state_path(tmp_path))
                 == VIEW_ALL_FAVOURITES
             )
 
@@ -291,7 +349,7 @@ class TestAHandEditedFileMustNotWedge:
 
     async def test_an_unknown_view_is_ignored(self, tmp_path):
         config.save_ui_state(
-            "view_mode", "a-view-from-another-build", config_path(tmp_path)
+            "view_mode", "a-view-from-another-build", ui_state_path(tmp_path)
         )
         app = make(tmp_path)
         async with app.run_test(size=(200, 50)) as pilot:
@@ -300,7 +358,7 @@ class TestAHandEditedFileMustNotWedge:
 
     @pytest.mark.parametrize("stale", [99999, -1, 5])
     async def test_an_out_of_range_bank_is_ignored(self, tmp_path, stale):
-        config.save_ui_state("bank_index", stale, config_path(tmp_path))
+        config.save_ui_state("bank_index", stale, ui_state_path(tmp_path))
         app = make(tmp_path)
         async with app.run_test(size=(200, 50)) as pilot:
             await pilot.pause()
@@ -309,8 +367,8 @@ class TestAHandEditedFileMustNotWedge:
 
     async def test_good_keys_of_a_bad_file_still_apply(self, tmp_path):
         """Ignoring one key is not ignoring the file."""
-        config.save_ui_state("bank_index", BANK_ROW, config_path(tmp_path))
-        config.save_ui_state("view_mode", "somewhere-else", config_path(tmp_path))
+        config.save_ui_state("bank_index", BANK_ROW, ui_state_path(tmp_path))
+        config.save_ui_state("view_mode", "somewhere-else", ui_state_path(tmp_path))
         app = make(tmp_path)
         async with app.run_test(size=(200, 50)) as pilot:
             await pilot.pause()
@@ -320,8 +378,8 @@ class TestAHandEditedFileMustNotWedge:
 
     async def test_a_stale_slot_row_is_clamped_rather_than_raising(self, tmp_path):
         """The row may not exist any more; the launch must still open."""
-        config.save_ui_state("bank_index", 0, config_path(tmp_path))
-        config.save_ui_state("slot_cursor", 5000, config_path(tmp_path))
+        config.save_ui_state("bank_index", 0, ui_state_path(tmp_path))
+        config.save_ui_state("slot_cursor", 5000, ui_state_path(tmp_path))
         app = make(tmp_path)
         async with app.run_test(size=(200, 50)) as pilot:
             await pilot.pause()
@@ -335,7 +393,7 @@ class TestTheRatingFilterRoundTrips:
 
     def test_it_round_trips_and_clears(self, tmp_path):
         store = seeded_store(tmp_path)
-        path = config_path(tmp_path)
+        path = ui_state_path(tmp_path)
 
         def open_app():
             return make(tmp_path, favorites=store)
@@ -362,8 +420,8 @@ class TestTheRatingFilterRoundTrips:
 
     async def test_a_hand_edited_six_stars_is_not_a_filter(self, tmp_path):
         """Nine stars is a typo, not a filter nobody would have chosen."""
-        config.save_ui_state("rating_stars", 9, config_path(tmp_path))
-        config.save_ui_state("rating_at_least", True, config_path(tmp_path))
+        config.save_ui_state("rating_stars", 9, ui_state_path(tmp_path))
+        config.save_ui_state("rating_at_least", True, ui_state_path(tmp_path))
         app = make(tmp_path)
         async with app.run_test(size=(200, 50)) as pilot:
             await pilot.pause()
@@ -376,8 +434,8 @@ class TestTheRatingFilterRoundTrips:
             store.set_rating("GM", 0, 1)
             store.set_rating("GM", 1, 5)
             store.set_rating("GM", 2, 5)
-            config.save_ui_state("rating_stars", 5, config_path(tmp_path))
-            config.save_ui_state("rating_at_least", False, config_path(tmp_path))
+            config.save_ui_state("rating_stars", 5, ui_state_path(tmp_path))
+            config.save_ui_state("rating_at_least", False, ui_state_path(tmp_path))
             app = make(tmp_path, favorites=store)
             async with app.run_test(size=(200, 50)) as pilot:
                 await pilot.pause()
@@ -390,7 +448,7 @@ class TestTheScanOfferIsRemembered:
     """``scan_offer_dismissed`` is honoured from the file it was written to."""
 
     async def test_a_dismissal_in_the_file_stops_the_offer(self, tmp_path):
-        config.save_ui_state("scan_offer_dismissed", True, config_path(tmp_path))
+        config.save_ui_state("scan_offer_dismissed", True, ui_state_path(tmp_path))
         app = make(tmp_path, catalog=cat.empty())
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -422,6 +480,7 @@ class TestNoPathNoFile:
             catalog=cat.Catalog([cat.Entry("GM", 0, "Invented One")]),
         )
         assert app._config_path is None
+        assert app._ui_state_path is None
         async with app.run_test(size=(200, 50)) as pilot:
             await pilot.pause()
             app._save_ui_state(

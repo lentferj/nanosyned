@@ -60,11 +60,7 @@ class TestTheCycle:
     def test_the_keys_are_in_the_legend(self):
         legend = " ".join(KEY_HINTS)
         assert "f favourite" in legend
-        # The favourites view is on `v`, not the family's `F`: `f` writes the
-        # database and cycling the view only reads it, so the shift-pair left
-        # a write one slip away from a read. rxved, p2ked and emorphed moved
-        # off `F` for the same reason.
-        assert "v favourites" in legend
+        assert "F favourites" in legend
 
 
 class TestTheChannelIsRemembered:

@@ -229,7 +229,7 @@ Free models used below: `opencode/glm-5.3-flash-free` (G),
 | T2.1 | split `screens.py` out of `app.py`; adopt `ui.report`/`ui.prompt`/`ui.confirm`/`ui.modals`; `text.literal` everywhere | `nanosyned/screens.py` (new), `nanosyned/app.py` | T1.6 | G | no local modal classes; markup-proof |
 | T2.2 | `nano/device.py` `Device` Protocol; demo + bridge conform | `nano/device.py` (new), `nanosyned/demo.py`, `nano/bridge.py` | T2.1 | G | demo no longer lies about closed port |
 | T2.3 | refused red `.refused` class bar (CSS + `notify_status`) | `nanosyned/app.py` | T2.1 | N | refusals render red |
-| T2.4 | `keys.legend` built from bindings; `F`→`v` swap; conformance update | `nanosyned/app.py`, `tests/test_conformance.py` | T2.1 | D | legend + keymap match family |
+| T2.4 | `keys.legend` built from bindings; keep the family's `F` view key; conformance update | `nanosyned/app.py`, `tests/test_conformance.py` | T2.1 | D | legend + keymap match family |
 | T2.5 | `BusyGate` + `close_when_idle` + `_BRIDGE_ERRORS`; busy-guard `i` | `nanosyned/app.py` | T2.1 | G | no overlapping exchanges; shutdown safe |
 | T2.6 | KeyHints footer-height subclass | `nanosyned/screens.py` | T2.1 | N | footer re-lays out on rewrap |
 | T2.7 | `build.build_of` about/help line; `--version` names vinsynlib | `nanosyned/app.py`, `nanosyned/cli.py` | T2.1 | N | help shows both builds |

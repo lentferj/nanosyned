@@ -81,27 +81,10 @@ def test_keys_match_the_family() -> None:
     problems = conformance.check_bindings(
         NanosynedApp, favourites=True, channel=True, select=False
     )
-    # One deliberate divergence: nanosyned moves the favourites view off the
-    # family's `F` and onto `v`, exactly as rxved and p2ked do. `f` writes
-    # the favourites database and `F` does not, so the shift-pair left a
-    # write one slip away from a read; `v` has no such twin. The family asks
-    # a tool that renames a shared key to say why in its own test, and these
-    # two lines are the whole of the divergence -- anything else appearing
-    # here is a real drift.
-    assert set(problems) == {
-        "F is not bound; the family binds it to cycle_favorites",
-        "cycle_favorites is not reachable from F; it is bound to v",
-    }, "\n".join(problems)
+    assert not problems, "\n".join(problems)
 
 
 def test_the_legend_matches_the_family() -> None:
-    # The `v favourites view` block and the missing `F favourites view`
-    # block are the same single divergence the binding test above records,
-    # from the legend side. Two tools now promise `v` where the family
-    # promises `F`, which is exactly why the family asks a tool to say why
-    # rather than to stay quiet -- anything else appearing here is a real
-    # drift and must be fixed rather than added to the set.
-    #
     # The two rating hints are this tool's own, and so is `S scan device`
     # -- the family has no scan key and this instrument has one readable
     # bank. They are passed as extras on both sides, so they sit in the
@@ -111,10 +94,7 @@ def test_the_legend_matches_the_family() -> None:
         KEY_HINTS,
         extras=("S scan device", "* rating", "V rating filter", *WRITE_HINTS),
     )
-    assert set(problems) == {
-        "the legend is missing 'F favourites view'",
-        "the legend shows 'v favourites view', which is not in the family's",
-    }, "\n".join(problems)
+    assert not problems, "\n".join(problems)
 
 
 def test_the_vocabulary_is_declared() -> None:
