@@ -47,7 +47,11 @@ class ImportProgressScreen(ModalScreen[str | None]):
     ]
 
     def __init__(
-        self, *, total: int, on_stop: Callable[[], None] | None = None
+        self,
+        *,
+        total: int,
+        on_stop: Callable[[], None] | None = None,
+        verb: str = "importing",
     ) -> None:
         super().__init__()
         self.total = total
@@ -55,6 +59,7 @@ class ImportProgressScreen(ModalScreen[str | None]):
         self.failures = 0
         self.current_slot: int | None = None
         self.current_name: str = ""
+        self._verb = verb
         self._on_stop = on_stop
         self._request_stop = False
 
@@ -67,7 +72,7 @@ class ImportProgressScreen(ModalScreen[str | None]):
     def _show(self) -> None:
         slot = "" if self.current_slot is None else f"{self.current_slot:03d}"
         lines = [
-            f"importing {self.done}/{self.total}",
+            f"{self._verb} {self.done}/{self.total}",
             f"current: {slot}  {self.current_name or '?'}",
             f"failures: {self.failures}",
             "",

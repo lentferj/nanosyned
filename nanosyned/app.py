@@ -49,6 +49,7 @@ Everything here that asks the unit anything allows for that.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import threading
 from typing import Any, ClassVar
@@ -59,8 +60,19 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Header, Static
 
-from nano import banks, identity, importplan, livenames, preset_memory, verify, writing
-from nano import catalog as cat
+from nano import (
+    banks,
+    exporting,
+    identity,
+    importplan,
+    livenames,
+    preset_memory,
+    verify,
+    writing,
+)
+from nano import (
+    catalog as cat,
+)
 from nano import config as cfg
 from nano import records as rec
 from nano.config import UNSET
@@ -83,6 +95,7 @@ from nanosyned.importsingle import SingleMappingScreen
 from nanosyned.paramsui import ParameterScreen
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
 from nanosyned.screens import (
+    ConfirmScreen,
     EditorScreen,
     EffectsScreen,
     GlobalScreen,
@@ -165,6 +178,7 @@ WRITE_HINTS: tuple[str, ...] = (
     "g global",
     "w write gate",
     "I import",
+    "E export favourites",
     "z undo",
     "Z undo all",
 )
@@ -248,6 +262,7 @@ class NanosynedApp(App):
         Binding("Z", "undo_all", "Undo all"),
         Binding("i", "device_info", "Device"),
         Binding("I", "import", "Import"),
+        Binding("E", "export_favourites", "Export favourites"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
         Binding("q", "quit", "Quit"),
@@ -2704,6 +2719,96 @@ class NanosynedApp(App):
             open_single=self._open_single,
         )
 
+    def action_export_favourites(self) -> None:
+        """Export favourited User programs to a .syx file."""
+        if self.favorites is None:
+            self.notify_status("no favourites database", refused=True)
+            return
+        try:
+            numbers = exporting.favourite_numbers(self.favorites)
+        except ValueError as exc:
+            self.notify_status(str(exc), refused=True)
+            return
+        remembered = cfg.load_ui_str("import.folder", self._ui_state_path)
+        folder = remembered if remembered is not None else os.path.expanduser("~")
+        default = os.path.join(folder, "nanosyned-favourites.syx")
+
+        def after_path(path: str | None) -> None:
+            if not path:
+                return
+            path = os.path.expanduser(path)
+            if os.path.exists(path):
+
+                def after_confirm(answer) -> None:
+                    if not answer:
+                        return
+                    self._start_export(numbers, path)
+
+                self.push_screen(
+                    ConfirmScreen(f"{literal(path)} already exists; replace it?"),
+                    after_confirm,
+                )
+                return
+            self._start_export(numbers, path)
+
+        self.push_screen(PromptScreen("Export favourites to:", default), after_path)
+
+    def _start_export(self, numbers, path: str) -> None:
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        cancel = threading.Event()
+        progress = ImportProgressScreen(
+            total=len(numbers), on_stop=cancel.set, verb="exporting"
+        )
+        self.push_screen(progress)
+        self._export_worker(numbers, path, progress, cancel)
+
+    @work(thread=True)
+    def _export_worker(self, numbers, path: str, progress, cancel) -> None:
+        try:
+            with self._busy_gate, self._lock:
+                result = exporting.export_selected(
+                    self.device,
+                    numbers,
+                    path,
+                    overwrite=True,
+                    on_read=lambda number, name, done, total: self.call_from_thread(
+                        progress.set_progress, done, total, number, name, 0
+                    ),
+                    cancelled=cancel.is_set,
+                )
+        except exporting.ExportCancelled as exc:
+            self.call_from_thread(self._export_done, progress, None, str(exc))
+            return
+        except _BRIDGE_ERRORS as exc:
+            self.call_from_thread(self._export_done, progress, None, str(exc))
+            return
+        except (OSError, ValueError) as exc:
+            self.call_from_thread(self._export_done, progress, None, str(exc))
+            return
+        finally:
+            self._exchange.release()
+        self.call_from_thread(self._export_done, progress, result, None)
+
+    def _export_done(self, progress, result, error) -> None:
+        try:
+            progress.dismiss(None)
+        except Exception:
+            pass
+        if error is not None:
+            self.notify_status(error, refused=True)
+            return
+        if result is None:
+            self.notify_status("export cancelled", refused=True)
+            return
+        self.notify_status(
+            f"exported {result.count} program(s) to {literal(result.path)}"
+        )
+
     def _open_whole_bank(self, plan) -> None:
         """Push the whole-bank screen; run the plan when it confirms."""
 
@@ -3008,6 +3113,7 @@ Keys
   z Z       undo / undo all of this session's stores
   i         what the unit says it is
   I         import programs from a .syx / .sqs file
+  E         export favourited User programs to a .syx file
   q         quit
 
 Writing
