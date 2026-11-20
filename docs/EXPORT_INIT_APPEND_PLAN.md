@@ -118,7 +118,7 @@ Rules:
 
 - `favourite_numbers` raises `ValueError("no favourited User programs to
   export; nothing written")` when the set is empty.
-- Slot `127` is excluded with a note, not silently. It is readable but
+- Slot `127` is excluded. It is readable but
   cannot be written back; exporting it would make a file that cannot be
   fully restored.
 - Every record is read with `writing.read_record(device, "program", n)` and
@@ -141,7 +141,7 @@ Rules:
 - It opens the unit and the store, calls `export_favourites`, and prints
   `exported N program(s) to PATH`.
 - No `--allow-write` / `--yes`: nothing is stored on the unit.
-- Exit codes: `0` written; `1` read/write failure; `2` no favourites or a
+- Exit codes: `0` written; `1` read/write failure, no favourites, or a
   refused existing file.
 - It is not an offline command: it must read the programs from the unit.
 
@@ -349,11 +349,11 @@ def plan_append(bank, targets: Iterable[int]) -> ImportPlan:
   prints the range and count, then calls `writing.run(..., read_first=True)`.
   It prints the same read/backup/store/verify lines as `send`/`import`.
 - It never plans `127`.
-- Exit `1` if any slot fails to read, back up, store or verify; `0` when
-  all 127 agree. A failed destination read leaves that slot untouched and
-  is named in the summary.
-- `--dry-run` reads the destinations and prints the range, but stores
-  nothing and does not need the gate.
+- A verification mismatch returns `1` after the remaining slots are tried;
+  a read, backup or store failure stops with an error. A failed destination
+  read leaves that slot untouched.
+- `--dry-run` prints the range and count, stores nothing and does not need
+  the gate.
 
 ### 4.6 Browser: `N` init bank
 
@@ -384,9 +384,10 @@ def plan_append(bank, targets: Iterable[int]) -> ImportPlan:
   set live names for every agreed slot to `Init`, refresh favourite names,
   refill the User bank, and push one undo entry. `z` restores the batch
   newest first.
-- Favourites are **not deleted** by init. Their names refresh to `Init`;
-  the marks remain. Clearing marks is a separate destructive action and is
-  not part of this request. The screen says this explicitly.
+- Favourites are **not deleted** by init. The marks on initialised slots
+  are deactivated and their old content and annotations stay in the preset
+  memory; clearing them outright is a separate destructive action. The
+  screen says this explicitly.
 - A cancel stops before the next store; the summary reports how many were
   initialised and the undo entry covers only those.
 
@@ -547,7 +548,7 @@ IMPORT_MODES = (
 unchanged.
 
 Append is **programs only**. Effects, mixes and global records in the file
-are ignored with a note; the file produced by feature 1 contains only
+are ignored; the file produced by feature 1 contains only
 programs.
 
 ### 5.2 Destination scan

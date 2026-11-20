@@ -537,7 +537,7 @@ file. The decision, and the reasons for it:
   a faithful snapshot: a whole-bank import restores it, and an append import
   can ignore the numbers.
 - **Active USER favourites only, slots 000-126, ascending.** Slot 127
-  (`Off`) is excluded with a note, not silently: it is readable but cannot
+  (`Off`) is excluded: it is readable but cannot
   be written back, so exporting it would make a file that cannot be fully
   restored. Non-User favourites are ignored. An empty set refuses with
   `ValueError("no favourited User programs to export; nothing written")`.

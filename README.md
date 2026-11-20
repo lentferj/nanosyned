@@ -497,7 +497,8 @@ The memory stores the last-seen name, the favourite flag, rating, tags,
 note, first/last seen and a seen count, in `preset-memory.db` beside
 `favorites.db`. Both files are user data and should be backed up together.
 A test or embedder can point the sidecar elsewhere with `--preset-memory`;
-the browser and both `nanocli import` and `nanocli send` use the same file.
+the browser and `nanocli import`, `nanocli send` and `nanocli init-bank` use
+the same file.
 
 `favorites.db` still decides which slots currently show a heart. The
 sidecar decides whether those bytes were favourited before. On a verified
