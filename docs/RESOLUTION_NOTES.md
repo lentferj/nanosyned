@@ -609,3 +609,21 @@ the DataTable's left/right cursor bindings with pane-focus actions; up/down
 and Enter remain the DataTable's. The default silence invariant is now
 "cursor movement sends nothing unless the user has explicitly enabled
 auto-load"; `tests/test_auto_load.py` pins both states and the persistence.
+
+## 27. Mixes are a pseudo-bank, and mode is tracked best-effort
+
+The left pane's sixth row is **Mixes**, not a program bank. It lists the
+unit's 100 mixes; the names are read with the existing silent Mix Dump
+Request on first use and cached for the session. Mixes have no Bank Select
+and no favorites/catalog entries; the right pane shows number, name and the
+Program Change.
+
+Selecting a mix sends **Mode Select: Mix mode** first when the app does not
+already believe it is in Mix mode, then Program Change `N`. Selecting a
+program while the tracked mode is Mix sends Program mode first, then the
+normal Bank Select + Program Change. The protocol has no mode query and no
+current-mix query, so `_unit_mode` is explicitly best-effort: it records what
+this app last sent, not what the unit is necessarily doing. A manual `M`
+Mode Select updates it on success. The direct mix selection does not use the
+write gate because it is a selection, like Enter on a program; `M` remains
+the gated manual mode change.

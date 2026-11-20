@@ -119,7 +119,7 @@ The unit reports itself as QS family member **7**. Alesis's published list
 covers QS6, QS7, QS8 and QSR and stops; 7 appears to be recorded nowhere
 else.
 
-## The five banks
+## The five program banks
 
 | bank | CC 0 | front panel | can be read back |
 |------|------|-------------|------------------|
@@ -135,6 +135,20 @@ the instrument, and the browser marks which is which.
 
 **Bank Select is Controller 0.** The unit ignores Controller 32, which
 many sequencers send instead.
+
+## Mixes
+
+The left pane has a sixth row, **Mixes**, below the five program banks. The
+right pane lists mixes `000`–`099`, with names read from the unit the first
+time the row is opened. Selecting a mix with `⏎` sends **Mode Select: Mix
+mode** first when needed, then Program Change `N`; no Bank Select is sent.
+Selecting a program while the app last sent Mix mode sends Program mode first.
+
+The unit has no request that reports its current mode, so the mode is tracked
+best-effort from what this app sent; it is not a reading. The currently
+playing mix is likewise not readable, so the picker does not claim to show
+one. `m` still opens a mix editor by number; `M` still sends a manual Mode
+Select.
 
 ## Install
 
