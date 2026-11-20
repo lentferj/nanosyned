@@ -560,9 +560,8 @@ else, and `is_init` is whole-record equality, so a program merely called
 
 - **Template candidate:** the `127 Off` record renamed `Init`. It passed a data
   write/read-back check on the bench (the staged record was stored into a
-  scratch slot and read back byte for byte). The listening confirmation is
-  still pending, so the docs must not call it verified and must not claim
-  silence was confirmed.
+  scratch slot and read back byte for byte) and was confirmed silent. The
+  scratch slot was then restored from its backup and verified byte for byte.
 - **Range:** `000`-`126` only; `127` is never a destination, including in a
   hand-built plan.
 - **Fence:** init uses the normal read/backup/store/read-back/undo fence, one

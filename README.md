@@ -457,9 +457,9 @@ preset memory and return if those bytes are loaded again. The Init template is
 the unit's own
 hardwired `Off` record from slot `127` with only its name changed to `Init`;
 no parameter byte is invented. The template candidate passed a data
-write/read-back check on the bench, but the listening confirmation is still
-required before it is treated as verified, so the docs do not call it
-verified. The CLI equivalent is `nanocli init-bank --allow-write --yes`
+write/read-back check on the bench and was confirmed silent; the scratch
+slot was then restored byte-for-byte. The CLI equivalent is
+`nanocli init-bank --allow-write --yes`
 (`--dry-run` shows the plan without storing).
 
 ## Exporting favourites
