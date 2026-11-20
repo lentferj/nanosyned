@@ -147,7 +147,7 @@ Selecting a program while the app last sent Mix mode sends Program mode first.
 The unit has no request that reports its current mode, so the mode is tracked
 best-effort from what this app sent; it is not a reading. The currently
 playing mix is likewise not readable, so the picker does not claim to show
-one. `m` still opens a mix editor by number; `M` still sends a manual Mode
+one. `e` on a focused mix opens its editor; `M` still sends a manual Mode
 Select.
 
 ## Install
@@ -197,8 +197,7 @@ beside a session that is driving the hardware.
 | `F` | cycle the view: all slots → this bank's favourites → every favourite |
 | `t` / `n` / `*` | tags / note / rating, 0–5 stars (on a favourite) |
 | `V` | filter by rating — exactly that many, or that many and up |
-| `e` | edit the User program under the cursor — **only while the gate is armed** |
-| `m` | edit a mix: its sixteen channels |
+| `e` | edit the focused program, or the focused mix in Mixes — **only while the gate is armed** |
 | `M` | set the sound mode, Program or Mix — **a write, and it changes what plays** |
 | `g` | edit the global record |
 | `I` | import programs from a `.syx` / `.sqs` file |
@@ -580,7 +579,7 @@ believes, which is why the bench exists.
   them, because a store writes the whole record and reporting success over a
   value the unit is documented to ignore would be a lie.
 - **Mixes are decoded, not catalogued.** Their names come off the unit
-  (`nanocli mixes`, `m` in the browser); the manual never mentions them, and
+  (`nanocli mixes`, `e` on a focused Mixes row); the manual never mentions them, and
   they live outside the catalog like every other live read.
 - **User 127 is hardwired silent** — the one slot no write can touch, in the
   editor and on the command line alike.

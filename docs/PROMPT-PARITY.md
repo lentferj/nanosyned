@@ -262,7 +262,7 @@ Free models used below: `opencode/glm-5.3-flash-free` (G),
 | id | title | files | dep | model | done when |
 |---|---|---|---|---|---|
 | T5.1 | program editor: name + common/sound params, arm-then-fire store, verify | `nanosyned/editor.py` (new), `nanosyned/app.py` | T4.5 | G | edit → store → read back |
-| T5.2 | mix pane (`m`): 16 channels, program/volume/pan, edit + `0D` mode select | `nanosyned/mix.py` (new), `nanosyned/app.py` | T4.5 | G | channel edit round-trips |
+| T5.2 | mix pane (`e` on a focused Mixes row): 16 channels, program/volume/pan, edit + `0D` mode select | `nanosyned/mix.py` (new), `nanosyned/app.py` | T4.5 | G | channel edit round-trips |
 | T5.3 | effects editor (`x`) | `nanosyned/editor.py`, `nanosyned/app.py` | T5.1 | D | effects edit round-trips |
 | T5.4 | global editor | `nanosyned/editor.py`, `nanosyned/app.py` | T5.1 | D | global edit round-trips |
 | T5.5 | CLI `send`/`dump`/`set`/`backup` (+ `--yes`, `--allow-write`) | `nanosyned/cli.py` | T4.5 | D | scripted write with confirmation |

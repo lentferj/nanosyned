@@ -91,9 +91,9 @@ rule the siblings apply to their instruments' ROM contents.
   at all, not a store and not a read. Opening an editor sends nothing,
   arming sends nothing, firing is a different key and works only while
   armed, and moving the cursor disarms. Never one keystroke from the
-  browser. The editors are `e` (a User program's name; the whole
-  350-byte record travels, the sound blocks untouched), `m` (a mix's
-  channels) and `g` (the global record); `nanocli set` moves one
+  browser. The editors are `e` (a User program's name, or the focused
+  mix's channels; the whole 350-byte record travels, the sound blocks
+  untouched) and `g` (the global record); `nanocli set` moves one
   parameter in the working copy without storing, and `M` is the `0D`
   Mode Select.
 - **Every write is preceded by an unconditional backup.** The destination

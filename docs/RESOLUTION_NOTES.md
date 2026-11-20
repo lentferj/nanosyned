@@ -626,4 +626,5 @@ current-mix query, so `_unit_mode` is explicitly best-effort: it records what
 this app last sent, not what the unit is necessarily doing. A manual `M`
 Mode Select updates it on success. The direct mix selection does not use the
 write gate because it is a selection, like Enter on a program; `M` remains
-the gated manual mode change.
+the gated manual mode change. `e` on the focused mix opens its editor; the
+old `m` prompt is gone.
