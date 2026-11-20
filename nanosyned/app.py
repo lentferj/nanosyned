@@ -59,7 +59,7 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Header, Static
 
-from nano import banks, importplan, livenames, verify, writing
+from nano import banks, importplan, livenames, preset_memory, verify, writing
 from nano import catalog as cat
 from nano import config as cfg
 from nano import records as rec
@@ -261,6 +261,7 @@ class NanosynedApp(App):
         favorites=None,
         config_path: str | None = None,
         catalog_path: str | None = None,
+        memory_path: str | None = None,
         allow_write: bool = False,
     ) -> None:
         super().__init__()
@@ -269,6 +270,11 @@ class NanosynedApp(App):
         #: Injected, never opened here, so a test cannot write into the
         #: user's real database.
         self.favorites = favorites
+        #: The content-addressed memory is optional in tests and embedders:
+        #: a path opens it, ``None`` keeps the app strictly slot-based.
+        self.memory = (
+            preset_memory.PresetMemory(memory_path) if memory_path is not None else None
+        )
         #: Where the send channel is remembered. Injected and None
         #: in tests, so a test cannot drop a config into the
         #: working directory.
@@ -2964,12 +2970,15 @@ def main(argv: list[str] | None = None) -> int:
         favorites=store,
         config_path=config_path,
         catalog_path=args.catalog or cat.DEFAULT_PATH,
+        memory_path=preset_memory.default_path(),
         allow_write=args.allow_write,
     )
     try:
         app.run()
     finally:
         store.close()
+        if app.memory is not None:
+            app.memory.close()
         # Never close mid-exchange: waits for the gate to be neither
         # refused nor in progress, then closes.
         with close_when_idle(device, gate=app._busy_gate):

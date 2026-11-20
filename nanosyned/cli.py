@@ -1369,6 +1369,13 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         yes=True,
         allow_write=True,
     )
+    parser.add_argument(
+        "--preset-memory",
+        default=None,
+        metavar="PATH",
+        help="content-addressed preset memory database "
+        "(default: beside the favourites database)",
+    )
     cfg.apply_config_help(parser, tool="nanosyned")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1455,6 +1462,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         help="store the file's one effects patch in this slot, not its own",
     )
     _write_flags(sp)
+    _inherit(sp, "preset_memory")
     sp = sub.add_parser(
         "backup", help="backups on disk, and restoring one (restore WRITES)"
     )
@@ -1569,6 +1577,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         help="also import the global settings (bank import only)",
     )
     _write_flags(sp)
+    _inherit(sp, "preset_memory")
     sp = sub.add_parser("find", help="search known names (no hardware)")
     sp.add_argument("name")
     sp = sub.add_parser(

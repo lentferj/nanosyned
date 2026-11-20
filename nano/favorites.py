@@ -29,6 +29,7 @@ module. Passing it in is the third way and the honest one.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from vinsynlib import favorites as _favorites
@@ -43,17 +44,21 @@ from vinsynlib.favorites import (
 __all__ = [
     "APP_NAME",
     "DB_NAME",
+    "MEMORY_NAME",
     "SCHEMA_VERSION",
     "Favorite",
     "Favorites",
     "data_dir",
     "default_path",
+    "memory_path",
     "rating_cell",
 ]
 
 APP_NAME = "nanosyned"
 
 DB_NAME = "favorites.db"
+
+MEMORY_NAME = "preset-memory.db"
 
 
 def data_dir() -> str:
@@ -64,6 +69,11 @@ def data_dir() -> str:
 def default_path() -> str:
     """Where the favourites database lives unless ``--favorites`` says otherwise."""
     return _favorites.default_path(APP_NAME, DB_NAME)
+
+
+def memory_path() -> str:
+    """Where the content-addressed preset memory lives beside favourites."""
+    return os.path.join(data_dir(), MEMORY_NAME)
 
 
 class Favorites(_favorites.Favorites):
