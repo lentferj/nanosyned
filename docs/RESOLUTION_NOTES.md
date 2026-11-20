@@ -475,3 +475,44 @@ what a plain `.syx` holding the same messages would be, so
 `.mid` and `.lib` are still unread. Nothing in the current import path
 needs them; the scanner is written so another container reader can be
 added without changing the planner or the screens.
+
+## 22. Preset memory is content-addressed, not slot-addressed
+
+The favourites database is deliberately keyed on the slot: a row survives
+a rename because the slot is the identity. The preset memory is the other
+kind of identity. It is keyed on `sha256(record[:350])`, the full unpacked
+program including its ten-character name. It answers "have I seen these
+exact bytes before, and did I favourite them?", not "which slot is this?".
+
+`preset-memory.db` is a separate SQLite file beside `favorites.db`. The
+shared favourites schema is family property and was not changed; this is a
+nanosyned memory. The memory stores a content row (name, favourite, rating,
+tags, note, first/last seen, seen count) and a `slot_content` cache binding
+a User slot to the digest currently in it. The sidecar path is injectable
+through `--preset-memory`.
+
+On a verified import or send, the app remembers the record, binds the
+destination, and if the content was a favourite reactivates the slot row
+with the memory's annotations. A non-favourite import over an old favourite
+clears that slot's mark; the old content remains in the memory, so loading
+it again restores its heart. Toggling `f` with a known digest is
+content-level: turning it off deactivates every bound occurrence of those
+bytes. If the digest is unknown, the old slot-only behaviour remains.
+
+Existing slot favourites migrate lazily, the first time their bytes are
+seen. The memory's annotations win over a different slot row; with two
+active old rows that hash to the same content, the earliest-added row's
+annotations win. There is no full-bank read at startup.
+
+**Limits, recorded rather than hidden.** The hash is the program record,
+not the complete sound: effects, mixes and global settings are outside it.
+Renaming changes the digest; a name-insensitive "same sound" hash is not
+implemented. The memory is local; the annotations do not travel in a
+`.syx`. Tests use synthetic records and a temporary sidecar, and no
+hardware check was needed for this branch.
+
+The catalog is not the home for this data. `catalog.json` is generated
+name data and may be regenerated; losing the user's ratings, tags and notes
+with it would be the wrong trade. The sidecar is the authority for content
+and annotations, while `favorites.db` remains the authority for which
+slots currently display a heart.

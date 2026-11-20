@@ -235,8 +235,8 @@ nanocli backup restore FILE --allow-write --yes
 Global options go **before** the subcommand — `nanocli --demo banks` — and
 mean the same here as in the browser: `--port` names one port and asks
 nothing, `--scan` probes every port, `--demo` opens none. `--favorites`,
-`--yes` and `--allow-write` also work *after* the subcommand, which is the
-shape people type.
+`--preset-memory`, `--yes` and `--allow-write` also work *after* the
+subcommand, which is the shape people type.
 
 `ports`, `banks`, `list`, `syx`, `find`, `fav`, `tags` and `backup list`
 construct no bridge and open no port — they work on a headless box and while
@@ -409,6 +409,42 @@ slot per session), read back, and compared byte for byte; only an agreed
 read-back is recorded for undo, so `z` restores a whole import as one
 entry, and a partial failure keeps a reduced entry for the slots that did
 not come back.
+
+## Preset memory
+
+Favourites used to be tied to a slot. The browser now also keeps a
+**content-addressed memory**, so a preset loaded into a different slot can
+come back as the favourite it was before.
+
+The identity is the **SHA-256 of the full 350-byte program record**. The
+name is part of the record, so renaming a preset creates a new identity.
+The memory stores the last-seen name, the favourite flag, rating, tags,
+note, first/last seen and a seen count, in `preset-memory.db` beside
+`favorites.db`. Both files are user data and should be backed up together.
+A test or embedder can point the sidecar elsewhere with `--preset-memory`;
+the browser and both `nanocli import` and `nanocli send` use the same file.
+
+`favorites.db` still decides which slots currently show a heart. The
+sidecar decides whether those bytes were favourited before. On a verified
+import or send, the app hashes the record, remembers it, and restores the
+heart and annotations if the content was a favourite. A non-favourite
+import over a previously favourited slot clears that slot's mark; the old
+content stays in the memory, so loading it again brings its heart back.
+Toggling `f` on a slot whose content identity is known is content-level:
+turning it off clears every bound occurrence of those bytes.
+
+Existing slot favourites migrate lazily: the first time their bytes are
+seen, their rating, tags and note are adopted into the memory. There is no
+full-bank read at startup. If two old slot rows hash to the same content,
+the earliest-added row's annotations win.
+
+The limits are deliberate. The memory identifies a **program record**, not
+a complete sound: effects, mixes and global settings are not part of the
+hash. It is local to this machine; a file shared with another user does not
+carry the annotations. It cannot match a name-insensitive “same sound”
+variant, and a changed parameter or name is a new identity. It does not
+read the whole User bank at startup. The catalog is not its home: the
+catalog is generated name data, while the memory is the user's own work.
 
 ## The bench, real hardware
 
