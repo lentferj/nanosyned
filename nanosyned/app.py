@@ -1664,11 +1664,34 @@ class NanosynedApp(App):
         """
         if self.memory is None or bank_id != "USER":
             return None
+        old_favourite = (
+            self.favorites.get("USER", number) if self.favorites is not None else None
+        )
+        old_record = previous if previous else None
+        old_digest = identity.digest(old_record) if old_record is not None else None
         name = rec.program_name(record).rstrip()
         entry = self.memory.remember(record, name=name)
         self.memory.bind_slot("USER", number, entry.digest)
-        same_content = previous is None or (entry.digest == identity.digest(previous))
-        if same_content:
+        if (
+            old_record is not None
+            and old_digest is not None
+            and old_digest != entry.digest
+        ):
+            # This import replaces different content. The old bytes were
+            # favourite content if the slot still carried a mark; preserve
+            # that identity before the slot mark is cleared, so re-importing
+            # the old file can bring the heart back.
+            if old_favourite is not None:
+                old_name = rec.program_name(old_record).rstrip()
+                self.memory.remember(old_record, name=old_name)
+                self.memory.set_favourite(
+                    old_digest,
+                    True,
+                    rating=old_favourite.rating,
+                    tags=old_favourite.tags,
+                    note=old_favourite.note,
+                )
+        else:
             self._adopt_slot_favourite(number, entry.digest)
         entry = self.memory.get(entry.digest) or entry
         if self.favorites is not None:

@@ -93,6 +93,7 @@ class TestImport:
         store.add("USER", 3, name="Old", rating=5, tags="lead", note="old")
         app = _app(tmp_path, store)
         record = _record("New", 7)
+        old = _record("Old", 6)
         memory = app.memory
         assert memory is not None
         try:
@@ -100,7 +101,7 @@ class TestImport:
                 await pilot.pause()
                 app._import_done(
                     None,
-                    [_result(3, record, _record("Old", 6))],
+                    [_result(3, record, old)],
                     None,
                 )
                 await pilot.pause()
@@ -109,6 +110,49 @@ class TestImport:
                 assert entry is not None
                 assert entry.favourite is False
                 assert memory.slot_digest("USER", 3) == entry.digest
+                old_entry = memory.get(identity.digest(old))
+                assert old_entry is not None
+                assert old_entry.favourite is True
+                assert old_entry.rating == 5
+                assert old_entry.tags == "lead"
+                assert old_entry.note == "old"
+        finally:
+            memory.close()
+            store.close()
+
+    async def test_reimporting_the_old_file_brings_the_mark_back(self, tmp_path):
+        store = fav.Favorites(str(tmp_path / "favorites.db"))
+        app = _app(tmp_path, store)
+        memory = app.memory
+        assert memory is not None
+        old = _record("Old", 1)
+        new = _record("New", 2)
+        old_digest = identity.digest(old)
+        try:
+            async with app.run_test(size=(160, 50)) as pilot:
+                await pilot.pause()
+                # The old content is imported, then marked the way a
+                # pre-memory favourite was marked: a slot row only.
+                app._import_done(None, [_result(5, old, _record("Before", 9))], None)
+                store.add("USER", 5, name="Old", rating=3, tags="pad", note="keep")
+                await pilot.pause()
+
+                # A whole-bank overwrite clears the slot mark but must keep
+                # the old content as a favourite identity.
+                app._import_done(None, [_result(5, new, old)], None)
+                await pilot.pause()
+                assert store.get("USER", 5) is None
+                preserved = memory.get(old_digest)
+                assert preserved is not None and preserved.favourite is True
+
+                # Loading the old file again restores the heart.
+                app._import_done(None, [_result(5, old, new)], None)
+                await pilot.pause()
+                restored = store.get("USER", 5)
+                assert restored is not None
+                assert restored.rating == 3
+                assert restored.tags == "pad"
+                assert restored.note == "keep"
         finally:
             memory.close()
             store.close()
