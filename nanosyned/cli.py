@@ -35,7 +35,16 @@ from dataclasses import dataclass
 from typing import Any, NoReturn, cast
 
 from nano import backup as bk
-from nano import banks, config, dumps, importing, importplan, params, verify
+from nano import (
+    banks,
+    config,
+    dumps,
+    importing,
+    importplan,
+    params,
+    preset_memory,
+    verify,
+)
 from nano import catalog as cat
 from nano import config as cfg
 from nano import favorites as favmod
@@ -440,7 +449,8 @@ def _cmd_send(device, args) -> int:
         print(f"wrote    {len(message)} bytes to {label(result.kind, result.number)}")
         print(f"verify   {result.sentence}; the backup is {result.backup}")
 
-    run(device, plan, on_phase=on_phase, on_result=on_result)
+    results = run(device, plan, on_phase=on_phase, on_result=on_result)
+    _remember_results(args, results)
     return 1 if failed else 0
 
 
@@ -1060,12 +1070,13 @@ def _import_write(device, args, plan: importplan.ImportPlan) -> int:
         print(f"wrote    {len(message)} bytes to {label(result.kind, result.number)}")
         print(f"verify   {result.sentence}; the backup is {result.backup}")
 
-    run(
+    results = run(
         device,
         cast("Sequence[WStep]", plan.steps),
         on_phase=on_phase,
         on_result=on_result,
     )
+    _remember_results(args, results)
     return 1 if failed else 0
 
 
@@ -1106,6 +1117,74 @@ def _cmd_find(_device, args) -> None:
 def _favorites(args) -> favmod.Favorites:
     """The user's store, at ``--favorites`` or in the data directory."""
     return favmod.Favorites(getattr(args, "favorites", None))
+
+
+def _memory(args) -> preset_memory.PresetMemory | None:
+    """The content memory, or ``None`` for a demo run that did not ask for one.
+
+    A real invocation uses the default sidecar. A ``--demo`` run without an
+    explicit path must not write into the user's real data directory, so it
+    stays opt-in; the tests rely on that.
+    """
+    path = getattr(args, "preset_memory", None)
+    if path is None and getattr(args, "demo", False):
+        return None
+    return preset_memory.PresetMemory(path or preset_memory.default_path())
+
+
+def _remember_results(args, results) -> tuple[int, int]:
+    """Remember verified program results and re-mark favourite content.
+
+    Only a verified program is evidence that the slot now holds those bytes.
+    A failed read, backup, store or verify is ignored. The favourites store
+    is opened lazily only when there is at least one program result; the
+    memory and the store are both closed here.
+    """
+    programs = [
+        result
+        for result in results
+        if result.stage == "verified"
+        and result.kind == "program"
+        and result.number is not None
+    ]
+    if not programs:
+        return 0, 0
+    memory = _memory(args)
+    if memory is None:
+        return 0, 0
+    favorites = None
+    remembered = 0
+    remarked = 0
+    try:
+        favorites = _favorites(args)
+        for result in programs:
+            name = record_name("program", result.record).rstrip()
+            entry = memory.remember(result.record, name=name)
+            memory.bind_slot("USER", cast(int, result.number), entry.digest)
+            if entry.favourite:
+                favorites.add(
+                    "USER",
+                    cast(int, result.number),
+                    name=entry.name or name,
+                    rating=entry.rating,
+                    tags=entry.tags,
+                    note=entry.note,
+                )
+                remarked += 1
+            else:
+                favorites.remove("USER", cast(int, result.number))
+            remembered += 1
+    finally:
+        if favorites is not None:
+            favorites.close()
+        memory.close()
+    if remarked:
+        print(
+            f"note: remembered {remembered} program(s); "
+            f"re-marked {remarked} favourite(s)",
+            file=sys.stderr,
+        )
+    return remembered, remarked
 
 
 def _favorite_slot(args) -> tuple[str, int]:
