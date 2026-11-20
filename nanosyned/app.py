@@ -750,11 +750,48 @@ class NanosynedApp(App):
         # survive being toggled off and on. As a delete followed by a
         # fresh add this destroyed all four, and this is one keystroke.
         now = self.favorites.toggle(bank_id, entry.program_change, name=name)
+        needs_refill = False
+        if self.memory is not None and bank_id == "USER":
+            digest = self.memory.slot_digest("USER", entry.program_change)
+            if digest is not None:
+                if now:
+                    marked = self.favorites.get("USER", entry.program_change)
+                    remembered = self.memory.get(digest)
+                    if marked is not None and (
+                        marked.rating or marked.tags or marked.note
+                    ):
+                        self.memory.set_favourite(
+                            digest,
+                            True,
+                            rating=marked.rating,
+                            tags=marked.tags,
+                            note=marked.note,
+                        )
+                    elif remembered is not None and (
+                        remembered.rating or remembered.tags or remembered.note
+                    ):
+                        self.memory.set_favourite(digest, True)
+                        self.favorites.add(
+                            "USER",
+                            entry.program_change,
+                            name=name,
+                            rating=remembered.rating,
+                            tags=remembered.tags,
+                            note=remembered.note,
+                        )
+                    else:
+                        self.memory.set_favourite(digest, True)
+                else:
+                    self.memory.set_favourite(digest, False)
+                    occurrences = self.memory.slots_for(digest)
+                    for slot_bank, slot_number in occurrences:
+                        self.favorites.remove(slot_bank, slot_number)
+                    needs_refill = len(occurrences) > 1
         self.notify_status(f"{'favourited' if now else 'unfavourited'} {literal(name)}")
 
         # In VIEW_ALL mode (not favourites views), only update the favourite
         # cell to avoid refilling the entire table and losing scroll position.
-        if self.view_mode == VIEW_ALL:
+        if self.view_mode == VIEW_ALL and not needs_refill:
             table = self.query_one("#slot-table", DataTable)
             new_marker = "[b]♥[/b]" if now else ""
             table.update_cell(entry.key, "fav", new_marker)
