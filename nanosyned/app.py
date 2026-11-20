@@ -1562,6 +1562,38 @@ class NanosynedApp(App):
             self._store_done, entry, record, previous, path, read_back, failure, stage
         )
 
+    def _remember_program(
+        self, bank_id: str, number: int, record: bytes, *, manual: bool
+    ) -> preset_memory.MemoryEntry | None:
+        """Remember verified program bytes and restore their favourite mark.
+
+        The content digest is the identity; the slot row is only the
+        occurrence the browser paints. A remembered favourite activates that
+        occurrence with the memory's annotations. Anything that is merely
+        seen clears an old active mark, because the slot now holds different
+        bytes. ``manual`` is documentation for the caller: a manual edit of
+        a favourite carries the old annotations to the new digest before it
+        reaches here.
+        """
+        if self.memory is None or bank_id != "USER":
+            return None
+        name = rec.program_name(record).rstrip()
+        entry = self.memory.remember(record, name=name)
+        self.memory.bind_slot("USER", number, entry.digest)
+        if self.favorites is not None:
+            if entry.favourite:
+                self.favorites.add(
+                    "USER",
+                    number,
+                    name=entry.name or name,
+                    rating=entry.rating,
+                    tags=entry.tags,
+                    note=entry.note,
+                )
+            else:
+                self.favorites.remove("USER", number)
+        return entry
+
     def _store_done(  # noqa: PLR0913, PLR0917 -- one argument per worker fact
         self,
         entry: banks.Slot,
@@ -1602,6 +1634,45 @@ class NanosynedApp(App):
             )
         )
         new_name = rec.program_name(record).rstrip()
+        if self.memory is not None and entry.bank_id == "USER":
+            old_favourite = (
+                self.favorites.get("USER", entry.number)
+                if self.favorites is not None
+                else None
+            )
+            if old_favourite is not None:
+                # The user edited a favourite. Both the old and the new bytes
+                # stay remembered as favourite content; the slot occurrence
+                # carries the new digest and keeps its annotations.
+                old_entry = self.memory.remember(previous, name=old_name)
+                self.memory.set_favourite(
+                    old_entry.digest,
+                    True,
+                    rating=old_favourite.rating,
+                    tags=old_favourite.tags,
+                    note=old_favourite.note,
+                )
+                new_entry = self.memory.remember(record, name=new_name)
+                self.memory.bind_slot("USER", entry.number, new_entry.digest)
+                self.memory.set_favourite(
+                    new_entry.digest,
+                    True,
+                    rating=old_favourite.rating,
+                    tags=old_favourite.tags,
+                    note=old_favourite.note,
+                )
+                if self.favorites is not None:
+                    self.favorites.add(
+                        "USER",
+                        entry.number,
+                        name=new_name,
+                        rating=old_favourite.rating,
+                        tags=old_favourite.tags,
+                        note=old_favourite.note,
+                    )
+            else:
+                self._remember_program(entry.bank_id, entry.number, record, manual=True)
+            self._refresh_bank_fav_count("USER")
         self.catalog.set_live_name(entry.bank_id, entry.number, new_name)
         if entry.bank_id == self._current_bank:
             self._refill_keeping_place()
@@ -2667,7 +2738,7 @@ class NanosynedApp(App):
             return rec.mix_name(step.record).rstrip()
         return ""
 
-    def _import_done(self, plan, results, progress) -> None:
+    def _import_done(self, plan, results, progress) -> None:  # noqa: C901
         """Main thread: refresh names, push undo, report the summary."""
         if progress is not None:
             try:
@@ -2676,10 +2747,21 @@ class NanosynedApp(App):
                 pass
         agreed = [r for r in results if r.stage == "verified"]
         failed = [r for r in results if r.failure]
+        remembered = 0
+        remarked = 0
         for result in agreed:
             name = self._step_name_for(result)
             if result.kind == "program" and result.number is not None:
                 self.catalog.set_live_name("USER", result.number, name)
+                entry = self._remember_program(
+                    "USER", result.number, result.record, manual=False
+                )
+                if entry is not None:
+                    remembered += 1
+                    if entry.favourite and self.favorites is not None:
+                        remarked += 1
+        if self.memory is not None and remembered:
+            self._refresh_bank_fav_count("USER")
         if self._current_bank == "USER":
             self._refill_keeping_place()
         # One undo entry for the whole session; an edit's name is the name
@@ -2695,14 +2777,22 @@ class NanosynedApp(App):
         )
         if edits:
             self._undo_log.push(Record("import", ImportRecord(edits=edits)))
+        memory_note = (
+            f"; remembered {remembered}, re-marked {remarked}"
+            if self.memory is not None
+            else ""
+        )
         if failed:
             first = failed[0]
             self.notify_status(
-                f"import: {len(agreed)} of {len(results)} stored; {first.failure}",
+                f"import: {len(agreed)} of {len(results)} stored; "
+                f"{first.failure}{memory_note}",
                 refused=True,
             )
         else:
-            self.notify_status(f"import: {len(agreed)} of {len(results)} stored")
+            self.notify_status(
+                f"import: {len(agreed)} of {len(results)} stored{memory_note}"
+            )
 
     @staticmethod
     def _step_name_for(result: writing.Result) -> str:
