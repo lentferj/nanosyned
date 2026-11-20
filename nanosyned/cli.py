@@ -1308,13 +1308,26 @@ def _remember_results(args, results) -> tuple[int, int]:
     try:
         favorites = _favorites(args)
         for result in programs:
+            number = cast(int, result.number)
+            old = result.previous
+            if old:
+                old_favourite = favorites.get("USER", number)
+                if old_favourite is not None:
+                    old_entry = memory.remember(old, name=record_name("program", old))
+                    memory.set_favourite(
+                        old_entry.digest,
+                        True,
+                        rating=old_favourite.rating,
+                        tags=old_favourite.tags,
+                        note=old_favourite.note,
+                    )
             name = record_name("program", result.record).rstrip()
             entry = memory.remember(result.record, name=name)
-            memory.bind_slot("USER", cast(int, result.number), entry.digest)
+            memory.bind_slot("USER", number, entry.digest)
             if entry.favourite:
                 favorites.add(
                     "USER",
-                    cast(int, result.number),
+                    number,
                     name=entry.name or name,
                     rating=entry.rating,
                     tags=entry.tags,
@@ -1322,7 +1335,7 @@ def _remember_results(args, results) -> tuple[int, int]:
                 )
                 remarked += 1
             else:
-                favorites.remove("USER", cast(int, result.number))
+                favorites.remove("USER", number)
             remembered += 1
     finally:
         if favorites is not None:

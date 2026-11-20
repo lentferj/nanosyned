@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from nano import favorites, preset_memory
+from nano import favorites, identity, preset_memory
 from nano import messages as m
 from nano import records as rec
 from nanosyned import cli
@@ -138,6 +138,39 @@ class TestImport:
             assert marked.note == "remembered"
         with preset_memory.PresetMemory(paths.memory) as memory:
             assert memory.slot_digest("USER", 5) == digest
+
+    def test_an_overwrite_preserves_the_old_favourite_content(
+        self, paths, capsys, monkeypatch
+    ):
+        use_device(monkeypatch, PersistentDemo())
+        old = DemoDevice().read_program(5)
+        with favorites.Favorites(paths.favorites) as store:
+            store.add("USER", 5, name="Old", rating=3, tags="pad", note="keep")
+        source = paths.root / "one.syx"
+        _file(source, 0, _record("New", 7))
+
+        code, _out, _err = run(
+            capsys,
+            *_args(
+                paths,
+                "import",
+                str(source),
+                "--program",
+                "0=5",
+                "--allow-write",
+                "--yes",
+            ),
+        )
+        assert code == 0
+        with favorites.Favorites(paths.favorites) as store:
+            assert store.get("USER", 5) is None
+        with preset_memory.PresetMemory(paths.memory) as memory:
+            old_entry = memory.get(identity.digest(old))
+            assert old_entry is not None
+            assert old_entry.favourite is True
+            assert old_entry.rating == 3
+            assert old_entry.tags == "pad"
+            assert old_entry.note == "keep"
 
     def test_a_dry_run_does_not_create_the_memory(self, paths, capsys, monkeypatch):
         use_device(monkeypatch, PersistentDemo())
