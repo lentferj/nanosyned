@@ -1599,6 +1599,46 @@ class NanosynedApp(App):
             self._store_done, entry, record, previous, path, read_back, failure, stage
         )
 
+    def _adopt_slot_favourite(self, number: int, digest: str) -> None:
+        """Carry an existing slot favourite into a memory entry, lazily.
+
+        The memory's own annotations win when it already has any. Otherwise
+        the active slot rows already bound to this digest are the evidence;
+        an earliest-added row wins deterministically, and a blank row only
+        establishes the content-level favourite flag. No record is read
+        here: this is the first-seen path, not a bank scan.
+        """
+        if self.memory is None or self.favorites is None:
+            return
+        current = self.memory.get(digest)
+        if current is not None and (current.rating or current.tags or current.note):
+            self.memory.set_favourite(digest, True)
+            return
+        candidates: dict[tuple[str, int], Any] = {}
+        for bank_id, slot in self.memory.slots_for(digest):
+            favourite = self.favorites.get(bank_id, slot)
+            if favourite is not None:
+                candidates[(bank_id, slot)] = favourite
+        favourite = self.favorites.get("USER", number)
+        if favourite is not None:
+            candidates[("USER", number)] = favourite
+        if not candidates:
+            return
+        earliest = min(
+            candidates.values(),
+            key=lambda row: (row.added, row.bank_id, row.number),
+        )
+        if earliest.rating or earliest.tags or earliest.note:
+            self.memory.set_favourite(
+                digest,
+                True,
+                rating=earliest.rating,
+                tags=earliest.tags,
+                note=earliest.note,
+            )
+        else:
+            self.memory.set_favourite(digest, True)
+
     def _remember_program(
         self, bank_id: str, number: int, record: bytes, *, manual: bool
     ) -> preset_memory.MemoryEntry | None:
@@ -1617,6 +1657,8 @@ class NanosynedApp(App):
         name = rec.program_name(record).rstrip()
         entry = self.memory.remember(record, name=name)
         self.memory.bind_slot("USER", number, entry.digest)
+        self._adopt_slot_favourite(number, entry.digest)
+        entry = self.memory.get(entry.digest) or entry
         if self.favorites is not None:
             if entry.favourite:
                 self.favorites.add(
