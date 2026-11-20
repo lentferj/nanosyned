@@ -187,6 +187,7 @@ beside a session that is driving the hardware.
 | `M` | set the sound mode, Program or Mix — **a write, and it changes what plays** |
 | `g` | edit the global record |
 | `I` | import programs from a `.syx` / `.sqs` file |
+| `E` | export favourited User programs to a `.syx` file |
 | `w` | arm / lock the write gate |
 | `z` / `Z` | undo / undo all — put back what a store replaced |
 | `i` / `?` / `q` | device identity / help / quit |
@@ -215,6 +216,8 @@ nanocli read                       # the User bank's names (silent)
 nanocli mixes                      # the mix names (silent)
 nanocli dump program 12 --file p.syx   # one record off the unit, as .syx
 nanocli dump global --file g.syx       # the global settings, the same way
+nanocli dump favourites --file favs.syx # read the User bank; write only active
+                                    #   favourites; --force replaces an existing file
 nanocli select USER 12             # select it ON THE UNIT — plays; asks first
 nanocli syx FILE                   # read a .syx file (no hardware)
 nanocli find "bass"                # search known names (no hardware)
@@ -409,6 +412,29 @@ slot per session), read back, and compared byte for byte; only an agreed
 read-back is recorded for undo, so `z` restores a whole import as one
 entry, and a partial failure keeps a reduced entry for the slots that did
 not come back.
+
+## Exporting favourites
+
+`E` in the browser, or `nanocli dump favourites --file PATH`, reads the
+active favourite programs from the User bank and writes them to one `.syx`
+file. Only programs carrying an active favourite mark in the User bank are
+included; slots `000`–`126` are exported in ascending slot order, and slot
+`127` (`Off`) is excluded because it cannot be written back. The file uses
+the original slot numbers and is a normal `.syx` that `nanocli import` (or
+`I` in the browser) can read back, so an export is a faithful snapshot and
+a restore.
+
+Every record is read from the unit before the file is written. A failed read
+or a cancel therefore leaves no file behind; the file is only created once
+all selected slots have been read successfully. The write itself is atomic:
+it goes to `path + ".tmp"` in the same directory, is flushed, and then
+replaces the destination with `os.replace`, so a half-written file cannot
+remain. An existing path is refused unless `--force` is given on the CLI or
+the replacement is confirmed in the browser.
+
+Ratings, tags and notes are local favourites data and are **not** in the
+`.syx`; the file carries program bytes only. Export only reads the unit, so
+it needs no write gate and no `--allow-write` / `--yes`.
 
 ## Preset memory
 

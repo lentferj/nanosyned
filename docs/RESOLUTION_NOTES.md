@@ -516,3 +516,35 @@ name data and may be regenerated; losing the user's ratings, tags and notes
 with it would be the wrong trade. The sidecar is the authority for content
 and annotations, while `favorites.db` remains the authority for which
 slots currently display a heart.
+
+## 23. Exporting favourites: read all, then write atomically
+
+Export writes the active favourite programs of the User bank to one `.syx`
+file. The decision, and the reasons for it:
+
+- **Read all first, write once.** Every selected slot is read from the unit
+  with `writing.read_record` and truncated to `records.PROGRAM_BYTES` before
+  any file is created. A short or failed read, or a cancelled read, aborts
+  the whole export and leaves no file. A partial backup is worse than no
+  backup.
+- **Atomic write.** `write_syx` builds the file in memory, writes it to
+  `path + ".tmp"` in the same directory, flushes, and then `os.replace`s
+  it into place. A write error removes the temporary file. `overwrite=False`
+  refuses an existing path with `FileExistsError`; the caller (CLI
+  `--force`, or the browser's confirmation) decides whether to replace.
+- **Original slot numbers preserved.** The file is built with
+  `messages.program_dump(number, record)` in ascending slot order, so it is
+  a faithful snapshot: a whole-bank import restores it, and an append import
+  can ignore the numbers.
+- **Active USER favourites only, slots 000-126, ascending.** Slot 127
+  (`Off`) is excluded with a note, not silently: it is readable but cannot
+  be written back, so exporting it would make a file that cannot be fully
+  restored. Non-User favourites are ignored. An empty set refuses with
+  `ValueError("no favourited User programs to export; nothing written")`.
+- **Annotations are not exported.** Ratings, tags and notes live in the
+  local favourites database and are not part of the program record; the
+  `.syx` carries program bytes only. The export does not pretend otherwise.
+- **No write gate.** Export only reads the unit, so it needs no
+  `--allow-write` / `--yes` and is not blocked by a locked gate. Exit code
+  0 is a written file; 1 is a read/write failure, no favourites, or a
+  refused existing file.
