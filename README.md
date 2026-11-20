@@ -188,6 +188,7 @@ beside a session that is driving the hardware.
 | `g` | edit the global record |
 | `I` | import programs from a `.syx` / `.sqs` file |
 | `E` | export favourited User programs to a `.syx` file |
+| `N` | initialise the User bank: replace 000-126 with the unit's Init program; 127 Off untouched; backup/verify/one undo |
 | `w` | arm / lock the write gate |
 | `z` / `Z` | undo / undo all — put back what a store replaced |
 | `i` / `?` / `q` | device identity / help / quit |
@@ -233,6 +234,16 @@ nanocli set program 8 0 0 42 --allow-write --yes
 nanocli backup list                # backups on disk (no unit needed)
 nanocli backup restore FILE --allow-write --yes
                                    # write a backup back — DESTRUCTIVE
+nanocli init-bank --allow-write --yes
+                                    # initialise User bank 000-126 with Init; 127 untouched
+nanocli init-bank --dry-run
+                                    # show the plan; send nothing
+nanocli import FILE --append --allow-write --yes
+                                    # append source programs to free trailing slots
+nanocli import FILE --append --cut --allow-write --yes
+                                    # ...overflow: load what fits, drop the rest
+nanocli import FILE --append --dry-run
+                                    # show the assignments and cuts; send nothing
 ```
 
 Global options go **before** the subcommand — `nanocli --demo banks` — and
@@ -412,6 +423,44 @@ slot per session), read back, and compared byte for byte; only an agreed
 read-back is recorded for undo, so `z` restores a whole import as one
 entry, and a partial failure keeps a reduced entry for the slots that did
 not come back.
+
+The browser's import mode picker offers three choices: **Whole bank**,
+**Append to free slots**, and **Single / multiple programs**. The whole-bank
+path writes each source program to its own slot; the mapping screen lets you
+assign source programs to chosen User slots, and `ctrl+s` there imports the
+mapping you built.
+
+### Appending imports
+
+**Append to free slots** writes the source programs into free User slots
+without replacing existing programs. A free slot is a trailing slot holding
+the Init template (a byte-identical Init record); append never overwrites a
+non-Init preset. It scans backwards from slot 126 and appends only after the
+highest non-Init slot, so earlier gaps are left for the single/multiple
+picker rather than filled. If the file needs more slots than are free, the
+screen names the cut programs and offers two choices: `ctrl+s` loads what fits
+and cuts the rest, or `s` switches to single/multiple programs. With no free
+slots at all, `ctrl+s` refuses and points to `N` (init bank) or the
+single/multiple picker. Append is programs only: effects, mixes and global
+records in the file are ignored with a note. The CLI equivalents are
+`nanocli import FILE --append` (with `--cut` to load what fits) and
+`--dry-run`.
+
+### Initialising the User bank
+
+`N` initialises the User bank: it replaces User programs `000`-`126` with the
+unit's Init program. User `127` (`Off`) is hardwired silent and is never
+written. Every replaced slot is read, backed up, stored and read back through
+the normal fence, and one `z` restores the whole batch. Favourite marks on the
+replaced slots are hidden; the old content and its annotations stay in the
+preset memory and return if those bytes are loaded again. The Init template is
+the unit's own
+hardwired `Off` record from slot `127` with only its name changed to `Init`;
+no parameter byte is invented. The template candidate passed a data
+write/read-back check on the bench, but the listening confirmation is still
+required before it is treated as verified, so the docs do not call it
+verified. The CLI equivalent is `nanocli init-bank --allow-write --yes`
+(`--dry-run` shows the plan without storing).
 
 ## Exporting favourites
 

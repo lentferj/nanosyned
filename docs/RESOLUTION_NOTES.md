@@ -548,3 +548,46 @@ file. The decision, and the reasons for it:
   `--allow-write` / `--yes` and is not blocked by a locked gate. Exit code
   0 is a written file; 1 is a read/write failure, no favourites, or a
   refused existing file.
+
+## 24. Initialising the User bank: the template and the fence
+
+Init replaces User programs `000`-`126` with the unit's own Init program.
+User `127` (`Off`) is hardwired silent and is never written. The template is
+the unit's hardwired `Off` record from slot `127` with only its name changed
+to `Init`; `nano/initbank.init_record` changes only the name bits and nothing
+else, and `is_init` is whole-record equality, so a program merely called
+`Init` with different parameters is not free.
+
+- **Template candidate:** the `127 Off` record renamed `Init`. It passed a data
+  write/read-back check on the bench (the staged record was stored into a
+  scratch slot and read back byte for byte). The listening confirmation is
+  still pending, so the docs must not call it verified and must not claim
+  silence was confirmed.
+- **Range:** `000`-`126` only; `127` is never a destination, including in a
+  hand-built plan.
+- **Fence:** init uses the normal read/backup/store/read-back/undo fence, one
+  ordinary program store per slot. No sector/flash opcode is sent. A failed
+  destination read leaves that slot untouched and is named in the summary.
+- **Undo:** one batch entry restores the agreed slots newest first; a partial
+  init leaves a reduced entry.
+- **Favourites:** init preserves the old favourite content in the preset
+  memory. The marks on initialised slots are hidden (deactivated) while the
+  old content's ratings, tags and notes are kept; they return if those bytes
+  are loaded again or the slot is re-favourited.
+- **CLI:** `nanocli init-bank --allow-write --yes` (with `--dry-run`).
+
+## 25. Appending imports: placement and overflow
+
+Append writes source programs into free User slots without replacing existing
+programs.
+
+- **Free slots:** trailing slots holding the Init template. `append_start`
+  scans backwards from `126` for Init slots and returns the first free trailing
+  slot; it appends only after the highest non-Init slot and never fills gaps.
+- **Overflow:** if the file needs more slots than are free, the screen names
+  the cut programs and offers load-what-fits (`ctrl+s`) or single/multiple
+  (`s`). The CLI equivalent is `--cut` (load what fits) versus refusing with
+  the cut list and exiting 2; `--dry-run` prints assignments and cuts.
+- **No free slots:** points to `N` (init bank) or the single/multiple picker.
+- **Programs only:** effects, mixes and global records are not appended.
+- **CLI:** `nanocli import FILE --append` (plus `--cut`, `--dry-run`).
