@@ -45,12 +45,14 @@ def _app(tmp_path, store):
     )
 
 
-def _result(number: int, record: bytes) -> writing.Result:
+def _result(
+    number: int, record: bytes, previous: bytes | None = None
+) -> writing.Result:
     return writing.Result(
         kind="program",
         number=number,
         record=record,
-        previous=_record("Old", 1),
+        previous=record if previous is None else previous,
         read_back=record,
         stage="verified",
     )

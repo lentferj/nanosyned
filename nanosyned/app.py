@@ -59,7 +59,7 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Header, Static
 
-from nano import banks, importplan, livenames, preset_memory, verify, writing
+from nano import banks, identity, importplan, livenames, preset_memory, verify, writing
 from nano import catalog as cat
 from nano import config as cfg
 from nano import records as rec
@@ -1640,7 +1640,13 @@ class NanosynedApp(App):
             self.memory.set_favourite(digest, True)
 
     def _remember_program(
-        self, bank_id: str, number: int, record: bytes, *, manual: bool
+        self,
+        bank_id: str,
+        number: int,
+        record: bytes,
+        *,
+        manual: bool,
+        previous: bytes | None = None,
     ) -> preset_memory.MemoryEntry | None:
         """Remember verified program bytes and restore their favourite mark.
 
@@ -1651,13 +1657,19 @@ class NanosynedApp(App):
         bytes. ``manual`` is documentation for the caller: a manual edit of
         a favourite carries the old annotations to the new digest before it
         reaches here.
+
+        Lazy adoption only applies when the slot already holds the same
+        content. Importing a different preset over a favourite slot is an
+        overwrite, not a migration, and must clear the old mark.
         """
         if self.memory is None or bank_id != "USER":
             return None
         name = rec.program_name(record).rstrip()
         entry = self.memory.remember(record, name=name)
         self.memory.bind_slot("USER", number, entry.digest)
-        self._adopt_slot_favourite(number, entry.digest)
+        same_content = previous is None or (entry.digest == identity.digest(previous))
+        if same_content:
+            self._adopt_slot_favourite(number, entry.digest)
         entry = self.memory.get(entry.digest) or entry
         if self.favorites is not None:
             if entry.favourite:
@@ -1750,7 +1762,13 @@ class NanosynedApp(App):
                         note=old_favourite.note,
                     )
             else:
-                self._remember_program(entry.bank_id, entry.number, record, manual=True)
+                self._remember_program(
+                    entry.bank_id,
+                    entry.number,
+                    record,
+                    manual=True,
+                    previous=previous,
+                )
             self._refresh_bank_fav_count("USER")
         self.catalog.set_live_name(entry.bank_id, entry.number, new_name)
         if entry.bank_id == self._current_bank:
@@ -2833,7 +2851,11 @@ class NanosynedApp(App):
             if result.kind == "program" and result.number is not None:
                 self.catalog.set_live_name("USER", result.number, name)
                 entry = self._remember_program(
-                    "USER", result.number, result.record, manual=False
+                    "USER",
+                    result.number,
+                    result.record,
+                    manual=False,
+                    previous=result.previous or None,
                 )
                 if entry is not None:
                     remembered += 1
