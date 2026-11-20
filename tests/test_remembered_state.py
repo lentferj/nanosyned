@@ -356,7 +356,7 @@ class TestAHandEditedFileMustNotWedge:
             await pilot.pause()
             assert app.view_mode == VIEW_ALL
 
-    @pytest.mark.parametrize("stale", [99999, -1, 5])
+    @pytest.mark.parametrize("stale", [99999, -1, 6])
     async def test_an_out_of_range_bank_is_ignored(self, tmp_path, stale):
         config.save_ui_state("bank_index", stale, ui_state_path(tmp_path))
         app = make(tmp_path)

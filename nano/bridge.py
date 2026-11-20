@@ -754,6 +754,16 @@ class NanoBridge:
         time.sleep(SELECT_GAP)  # a guess; see SELECT_GAP
         self._send(m.program_change(target.program_change, self.channel))
 
+    def select_mix(self, number: int) -> None:
+        """Select a mix. **This changes what the unit is playing.**
+
+        Mixes are not program banks: once the unit is in Mix mode, a
+        Program Change names the mix. No Bank Select is sent.
+        """
+        if not 0 <= number < banks.MIXES:
+            raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES - 1}")
+        self._send(m.program_change(number, self.channel))
+
     # --- discovery ----------------------------------------------------------
 
     @classmethod

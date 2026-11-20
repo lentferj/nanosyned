@@ -141,6 +141,7 @@ class DemoDevice:
         #: named for the channel pass while asserting only that something
         #: was sent -- which is what happened in the sibling p2ked.
         self.selected_log: list[tuple[banks.Slot, int]] = []
+        self.mix_selects: list[tuple[int, int]] = []
         #: The user bank as the unit holds it, seeded with the invented
         #: names this demo has always answered with. A write replaces an
         #: entry, and ``read_program`` returns what is in here -- which is
@@ -399,3 +400,10 @@ class DemoDevice:
         self.selected = target
         self.selected_channel = self.channel
         self.selected_log.append((target, self.channel))
+
+    def select_mix(self, number: int) -> None:
+        """Select a mix. **This changes what the unit is playing.**"""
+        self._tick()
+        if not 0 <= number < banks.MIXES:
+            raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES - 1}")
+        self.mix_selects.append((number, self.channel))

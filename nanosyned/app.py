@@ -156,6 +156,16 @@ class _ScanCancelled(Exception):
 VIEW_ALL = "all"
 VIEW_BANK_FAVOURITES = "bank-favourites"
 VIEW_ALL_FAVOURITES = "all-favourites"
+
+#: The left pane's pseudo-bank for the unit's 100 mixes. It is not a
+#: program bank: no Bank Select, no favourites, no catalog.
+MIXES_BANK = "MIXES"
+MIX_BANK = banks.Bank(
+    MIXES_BANK, "Mixes", 0, readable=False, front_panel=False, note="100 mixes"
+)
+MIX_SLOTS: tuple[banks.Slot, ...] = tuple(
+    banks.Slot(MIX_BANK, number, number) for number in range(banks.MIXES)
+)
 VIEW_CYCLE = (VIEW_ALL, VIEW_BANK_FAVOURITES, VIEW_ALL_FAVOURITES)
 VIEW_LABELS = {
     VIEW_ALL: "all slots",
@@ -348,8 +358,16 @@ class NanosynedApp(App):
         self._catalog_path = catalog_path or cat.DEFAULT_PATH
         self.view_mode = VIEW_ALL
         self._lock = threading.RLock()
-        self._bank_ids: list[str] = banks.bank_ids()
+        self._bank_ids: list[str] = [*banks.bank_ids(), MIXES_BANK]
         self._current_bank = self._bank_ids[0]
+        #: Mix names are read from the unit on first use, then cached for
+        #: this session. Until they arrive the table shows ``Mix NNN``.
+        self._mix_names: dict[int, str] = {}
+        self._mix_names_loaded = False
+        self._mix_names_reading = False
+        #: Best-effort record of the last mode this app sent. The protocol
+        #: cannot read the unit's current mode, so this is not a reading.
+        self._unit_mode: str | None = None
         self._current: list[banks.Slot] = []
         self._filling = False
         #: The family's busy gate, over the old boolean. It tracks whether
@@ -516,6 +534,9 @@ class NanosynedApp(App):
         for label, key in (("bank", "bank"), ("n", "n"), ("", "src"), ("♥", "fav")):
             table.add_column(label, key=key)
         for bank_id in self._bank_ids:
+            if bank_id == MIXES_BANK:
+                table.add_row("Mixes", str(banks.MIXES), "unit", "", key=MIXES_BANK)
+                continue
             entry = banks.bank(bank_id)
             marked = len(self._favorite_keys(bank_id))
             table.add_row(
@@ -792,8 +813,11 @@ class NanosynedApp(App):
             PromptScreen("MIDI channel (1-16):", str(self._channel() + 1)), apply
         )
 
-    def action_toggle_favorite(self) -> None:
+    def action_toggle_favorite(self) -> None:  # noqa: C901, PLR0912
         """Mark or unmark the slot under the cursor. Sends no MIDI."""
+        if self._current_bank == MIXES_BANK:
+            self.notify_status("Mixes are not a program bank", refused=True)
+            return
         if self.favorites is None:
             self.notify_status("no favourites database")
             return
@@ -875,7 +899,7 @@ class NanosynedApp(App):
         silently creating one: the user asked to annotate, not to favourite.
         """
         entry = self._cursor_entry()
-        if entry is None or self.favorites is None:
+        if entry is None or self.favorites is None or self._current_bank == MIXES_BANK:
             return None, None
         # The row's bank, for the reason action_toggle_favorite gives: in
         # the all-favourites view a tag or a note written against the bank
@@ -1005,6 +1029,9 @@ class NanosynedApp(App):
         to be helpful makes a keypress land somewhere different depending on
         what happens to be favourited.
         """
+        if self._current_bank == MIXES_BANK:
+            self.notify_status("Mixes are not a program bank", refused=True)
+            return
         if self.favorites is None:
             self.notify_status("no favourites database")
             return
@@ -1039,6 +1066,9 @@ class NanosynedApp(App):
         table.update_cell(bank_id, "fav", str(marked) if marked else "")
 
     def _fill(self, bank_id: str) -> None:
+        if bank_id == MIXES_BANK:
+            self._fill_mixes()
+            return
         table = self.query_one("#slot-table", DataTable)
         self._current_bank = bank_id
         self._current = self._visible(bank_id)
@@ -1083,11 +1113,94 @@ class NanosynedApp(App):
         self._detail(0)
         self._update_subtitle()
 
+    def _fill_mixes(self) -> None:
+        """Fill the right pane with Mixes 000-099, names once read."""
+        table = self.query_one("#slot-table", DataTable)
+        self._current_bank = MIXES_BANK
+        self._current = list(MIX_SLOTS)
+        self._filling = True
+        try:
+            table.clear()
+            for entry in self._current:
+                name = literal(
+                    self._mix_names.get(entry.number, f"Mix {entry.number:03d}")
+                )
+                table.add_row(
+                    "",
+                    f"{entry.number:03d}",
+                    name,
+                    "",
+                    str(entry.number),
+                    "",
+                    "",
+                    key=entry.key,
+                )
+        finally:
+            self._filling = False
+        self._detail(0)
+        self._update_subtitle()
+        self._ensure_mix_names()
+
+    def _ensure_mix_names(self) -> None:
+        """Read the 100 mix names once, in a worker, when Mixes is shown."""
+        if self._mix_names_loaded or self._mix_names_reading:
+            return
+        if self._busy:
+            return
+        if not self._exchange.acquire(blocking=False):
+            return
+        self._mix_names_reading = True
+        self.notify_status("reading mix names...")
+        self._mix_names_worker()
+
+    @work(thread=True)
+    def _mix_names_worker(self) -> None:
+        """**MIDI only.** Read every mix name; the main thread refills."""
+        failure: BaseException | None = None
+        names: dict[int, str] = {}
+        try:
+            with self._busy_gate, self._lock:
+                names = self.device.read_mix_names(
+                    on_progress=lambda done, total: self.call_from_thread(
+                        self._mix_names_progress, done, total
+                    )
+                )
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(self._mix_names_failed, failure)
+            return
+        self.call_from_thread(self._mix_names_ready, names)
+
+    def _mix_names_progress(self, done: int, total: int) -> None:
+        self.notify_status(f"reading mix names {done}/{total}")
+
+    def _mix_names_ready(self, names: dict[int, str]) -> None:
+        self._mix_names = names
+        self._mix_names_loaded = True
+        self._mix_names_reading = False
+        if self._current_bank == MIXES_BANK:
+            self._refill_keeping_place()
+        self.notify_status(f"read {len(names)} mix names")
+
+    def _mix_names_failed(self, failure: BaseException) -> None:
+        self._mix_names_reading = False
+        self.notify_status(f"mixes: {failure}", refused=True)
+
     def _detail(self, row: int) -> None:
         if not self._current or row >= len(self._current):
             self.query_one("#detail", Static).update("")
             return
         entry = self._current[row]
+        if entry.bank_id == MIXES_BANK:
+            name = literal(self._mix_names.get(entry.number, f"Mix {entry.number:03d}"))
+            self.query_one("#detail", Static).update(
+                f"[b]{entry.display}[/b]  {name}   "
+                f"[dim]Mix mode · Program Change {entry.program_change}[/dim]"
+            )
+            return
         name = literal(self.catalog.display_name(entry.bank_id, entry.program_change))
         where = "front panel and MIDI" if entry.bank.front_panel else "MIDI only"
         source = (
@@ -1137,6 +1250,11 @@ class NanosynedApp(App):
         "why is this list shorter than I remember" after a restart that
         brought a rating filter back.
         """
+        if self._current_bank == MIXES_BANK:
+            self.sub_title = (
+                f"Mixes — {len(self._current)}   ·   ch {self._channel() + 1}"
+            )
+            return
         entry = banks.bank(self._current_bank)
         shown = len(self._current)
         # The denominator is the same view with the rating filter lifted:
@@ -1257,7 +1375,7 @@ class NanosynedApp(App):
             return
         if not self._exchange.acquire(blocking=False):
             return
-        self._select_worker(self._current[row])
+        self._start_selection(row)
 
     # --- operations ---------------------------------------------------------
 
@@ -1283,34 +1401,86 @@ class NanosynedApp(App):
         if not self._exchange.acquire(blocking=False):
             self.notify_status("busy", refused=True)
             return
-        self._select_worker(self._current[row])
+        self._start_selection(row)
+
+    def _start_selection(self, row: int) -> None:
+        """Send one selection, changing mode first when the track says so."""
+        if self._current_bank == MIXES_BANK:
+            self._select_mix_worker(row, self._unit_mode != "mix")
+            return
+        self._select_worker(self._current[row], self._unit_mode != "program")
+
+    def _record_unit_mode(self, mode: str) -> None:
+        """Remember the mode this app last sent; the unit cannot report it."""
+        self._unit_mode = mode
+        self._last_mode_sent = mode == "mix"
 
     @work(thread=True)
-    def _select_worker(self, entry: banks.Slot) -> None:
+    def _select_worker(self, entry: banks.Slot, mode_change: bool = False) -> None:
         """**MIDI only.** The caller claimed the exchange; this frees it."""
         failure: BaseException | None = None
+        mode_sent = False
         try:
             with self._busy_gate, self._lock:
+                if mode_change:
+                    self.device.mode_select(False)
+                    mode_sent = True
                 self.device.select(entry)
         except _BRIDGE_ERRORS as exc:
             failure = exc
         finally:
             self._exchange.release()
+        if mode_sent:
+            self.call_from_thread(self._record_unit_mode, "program")
         if failure is not None:
             self.call_from_thread(
                 self.notify_status, f"select: {failure}", refused=True
             )
             return
+        prefix = "selected Program mode, then " if mode_sent else ""
         self.call_from_thread(
             self.notify_status,
-            f"selected {entry.display} — Bank Select {entry.bank.select} "
-            f"then Program Change {entry.program_change} on channel "
-            f"{self.device.channel + 1}",
+            f"{prefix}selected {entry.display} — Bank Select "
+            f"{entry.bank.select} then Program Change {entry.program_change} "
+            f"on channel {self.device.channel + 1}",
+        )
+
+    @work(thread=True)
+    def _select_mix_worker(self, number: int, mode_change: bool = False) -> None:
+        """**MIDI only.** Mix mode first if needed, then Program Change."""
+        failure: BaseException | None = None
+        mode_sent = False
+        try:
+            with self._busy_gate, self._lock:
+                if mode_change:
+                    self.device.mode_select(True)
+                    mode_sent = True
+                self.device.select_mix(number)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if mode_sent:
+            self.call_from_thread(self._record_unit_mode, "mix")
+        if failure is not None:
+            self.call_from_thread(
+                self.notify_status, f"select mix: {failure}", refused=True
+            )
+            return
+        prefix = "selected Mix mode, then " if mode_sent else ""
+        self.call_from_thread(
+            self.notify_status,
+            f"{prefix}selected Mixes {number:03d} — Program Change {number} "
+            f"on channel {self.device.channel + 1}",
         )
 
     def action_read_names(self) -> None:
         if self._busy:
             self.notify_status("busy", refused=True)
+            return
+        if self._current_bank == MIXES_BANK:
+            self._mix_names_loaded = False
+            self._ensure_mix_names()
             return
         entry = banks.bank(self._current_bank)
         if not entry.readable:
@@ -1576,7 +1746,7 @@ class NanosynedApp(App):
         if self._current_bank == "USER":
             self._refill_keeping_place()
 
-    def action_edit_program(self) -> None:
+    def action_edit_program(self) -> None:  # noqa: PLR0911
         """Read the User program under the cursor, then open the editor.
 
         The gate is asked **first**, before the cursor is even read: a
@@ -1585,6 +1755,9 @@ class NanosynedApp(App):
         the unit will not take a store for it -- and a ROM bank after that,
         since only the User bank can be read back.
         """
+        if self._current_bank == MIXES_BANK:
+            self.notify_status("Mixes are not a program bank", refused=True)
+            return
         refusal = self._write_gate.check()
         if refusal is not None:
             self.notify_status(refusal, refused=True)
@@ -2203,6 +2376,7 @@ class NanosynedApp(App):
             self.call_from_thread(self.notify_status, f"mode: {failure}", refused=True)
             return
         mode = "mix" if mix_mode else "program"
+        self.call_from_thread(self._record_unit_mode, mode)
         self.call_from_thread(
             self.notify_status,
             f"sent Mode Select: {mode} mode — the unit does not acknowledge it, "

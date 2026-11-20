@@ -45,7 +45,7 @@ class TestStartup:
     async def test_both_panes_fill(self, app):
         async with app.run_test() as pilot:
             await pilot.pause()
-            assert app.query_one("#bank-table").row_count == len(banks.BANKS)
+            assert app.query_one("#bank-table").row_count == len(app._bank_ids)
             assert app.query_one("#slot-table").row_count == banks.PROGRAMS_PER_BANK
 
 
@@ -230,6 +230,7 @@ class TestFavouritesActOnTheRowNotThePane:
             app._fill("P2")
             await pilot.pause()
             table = app.query_one("#slot-table")
+            table.focus()
             assert len(app._current) == 5
             # Put the cursor on the middle row.
             table.move_cursor(row=2)
@@ -263,6 +264,7 @@ class TestFavouritesActOnTheRowNotThePane:
             app._fill("P2")
             await pilot.pause()
             table = app.query_one("#slot-table")
+            table.focus()
             assert len(app._current) == 20
             # Scroll down so the cursor is on row 10 but visually the table
             # is scrolled (rows 0-9 are off-screen).
@@ -279,8 +281,9 @@ class TestFavouritesActOnTheRowNotThePane:
             await pilot.press("f")
             for _ in range(4):
                 await pilot.pause()
-            # Cursor and scroll should stay on the same visual position.
-            assert table.cursor_row == cursor_before
+            # Cursor and scroll stay on the same visual position; removing
+            # the last favourite clamps the cursor to the new last row.
+            assert table.cursor_row == min(cursor_before, len(app._current) - 1)
             # The scroll should not jump to the end.
             assert table.scroll_y <= scroll_before + 1
         store.close()
@@ -299,10 +302,11 @@ class TestFavouritesActOnTheRowNotThePane:
             # A long list so the table can scroll; put the cursor on a row
             # that is not the first one.
             for n in range(20):
-                store.add("P2", n, name=f"Prog {n}")
+                store.add("P1", n, name=f"Prog {n}")
             app._fill("P2")
             await pilot.pause()
             table = app.query_one("#slot-table")
+            table.focus()
             assert len(app._current) == banks.PROGRAMS_PER_BANK
             # Move the cursor to row 10 and scroll down so it is not at
             # the top of the visible area.

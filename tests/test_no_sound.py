@@ -373,7 +373,7 @@ class TestTheProjectHasNoOtherSender:
 
     def test_select_is_the_only_non_sysex_send_site(self):
         offenders = _non_sysex_senders(_parsed(BRIDGE_SOURCE))
-        assert {name for name, _ in offenders} == {"select"}, (
+        assert {name for name, _ in offenders} == {"select", "select_mix"}, (
             f"Channel Voice sent outside select(): {offenders}"
         )
 

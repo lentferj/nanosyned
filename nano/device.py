@@ -104,3 +104,7 @@ class Device(Protocol):
     def select(self, target: banks.Slot) -> None:
         """Select a program. **This changes what the unit is playing.**"""
         ...
+
+    def select_mix(self, number: int) -> None:
+        """Select a mix. **This changes what the unit is playing.**"""
+        ...
