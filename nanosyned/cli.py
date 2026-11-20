@@ -39,6 +39,7 @@ from nano import (
     banks,
     config,
     dumps,
+    exporting,
     importing,
     importplan,
     params,
@@ -285,6 +286,29 @@ def _cmd_dump(device, args) -> None:
     plays.
     """
     kind = args.dump_command
+    if kind == "favourites":
+        favorites = _favorites(args)
+        try:
+            result = exporting.export_favourites(
+                device,
+                favorites,
+                args.file,
+                overwrite=args.force,
+            )
+        except FileExistsError:
+            raise SystemExit(
+                f"error: {args.file} already exists; pass --force"
+            ) from None
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from None
+        except OSError as exc:
+            raise SystemExit(f"error: cannot write {args.file}: {exc}") from None
+        else:
+            print(f"exported {result.count} program(s) to {args.file}")
+        finally:
+            favorites.close()
+        return
+
     number = getattr(args, "number", None)
     if kind != "global":
         if number is None:
@@ -1399,6 +1423,8 @@ def _writes(args) -> bool:
         # --list and --dry-run read; only a real import writes. The write
         # path is a stub until T6, but the gate is checked before it runs.
         return not (args.list or args.dry_run)
+    if args.command == "dump" and getattr(args, "dump_command", None) == "favourites":
+        return False
     return (
         args.command == "backup" and getattr(args, "backup_command", None) == "restore"
     )
@@ -1514,6 +1540,18 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         dp.add_argument("--file", required=True, metavar="PATH")
     dp = dsub.add_parser("global", help="read the global settings as .syx")
     dp.add_argument("--file", required=True, metavar="PATH")
+    dp = dsub.add_parser(
+        "favourites",
+        help="export user favourites as .syx file",
+    )
+    dp.add_argument("--file", required=True, metavar="PATH")
+    dp.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="overwrite existing file",
+    )
+    _store_flag(dp)
     sp = sub.add_parser(
         "send",
         help="WRITE a .syx file into the unit (backs up, then verifies)",
