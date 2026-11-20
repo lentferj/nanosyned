@@ -93,6 +93,7 @@ from nanosyned.importbank import WholeBankScreen
 from nanosyned.importflow import run_import_flow
 from nanosyned.importprogress import ImportProgressScreen
 from nanosyned.importsingle import SingleMappingScreen
+from nanosyned.initbank import InitBankScreen
 from nanosyned.paramsui import ParameterScreen
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
 from nanosyned.screens import (
@@ -180,6 +181,7 @@ WRITE_HINTS: tuple[str, ...] = (
     "w write gate",
     "I import",
     "E export favourites",
+    "N init bank",
     "z undo",
     "Z undo all",
 )
@@ -264,6 +266,7 @@ class NanosynedApp(App):
         Binding("i", "device_info", "Device"),
         Binding("I", "import", "Import"),
         Binding("E", "export_favourites", "Export favourites"),
+        Binding("N", "init_bank", "Init bank"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
         Binding("q", "quit", "Quit"),
@@ -2913,6 +2916,16 @@ class NanosynedApp(App):
             results.append(self._import_one_step(step, number))
         return results
 
+    def action_init_bank(self) -> None:
+        """Push the init-bank confirmation screen."""
+        self.push_screen(
+            InitBankScreen(gate=self._write_gate), self._init_bank_confirmed
+        )
+
+    def _init_bank_confirmed(self, confirmed: bool | None) -> None:
+        if confirmed:
+            self._start_init()
+
     def _start_init(self) -> None:
         """Start the confirmed init: gate, busy, exchange, then the worker."""
         refusal = self._write_gate.check()
@@ -3171,6 +3184,7 @@ Keys
   i         what the unit says it is
   I         import programs from a .syx / .sqs file
   E         export favourited User programs to a .syx file
+  N         initialise the User bank (programs 000-126)
   q         quit
 
 Writing
