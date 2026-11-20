@@ -48,7 +48,9 @@ __all__ = [
     "plan_all_effects",
     "plan_all_global",
     "plan_all_mixes",
+    "plan_append",
     "plan_bank",
+    "plan_init",
     "plan_single",
 ]
 
@@ -139,6 +141,29 @@ def _check_target(kind: str, target: int) -> None:
         raise ValueError(
             f"{_RECORD_WORDS[kind]} {target} is outside {low}-{high}; nothing sent"
         )
+
+
+def _check_targets(targets: tuple[int, ...]) -> None:
+    """Refuse an append target list that is not strictly ascending.
+
+    The list is the whole of the append plan's input, so it is checked here
+    rather than per assignment: a store may not take two records for one
+    slot, and the caller hands the list over already sorted by intent.
+    An empty list is *valid* -- it means "nothing is free" -- so the loop
+    below accepts one without ever looking.
+    """
+    seen: set[int] = set()
+    previous: int | None = None
+    for target in targets:
+        _check_target("program", target)
+        if target in seen:
+            raise ValueError(
+                f"user program {target:03d} is assigned twice; nothing sent"
+            )
+        if previous is not None and target <= previous:
+            raise ValueError(f"user program {target:03d} is out of order; nothing sent")
+        seen.add(target)
+        previous = target
 
 
 def _sized(kind: str, record: bytes, what: str) -> bytes:
@@ -259,6 +284,70 @@ def plan_single(bank: SourceBank, pairs: Iterable[tuple[int, int]]) -> ImportPla
         for assignment in sorted(assignments, key=lambda item: item.source.index)
     ]
     return _assemble(steps, [])
+
+
+def plan_init(template: bytes) -> ImportPlan:
+    """One Init step for every User slot 000-126.
+
+    The template is the unit's own hardwired silent record with its name
+    changed to ``Init``; :func:`plan_append` later treats every written slot
+    as free. The bad template is refused here, through the same
+    :func:`_step` validation a bank import uses, so nothing reaches a port
+    that has not agreed to the bytes first. No skipped record: init writes
+    the whole writable range and refuses to touch the hardwired silent slot.
+    """
+    steps = [
+        _step(
+            "program",
+            slot,
+            template,
+            "Init program",
+            f"source program {slot}",
+        )
+        for slot in range(USER_PROGRAM_SLOTS[0], USER_PROGRAM_SLOTS[1] + 1)
+    ]
+    return _assemble(steps, [])
+
+
+def plan_append(bank: SourceBank, targets: Iterable[int]) -> ImportPlan:
+    """Source programs in file order into the supplied free User slots.
+
+    ``targets`` is the free-slot list: ascending, unique, inside 000-126.
+    Each source program in :data:`SourceProgram.index` order takes the next
+    target, so the steps come back in target order as sources fill them. A
+    source the list cannot hold is cut with a sentence rather than refused:
+    the screen has to name what would be left out, and the user chooses
+    between loading what fits and picking by hand. Source 127 is skipped the
+    way a whole-bank import skips it, because a factory dump legitimately
+    carries it and it is not a program.
+    """
+    target_list = tuple(targets)
+    _check_targets(target_list)
+    steps: list[Step] = []
+    skipped: list[str] = []
+    sources = sorted(bank.programs.values(), key=lambda item: item.index)
+    next_target = 0
+    for program in sources:
+        if program.slot == SILENT_PROGRAM:
+            skipped.append(f"source {SILENT_PROGRAM} is hardwired silent")
+            continue
+        if next_target < len(target_list):
+            target = target_list[next_target]
+            next_target += 1
+            steps.append(
+                _step(
+                    "program",
+                    target,
+                    program.record,
+                    _program_label(bank, program),
+                    f"source program {program.slot}",
+                )
+            )
+        else:
+            skipped.append(
+                f'source {program.slot:03d} "{program.name}" is cut; no free slot'
+            )
+    return _assemble(steps, skipped)
 
 
 def plan_all_effects(bank: SourceBank) -> ImportPlan:

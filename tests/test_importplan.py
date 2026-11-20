@@ -216,3 +216,90 @@ class TestPlanGlobal:
         bank.globals_ = bytes(2)
         with pytest.raises(ValueError, match="fewer than the 20"):
             importplan.plan_all_global(bank)
+
+
+class TestPlanInit:
+    def test_plans_one_step_for_every_writable_slot(self):
+        plan = importplan.plan_init(_program_record(0))
+        assert len(plan.steps) == 127
+        assert [step.target for step in plan.steps] == list(range(127))
+        assert all(step.kind == "program" for step in plan.steps)
+        assert all(step.source_label == "Init program" for step in plan.steps)
+        assert all(step.old_name is None for step in plan.steps)
+        assert all(len(step.record) == rec.PROGRAM_BYTES for step in plan.steps)
+        assert all(step.record == _program_record(0) for step in plan.steps)
+        assert plan.skipped == ()
+
+    def test_no_step_targets_the_hardwired_slot(self):
+        plan = importplan.plan_init(_program_record(0))
+        assert all(step.target != 127 for step in plan.steps)
+        assert plan.steps[-1].target == 126
+
+    def test_every_writable_slot_is_planned_for_replacement(self):
+        plan = importplan.plan_init(_program_record(0))
+        assert plan.overwrites == tuple(
+            f"user program {slot:03d} will be overwritten" for slot in range(127)
+        )
+
+    def test_short_template_is_refused_before_a_port_opens(self):
+        with pytest.raises(ValueError) as caught:
+            importplan.plan_init(b"\x00" * 4)
+        assert "fewer than the 350 one" in str(caught.value)
+
+
+class TestPlanAppend:
+    def test_fits_sources_into_the_next_free_targets(self):
+        bank = _bank(0, 1)
+        plan = importplan.plan_append(bank, [7, 8])
+        assert [step.target for step in plan.steps] == [7, 8]
+        assert [step.source_label for step in plan.steps] == [
+            "bank 0 program 000",
+            "bank 0 program 001",
+        ]
+
+    def test_steps_follow_source_file_order_and_ascending_targets(self):
+        bank = _bank(3, 127, 5, 1)
+        plan = importplan.plan_append(bank, [0, 4, 126])
+        assert [(step.target, step.source_label) for step in plan.steps] == [
+            (0, "bank 0 program 003"),
+            (4, "bank 0 program 005"),
+            (126, "bank 0 program 001"),
+        ]
+
+    def test_overflow_cuts_the_excess_sources(self):
+        bank = _bank(0, 1, 2)
+        plan = importplan.plan_append(bank, [10])
+        assert [(step.target, step.source_label) for step in plan.steps] == [
+            (10, "bank 0 program 000")
+        ]
+        assert plan.skipped == (
+            'source 001 "Program1" is cut; no free slot',
+            'source 002 "Program2" is cut; no free slot',
+        )
+
+    def test_source_127_is_skipped_with_the_bank_sentence(self):
+        bank = _bank(3, 127, 4)
+        plan = importplan.plan_append(bank, [0, 1])
+        assert [step.target for step in plan.steps] == [0, 1]
+        assert plan.skipped == ("source 127 is hardwired silent",)
+
+    def test_empty_targets_cut_every_source(self):
+        plan = importplan.plan_append(_bank(0, 1), [])
+        assert plan.steps == ()
+        assert plan.skipped == (
+            'source 000 "Program0" is cut; no free slot',
+            'source 001 "Program1" is cut; no free slot',
+        )
+
+    @pytest.mark.parametrize(
+        "targets",
+        [
+            [1, 1],  # duplicate
+            [5, 3],  # not ascending
+            [127],  # hardwired silent
+            [128],  # outside the user bank
+        ],
+    )
+    def test_invalid_targets_are_refused(self, targets):
+        with pytest.raises(ValueError):
+            importplan.plan_append(_bank(0), targets)
