@@ -78,6 +78,7 @@ from nano import config as cfg
 from nano import records as rec
 from nano.config import UNSET
 from nano.favorites import rating_cell
+from nanosyned.appendbank import MANUAL, AppendBankScreen
 from nanosyned.editor import (
     EditGate,
     EditRecord,
@@ -2720,6 +2721,7 @@ class NanosynedApp(App):
             self,
             None,  # type: ignore[arg-type]
             open_whole_bank=self._open_whole_bank,
+            open_append=self._open_append,
             open_single=self._open_single,
         )
 
@@ -2823,6 +2825,89 @@ class NanosynedApp(App):
 
         self.push_screen(
             WholeBankScreen(plan, gate=self._write_gate, catalog=self.catalog),
+            done,
+        )
+
+    def _open_append(self, bank) -> None:
+        """Scan the User bank for free trailing slots, then show the append plan."""
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        cancel = threading.Event()
+        progress = ImportProgressScreen(
+            total=127, on_stop=cancel.set, verb="reading free slots"
+        )
+        self.push_screen(progress)
+        self._append_scan_worker(bank, progress, cancel)
+
+    @work(thread=True)
+    def _append_scan_worker(self, bank, progress, cancel) -> None:
+        """**MIDI only.** Find the first free trailing slot and plan the append."""
+        failure: BaseException | None = None
+        plan = None
+        start = 127
+        try:
+            with self._busy_gate, self._lock:
+                off = writing.read_record(self.device, "program", 127)
+                template = initbank.init_record(off)
+
+                def read(number: int) -> bytes:
+                    if cancel.is_set():
+                        raise RuntimeError("cancelled")
+                    self.call_from_thread(
+                        progress.set_progress,
+                        126 - number,
+                        127,
+                        number,
+                        "",
+                        0,
+                    )
+                    return writing.read_record(self.device, "program", number)
+
+                start = initbank.append_start(read, template)
+                plan = importplan.plan_append(bank, range(start, 127))
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(self._append_scan_failed, progress, failure)
+            return
+        self.call_from_thread(self._open_append_screen, bank, plan, start, progress)
+
+    def _append_scan_failed(self, progress, failure: BaseException) -> None:
+        try:
+            progress.dismiss(None)
+        except Exception:
+            pass
+        self.notify_status(f"append: {failure}", refused=True)
+
+    def _open_append_screen(self, bank, plan, start: int, progress) -> None:
+        """Main thread: dismiss the scan progress and show the append plan."""
+        try:
+            progress.dismiss(None)
+        except Exception:
+            pass
+
+        def done(result) -> None:
+            if result is None:
+                return
+            if isinstance(result, str) and result == MANUAL:
+                self._open_single(bank)
+                return
+            self._import_plan(result)
+
+        self.push_screen(
+            AppendBankScreen(
+                bank=bank,
+                plan=plan,
+                start=start,
+                gate=self._write_gate,
+                catalog=self.catalog,
+            ),
             done,
         )
 
