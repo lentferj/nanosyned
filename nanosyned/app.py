@@ -65,6 +65,7 @@ from nano import (
     exporting,
     identity,
     importplan,
+    initbank,
     livenames,
     preset_memory,
     verify,
@@ -2887,24 +2888,78 @@ class NanosynedApp(App):
         results: list[writing.Result] = []
         try:
             with self._busy_gate, self._lock:
-                for index, step in enumerate(plan.steps):
-                    if cancel.is_set():
-                        break
-                    number = step.target
-                    name = self._step_name(step)
-                    failures = sum(1 for r in results if r.failure)
-                    self.call_from_thread(
-                        progress.set_progress,
-                        index,
-                        len(plan.steps),
-                        number,
-                        name,
-                        failures,
-                    )
-                    results.append(self._import_one_step(step, number))
+                results = self._run_plan_locked(plan, progress, cancel)
         finally:
             self._exchange.release()
         self.call_from_thread(self._import_done, plan, results, progress)
+
+    def _run_plan_locked(self, plan, progress, cancel) -> list[writing.Result]:
+        """Run one plan while the caller holds the busy gate and lock."""
+        results: list[writing.Result] = []
+        for index, step in enumerate(plan.steps):
+            if cancel.is_set():
+                break
+            number = step.target
+            name = self._step_name(step)
+            failures = sum(1 for result in results if result.failure)
+            self.call_from_thread(
+                progress.set_progress,
+                index,
+                len(plan.steps),
+                number,
+                name,
+                failures,
+            )
+            results.append(self._import_one_step(step, number))
+        return results
+
+    def _start_init(self) -> None:
+        """Start the confirmed init: gate, busy, exchange, then the worker."""
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        cancel = threading.Event()
+        progress = ImportProgressScreen(
+            total=127, on_stop=cancel.set, verb="initialising"
+        )
+        self.push_screen(progress)
+        self._init_worker(progress, cancel)
+
+    @work(thread=True)
+    def _init_worker(self, progress, cancel) -> None:
+        """**MIDI only.** Read 127 Off, build Init, then run the normal fence."""
+        failure: BaseException | None = None
+        plan = None
+        results: list[writing.Result] = []
+        try:
+            with self._busy_gate, self._lock:
+                off = writing.read_record(self.device, "program", 127)
+                template = initbank.init_record(off)
+                plan = importplan.plan_init(template)
+                results = self._run_plan_locked(plan, progress, cancel)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.call_from_thread(self._init_failed, progress, failure)
+            return
+        self.call_from_thread(self._import_done, plan, results, progress, "init")
+
+    def _init_failed(self, progress, failure: BaseException) -> None:
+        """Main thread: dismiss the progress screen and report a template failure."""
+        try:
+            progress.dismiss(None)
+        except Exception:
+            pass
+        self.notify_status(f"init: {failure}", refused=True)
 
     def _import_one_step(self, step, number: int | None) -> writing.Result:
         """Read, back up, store and verify one step; never raises."""
@@ -2963,7 +3018,9 @@ class NanosynedApp(App):
             return rec.mix_name(step.record).rstrip()
         return ""
 
-    def _import_done(self, plan, results, progress) -> None:  # noqa: C901
+    def _import_done(  # noqa: C901
+        self, plan, results, progress, label: str = "import"
+    ) -> None:
         """Main thread: refresh names, push undo, report the summary."""
         if progress is not None:
             try:
@@ -3014,13 +3071,13 @@ class NanosynedApp(App):
         if failed:
             first = failed[0]
             self.notify_status(
-                f"import: {len(agreed)} of {len(results)} stored; "
+                f"{label}: {len(agreed)} of {len(results)} stored; "
                 f"{first.failure}{memory_note}",
                 refused=True,
             )
         else:
             self.notify_status(
-                f"import: {len(agreed)} of {len(results)} stored{memory_note}"
+                f"{label}: {len(agreed)} of {len(results)} stored{memory_note}"
             )
 
     @staticmethod
