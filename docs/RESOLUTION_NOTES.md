@@ -566,7 +566,8 @@ else, and `is_init` is whole-record equality, so a program merely called
   hand-built plan.
 - **Fence:** init uses the normal read/backup/store/read-back/undo fence, one
   ordinary program store per slot. No sector/flash opcode is sent. A failed
-  destination read leaves that slot untouched and is named in the summary.
+  destination read leaves that slot untouched; the browser names it in the
+  summary, while the CLI stops with the error.
 - **Undo:** one batch entry restores the agreed slots newest first; a partial
   init leaves a reduced entry.
 - **Favourites:** init preserves the old favourite content in the preset

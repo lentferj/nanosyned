@@ -62,4 +62,5 @@ class TestInitWorker:
             app._start_init()
             await pilot.pause()
             assert app.device.read_program(0) == before
+            assert app.device.program_writes == []
             assert "write gate" in str(app.query_one("#status", Static).content)

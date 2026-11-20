@@ -2793,9 +2793,6 @@ class NanosynedApp(App):
         except _BRIDGE_ERRORS as exc:
             self.call_from_thread(self._export_done, progress, None, str(exc))
             return
-        except (OSError, ValueError) as exc:
-            self.call_from_thread(self._export_done, progress, None, str(exc))
-            return
         finally:
             self._exchange.release()
         self.call_from_thread(self._export_done, progress, result, None)

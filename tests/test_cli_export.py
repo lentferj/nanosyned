@@ -92,6 +92,20 @@ class TestDumpFavourites:
         # Original bytes should be untouched
         assert out_file.read_bytes() == b"existing file content"
 
+    def test_a_read_failure_leaves_no_file(self, tmp_path):
+        _ = _seeded_favorites(tmp_path, (5,))
+        args = _args(
+            tmp_path, "dump", "favourites", "--file", str(tmp_path / "out.syx")
+        )
+
+        class FailingDemo(DemoDevice):
+            def read_program(self, number, *, timeout=None):
+                raise TimeoutError("no reply")
+
+        with pytest.raises(SystemExit):
+            cli._cmd_dump(FailingDemo(channel=0), args)
+        assert not (tmp_path / "out.syx").exists()
+
     def test_existing_file_with_force_replaced(self, tmp_path):
         """Existing file with --force should be replaced."""
         # Seed one favourite

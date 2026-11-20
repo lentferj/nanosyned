@@ -51,8 +51,6 @@ class AppendBankScreen(ModalScreen[importplan.ImportPlan | str | None]):
         Binding("ctrl+s", "confirm", "Append", priority=True),
     ]
 
-    MANUAL: ClassVar[str] = "manual"
-
     def __init__(
         self,
         bank=None,
@@ -153,10 +151,11 @@ class AppendBankScreen(ModalScreen[importplan.ImportPlan | str | None]):
     def _plan_line(self) -> str:
         source_count = self._source_count()
         free_count = max(0, 127 - self._start)
+        range_text = f"{self._start:03d}-126" if free_count else "none"
         cut_count = self._cut_count()
         text = (
             f"{source_count} source program(s); {free_count} free slot(s) "
-            f"({self._start:03d}-126); {cut_count} cut"
+            f"({range_text}); {cut_count} cut"
         )
         return f"[dim]{text}[/dim]"
 
@@ -165,7 +164,7 @@ class AppendBankScreen(ModalScreen[importplan.ImportPlan | str | None]):
         if not cuts:
             return ""
         shown = cuts[:3]
-        parts = [f"{slot} {name}" for slot, name in shown]
+        parts = [f"{slot} {literal(name)}" for slot, name in shown]
         text = ", ".join(parts)
         remaining = len(cuts) - len(shown)
         if remaining > 0:
@@ -227,7 +226,13 @@ class AppendBankScreen(ModalScreen[importplan.ImportPlan | str | None]):
 
     def _source_count(self):
         if self._bank is not None:
-            return len(self._bank.programs)
+            return len(
+                [
+                    program
+                    for program in self._bank.programs.values()
+                    if program.slot != 127
+                ]
+            )
         program_steps = [s for s in self._plan.steps if s.kind == "program"]
         return len(program_steps) + self._cut_count()
 
@@ -235,6 +240,19 @@ class AppendBankScreen(ModalScreen[importplan.ImportPlan | str | None]):
         return len(self._cut_entries())
 
     def _cut_entries(self):
+        if self._bank is not None:
+            programs = [
+                program
+                for program in sorted(
+                    self._bank.programs.values(), key=lambda p: p.index
+                )
+                if program.slot != 127
+            ]
+            steps = [s for s in self._plan.steps if s.kind == "program"]
+            return [
+                (f"{program.slot:03d}", program.name)
+                for program in programs[len(steps) :]
+            ]
         entries = []
         for sentence in self._plan.skipped:
             match = re.search(r'source\s+(\d+)\s+"(.*?)"\s+is cut', sentence)
@@ -256,7 +274,7 @@ class AppendBankScreen(ModalScreen[importplan.ImportPlan | str | None]):
         for step, name in zip(program_steps, source_names, strict=False):
             target = step.target
             t = f"{target:03d}" if target is not None else "---"
-            lines.append(f"{t} <- {name}")
+            lines.append(f"{t} <- {literal(name)}")
         if len(lines) > 10:
             extra = len(lines) - 10
             lines = [*lines[:10], f"and {extra} more"]

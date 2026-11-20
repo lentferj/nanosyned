@@ -139,6 +139,26 @@ def test_init_bank_gate_refusal(capsys, config_path, monkeypatch):
     assert "--allow-write" in message or "--yes" in message
 
 
+def test_init_bank_verify_mismatch_returns_1(capsys, config_path, monkeypatch):
+    """A demo that accepts the store but not the bytes returns 1."""
+
+    class NoWrite(PersistentDemo):
+        def write_program(self, number, record, *, timeout=None):
+            pass
+
+    _make_device(monkeypatch, NoWrite())
+    code, _out, _err = run(
+        capsys,
+        "--demo",
+        "--config",
+        config_path,
+        "init-bank",
+        "--allow-write",
+        "--yes",
+    )
+    assert code == 1
+
+
 def test_init_bank_failure_returns_1(capsys, config_path, monkeypatch):
     """init-bank with a read failure returns exit code 1 if cheap to simulate."""
 

@@ -1154,9 +1154,9 @@ def _cmd_init_bank(device, args) -> int:
     writable slot, and runs the same read/backup/store/verify fence as ``send``
     and ``import``.  ``127`` is never written.
 
-    Returns 1 if any slot fails to read, back up, store or verify; 0 when all
-    127 agree.  ``--dry-run`` prints the plan and stores nothing; the write
-    gate is not required.
+    A verification mismatch returns 1 after the remaining records are tried;
+    a read, backup or store failure stops with ``SystemExit``. ``--dry-run``
+    prints the range and stores nothing; the write gate is not required.
     """
     from nano import importplan
     from nano.initbank import init_record
@@ -1171,9 +1171,8 @@ def _cmd_init_bank(device, args) -> int:
     template = init_record(off_record)
     # build plan_init
     plan = importplan.plan_init(template)
-    # print the range/count
-    print("127 programs, 000-126; 127 untouched")
     if args.dry_run:
+        print("127 programs, 000-126; 127 untouched")
         print(f"{len(plan.steps)} record(s) to write (init bank)")
         return 0
     # otherwise run writing.run with the existing read/backup/store/verify style
@@ -1899,7 +1898,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         "--dry-run",
         action="store_true",
         default=False,
-        help="read the destinations and print what would be replaced, then stop",
+        help="print the range and stop without storing",
     )
     _write_flags(sp)
     _inherit(sp, "preset_memory")

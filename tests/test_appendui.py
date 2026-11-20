@@ -1,3 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-FileCopyrightText: Copyright (C) 2026  nanosyned contributors
+#
+# This file is part of nanosyned.
+#
+# nanosyned is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 2 of the License, or (at your option)
+# any later version.
+#
+# nanosyned is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+# more details.
+
 from __future__ import annotations
 
 import pytest
@@ -159,6 +174,32 @@ async def test_locked_gate_refuses(tmp_path):
         assert not seen
         status = str(screen.query_one("#append-status", Static).content)
         assert "locked" in status
+
+
+@pytest.mark.asyncio
+async def test_markup_like_names_do_not_crash_the_warning_or_confirmation(tmp_path):
+    bank = _bank(
+        (0, "[x]one"),
+        (1, "[/red]"),
+        (2, 'quote"name'),
+        (3, "four"),
+    )
+    plan = importplan.plan_append(bank, [0, 1])
+    screen = AppendBankScreen(bank, plan, start=0, gate=EditGate(armed=True))
+    app = make(tmp_path)
+    seen = []
+    async with app.run_test(size=(160, 50)) as pilot:
+        await pilot.pause()
+        await _open(pilot, screen, seen)
+        assert "cut" in str(screen.query_one("#append-warning", Static).content)
+        await pilot.press("ctrl+s")
+        await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await pilot.press("y")
+        await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        assert "\\[/red]" in app.screen.prompt_text
+        await pilot.press("n")
+        await pilot.pause()
+        assert not seen
 
 
 @pytest.mark.asyncio

@@ -442,7 +442,7 @@ screen names the cut programs and offers two choices: `ctrl+s` loads what fits
 and cuts the rest, or `s` switches to single/multiple programs. With no free
 slots at all, `ctrl+s` refuses and points to `N` (init bank) or the
 single/multiple picker. Append is programs only: effects, mixes and global
-records in the file are ignored with a note. The CLI equivalents are
+records in the file are ignored. The CLI equivalents are
 `nanocli import FILE --append` (with `--cut` to load what fits) and
 `--dry-run`.
 
