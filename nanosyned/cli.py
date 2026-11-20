@@ -40,6 +40,7 @@ from nano import (
     config,
     dumps,
     exporting,
+    fullbackup,
     importing,
     importplan,
     params,
@@ -583,11 +584,48 @@ def _cmd_backup_restore(device, args) -> int:
     return 0
 
 
+def _cmd_backup_save(device, args) -> int:
+    """**Read** the whole unit into one ordinary .syx file. Read-only from the
+    unit's point of view: it reads all 356 records and writes a local file.
+    It must NOT require --allow-write or --yes. It must not store anything
+    on the unit.
+    """
+
+    def on_read(kind, number, name, done, total) -> None:
+        """Show that the long read is moving, without one line per record."""
+        if done % 16 == 0 or done == total:
+            print(progress(f"reading {kind}", done, total), end="", file=sys.stderr)
+        if done == total:
+            print(file=sys.stderr)
+
+    try:
+        result = fullbackup.backup_device(
+            device,
+            args.file,
+            overwrite=args.force,
+            on_read=on_read,
+        )
+    except FileExistsError:
+        raise SystemExit(f"error: {args.file} already exists; pass --force") from None
+    except OSError as exc:
+        raise SystemExit(f"error: cannot write {args.file}: {exc}") from None
+    else:
+        print(
+            f"saved {result.count} records ({result.byte_count} bytes) "
+            f"-> {result.path}: "
+            f"{result.programs} programs, {result.effects} effects, "
+            f"{result.mixes} mixes, {result.globals_} global"
+        )
+        return 0
+
+
 def _cmd_backup(device, args) -> int | None:
-    """The ``backup`` group: list on disk, or restore one."""
+    """The ``backup`` group: list on disk, save a full backup, or restore one."""
     if args.backup_command == "list":
         _backup_list()
         return None
+    if args.backup_command == "save":
+        return _cmd_backup_save(device, args)
     return _cmd_backup_restore(device, args)
 
 
@@ -1572,7 +1610,8 @@ def _needs_device(args) -> bool:
 
     ``backup list`` is the one command inside a group that needs nothing:
     judging by the group's name alone would open a port to list files on
-    disk. ``import`` is offline for ``--list``, the read-only preview; every
+    disk. ``backup save`` reads the unit but writes only a local file.
+    ``import`` is offline for ``--list``, the read-only preview; every
     other import path reads or stores, so it opens the unit.
     """
     listing = (
@@ -1593,19 +1632,20 @@ def _needs_device(args) -> bool:
 
 def _writes(args) -> bool:
     """True for the commands that change the unit or what it plays."""
-    if args.command in ("send", "set"):
+    command = args.command
+    if command in ("send", "set"):
         return True
-    if args.command == "import":
-        # --list and --dry-run read; only a real import writes. The write
-        # path is a stub until T6, but the gate is checked before it runs.
+    if command == "import":
         return not (args.list or args.dry_run)
-    if args.command == "dump" and getattr(args, "dump_command", None) == "favourites":
-        return False
-    if args.command == "init-bank":
+    if command == "dump":
+        return False  # dump reads unit, writes local file only
+    if command == "init-bank":
         return not args.dry_run
-    return (
-        args.command == "backup" and getattr(args, "backup_command", None) == "restore"
-    )
+    if command != "backup":
+        return False
+    backup_command = getattr(args, "backup_command", None)
+    # restore writes; save reads unit but writes local file only; list is offline
+    return backup_command == "restore"
 
 
 def _require_write(args) -> None:
@@ -1760,10 +1800,23 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
     _inherit(sp, "preset_memory")
     _store_flag(sp)
     sp = sub.add_parser(
-        "backup", help="backups on disk, and restoring one (restore WRITES)"
+        "backup",
+        help=(
+            "backups on disk, saving a full backup, and restoring one (restore WRITES)"
+        ),
     )
     bsub = sp.add_subparsers(dest="backup_command", required=True)
     bsub.add_parser("list", help="backups found on disk (no unit needed)")
+    bp = bsub.add_parser(
+        "save", help="read the whole unit into one ordinary .syx file (read-only)"
+    )
+    bp.add_argument("--file", required=True, metavar="PATH")
+    bp.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="overwrite existing file",
+    )
     bp = bsub.add_parser(
         "restore", help="write a backup back into the unit (DESTRUCTIVE)"
     )
