@@ -911,6 +911,17 @@ def _cmd_import(device, args) -> int:
     if args.list:
         return _import_list(source, args)
 
+    if args.append:
+        if args.all or args.program:
+            _usage("--append cannot be combined with --all or --program")
+        if args.effects or args.mixes or args.global_:
+            _usage("--append imports programs only")
+        bank = _select_bank(source, args)
+        return _import_append(device, args, bank)
+
+    if args.cut:
+        _usage("--cut only means something with --append")
+
     if not args.program and not args.all:
         _usage("nothing selected; nothing sent (use --program or --all)")
 
@@ -947,6 +958,38 @@ def _cmd_import(device, args) -> int:
         _import_dry_run(device, args, plan)
         return 0
 
+    return _import_write(device, args, plan)
+
+
+def _import_append(device, args, bank: importing.SourceBank) -> int:
+    """Append the source bank's programs to the free trailing User slots."""
+    from nano import initbank
+
+    off = truncate(
+        "program",
+        read_record(device, "program", 127),
+        "the 127 Off record",
+    )
+    template = initbank.init_record(off)
+    start = initbank.append_start(
+        lambda number: read_record(device, "program", number),
+        template,
+    )
+    plan = importplan.plan_append(bank, range(start, 127))
+    if not plan.steps:
+        _usage("no free slots; run `nanocli init-bank` or use --program to map slots")
+    cuts = [note for note in plan.skipped if "is cut" in note]
+    if cuts and not args.cut:
+        for note in cuts:
+            print(f"note: {note}", file=sys.stderr)
+        _usage(
+            "the file does not fit; pass --cut to load what fits, or map with --program"
+        )
+    for note in plan.skipped:
+        print(f"note: {note}", file=sys.stderr)
+    if args.dry_run:
+        _import_dry_run(device, args, plan)
+        return 0
     return _import_write(device, args, plan)
 
 
@@ -1814,6 +1857,18 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         action="store_true",
         default=False,
         help="read the destinations and print what would be replaced, then stop",
+    )
+    sp.add_argument(
+        "--append",
+        action="store_true",
+        default=False,
+        help="write into the free trailing User slots instead of fixed slots",
+    )
+    sp.add_argument(
+        "--cut",
+        action="store_true",
+        default=False,
+        help="with --append, load what fits and cut the rest",
     )
     sp.add_argument(
         "--effects",
