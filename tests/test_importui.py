@@ -847,15 +847,43 @@ class TestTheSingleMappingScreen:
             await pilot.pause()
             assert len(previews) == 1
             assert previews[0] == bank.programs[0].record
-            # The app's own preview loads and never stores.
-            app._preview_import(previews[0])
+            # The app's own preview loads and never stores, and it releases
+            # the exchange it claimed.
+            assert app._preview_import(previews[0]) is True
             await pilot.pause()
+            assert not app._exchange.locked()
             assert len(app.device.edit_program_writes) == 1
             assert (
                 app.device.edit_program_writes[0]
                 == bytes(bank.programs[0].record)[: rec.PROGRAM_BYTES]
             )
             assert app.device.program_writes == []
+
+    async def test_l_preview_is_refused_while_an_exchange_is_in_flight(self, tmp_path):
+        """An `r` in flight holds the exchange: `l` sends nothing and claims nothing.
+
+        ``write_edit_program`` drains the port before it sends, so an
+        unclaimed preview during a 128-request read would steal the
+        reader's replies. The screen must not report a load it did not make.
+        """
+        bank = _bank((0, "Src0"))
+        app = make(tmp_path)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            app._open_single(bank)
+            await _until(pilot, lambda: isinstance(app.screen, SingleMappingScreen))
+            await _until(pilot, lambda: len(app.screen.query("#single-table")) == 1)
+            screen = app.screen
+            app._exchange.acquire()  # what a running `r` worker does
+            try:
+                await pilot.press("l")
+                await pilot.pause()
+            finally:
+                app._exchange.release()
+            assert app.device.edit_program_writes == []
+            status = str(screen.query_one("#single-status", Static).content)
+            assert "loaded into the edit buffer" not in status
+            assert "preview refused" in status
 
 
 class TestTheImportWorker:

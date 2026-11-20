@@ -124,25 +124,25 @@ undo log that records only an agreed read-back.
 the store semantics, the parameter tables — is in
 `docs/RESOLUTION_NOTES.md`.
 
-## 7. The MidiQuest `.sqs` format is unread — across all the projects
+## 7. The MidiQuest `.sqs` format is read; `.mid` / `.lib` are not
 
-**Status:** open, and not specific to this instrument.
+**Status:** closed for `.sqs` on the `import-parity` branch. `.mid` and
+`.lib` remain out of scope.
 
-`~/Dokumente/SYNTHS/Nanosynth` holds two `.sqs` files alongside the
-`.syx` dumps. They are MidiQuest's own bank format: an IFF-style chunked
-file with `LIST`, `FORM`, `BANK`, `CHNL`, `SHDR`, `FILE`, `TRAN`, `RECV`,
-`XTRA`, `MPIN`, `MPOT`, `BODY`, `AUDI`, `BDEF` and `TDEF` chunks, sizes
-big-endian, contents not obviously the raw SysEx.
+`nano/sqs.py` reads the IFF-like container by scanning for Alesis messages
+rather than trusting its chunk sizes. A `LIST` wraps one `FORM` per bank,
+and each `FORM` carries a `BODY` whose payload is plain concatenated
+Alesis SysEx. The chunk sizes drift between forms, so the reliable boundary
+is the SysEx itself; only Alesis messages are taken, and a message without
+a terminating `F7` is dropped rather than repaired. Bank boundaries are
+the `FORM` signatures outside an extracted message's byte span.
 
-The same format turns up in the other instruments' folders, so decoding
-it once would serve **all** the sibling projects — rxved, kwsed, p2ked,
-x5ded and this one. Worth doing as shared work rather than five times.
+Both `nanocli import` and the browser `I` accept `.sqs`; `tests/test_sqs.py`
+pins the scan, the bank split and the foreign-message rejection. The
+container's quirks are recorded in `docs/RESOLUTION_NOTES.md` section 21.
 
-**Blocked on:** nothing but the decoding. Nothing here depends on it.
-
-Deliberately out of scope for the `param-verify` branch: `.sqs` decoding is a
-shared family gap across all the sibling projects, not a forgotten item. See
-`docs/PARAMETER_VERIFICATION_PLAN.md` section 8.
+**Blocked on:** nothing for `.sqs`. `.mid` and `.lib` would be separate
+work, and nothing in the current import path needs them.
 
 ## 8. Measure whether the browser can sit open beside a sequencer
 

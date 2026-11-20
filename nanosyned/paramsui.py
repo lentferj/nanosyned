@@ -32,6 +32,19 @@ from nano import records as rec
 from nanosyned.screens import PromptScreen
 from nanosyned.text import literal
 from vinsynlib.ui.modals import ChoiceScreen
+from vinsynlib.ui.work import QUIET_BRIDGE_ERRORS
+
+#: The app's ``_BRIDGE_ERRORS``, rebuilt here rather than imported: the
+#: app imports this module, so naming it would be a cycle. A programming
+#: error -- a ``TypeError``, an ``AttributeError`` -- is in none of these,
+#: so it raises out of the worker instead of being shown as a device fault.
+_BRIDGE_ERRORS: tuple[type[BaseException], ...] = (
+    *tuple(QUIET_BRIDGE_ERRORS),
+    ValueError,
+    LookupError,
+    RuntimeError,
+    SystemError,
+)
 
 
 class ParameterScreen(ModalScreen[None]):
@@ -85,10 +98,10 @@ class ParameterScreen(ModalScreen[None]):
             )
 
     def on_mount(self) -> None:
-        try:
-            self._device.mode_select(True)
-        except Exception:
-            pass
+        # Sends nothing: the app sends the one Mode Select before this
+        # screen exists (``NanosynedApp.action_edit_parameter``), so the
+        # gate and the exchange are decided in one place and a screen
+        # built directly by a test is silent.
         warning = (
             "Mix mode: a Program 10 lands only in a per-channel buffer. "
             "The unit now plays from Mix mode."
@@ -139,7 +152,7 @@ class ParameterScreen(ModalScreen[None]):
             return "program"
         return self._mode
 
-    def _read_record(self):
+    def _read_record(self) -> bytes:
         if self._mode == "global":
             return self._device.read_global()
         if self._mode == "mix":
@@ -148,6 +161,26 @@ class ParameterScreen(ModalScreen[None]):
             edit = self._channel + 1
             return self._device.read_edit_program(edit=edit)
         raise ValueError(f"unsupported mode {self._mode}")
+
+    def _read_claimed(self) -> bytes:
+        """Read the buffer, owning the app's exchange while doing it.
+
+        The read is synchronous on the main thread on purpose: the modal
+        owns the keyboard, so no other key can start an exchange while
+        ``_fill`` runs. It still claims the exchange, so a worker already
+        in flight is refused with "busy" rather than raced, and it holds
+        the same ``_busy_gate``/``_lock`` pair every worker holds.
+        """
+        app: Any = self.app
+        if app._busy:
+            raise RuntimeError("busy")
+        if not app._exchange.acquire(blocking=False):
+            raise RuntimeError("busy")
+        try:
+            with app._busy_gate, app._lock:
+                return self._read_record()
+        finally:
+            app._exchange.release()
 
     def _fill(self) -> None:
         table = self.query_one("#param-table", DataTable)
@@ -158,8 +191,8 @@ class ParameterScreen(ModalScreen[None]):
         ]
         self._values = []
         try:
-            record = self._read_record()
-        except Exception as exc:
+            record = self._read_claimed()
+        except _BRIDGE_ERRORS as exc:
             self.query_one("#param-title", Label).update(
                 f"[b]Parameters ({self._mode})[/b]  [dim]{exc}[/dim]"
             )
@@ -326,64 +359,77 @@ class ParameterScreen(ModalScreen[None]):
         if refusal is not None:
             self._say(refusal, refused=True)
             return
+        app: Any = self.app
+        if app._busy:
+            self._say("busy", refused=True)
+            return
+        if not app._exchange.acquire(blocking=False):
+            self._say("busy", refused=True)
+            return
         clamped = param.clamp(value)
         self._edit_worker(param, clamped)
 
     @work(thread=True)
     def _edit_worker(self, param, value: int) -> None:
+        """**MIDI only.** One edit, its read-back, then the outcome on the
+        main thread.
+
+        ``_typed`` claims the app's exchange on the main thread before
+        this worker exists, so two rapid edits cannot overlap; the worker
+        owns that claim until its ``finally``. Nothing is handed to the
+        main thread before the release, because ``_edit_done_ok`` fills
+        the table and will claim the exchange again.
+        """
+        app: Any = self.app
+        failure: str | None = None
+        seen: int | None = None
         try:
-            mode_num = params.MODE_NUMBERS[param.mode]
-        except Exception:
-            mode_num = params.MODE_NUMBERS.get(self._mode, 0)
-        try:
-            sound = param.sound if param.sound is not None else 0
-            channel = param.channel if param.channel is not None else self._channel
-            self._device.midi_edit(
-                mode_num,
-                param.function,
-                param.page,
-                param.pot,
-                value,
-                sound=sound,
-                channel=channel,
+            try:
+                mode_num = params.MODE_NUMBERS[param.mode]
+            except (KeyError, ValueError):
+                mode_num = params.MODE_NUMBERS.get(self._mode, 0)
+            with app._busy_gate, app._lock:
+                sound = param.sound if param.sound is not None else 0
+                channel = param.channel if param.channel is not None else self._channel
+                self._device.midi_edit(
+                    mode_num,
+                    param.function,
+                    param.page,
+                    param.pot,
+                    value,
+                    sound=sound,
+                    channel=channel,
+                )
+                time.sleep(0.05)
+                try:
+                    record = self._read_record()
+                except _BRIDGE_ERRORS as exc:
+                    failure = f"read-back failed: {exc}"
+                else:
+                    try:
+                        stored = rec.decode_bit_field(record, param)
+                        seen = params.value_from_stored(param, stored)
+                    except _BRIDGE_ERRORS as exc:
+                        failure = f"read-back failed: {exc}"
+        except _BRIDGE_ERRORS as exc:
+            failure = str(exc)
+        finally:
+            app._exchange.release()
+        if failure is None and seen is None:
+            # Unreachable: the decode either sets ``seen`` or ``failure``.
+            failure = "read-back failed"
+        if failure is not None:
+            app.call_from_thread(self._edit_done_mismatch, param, failure)
+            return
+        expected = param.clamp(value)
+        if seen != expected:
+            app.call_from_thread(
+                self._edit_done_mismatch,
+                param,
+                f"{param.label} reads {seen}, not {expected}",
             )
-            time.sleep(0.05)
-            record = self._read_record()
-            try:
-                stored = rec.decode_bit_field(record, param)
-                seen = params.value_from_stored(param, stored)
-            except Exception as exc:
-                try:
-                    self.app.call_from_thread(
-                        self._edit_done_mismatch,
-                        param,
-                        f"read-back failed: {exc}",
-                    )
-                except Exception:
-                    self._edit_done_mismatch(param, f"read-back failed: {exc}")
-                return
-            expected = param.clamp(value)
-            if seen != expected:
-                try:
-                    self.app.call_from_thread(
-                        self._edit_done_mismatch,
-                        param,
-                        f"{param.label} reads {seen}, not {expected}",
-                    )
-                except Exception:
-                    self._edit_done_mismatch(
-                        param, f"{param.label} reads {seen}, not {expected}"
-                    )
-                return
-            try:
-                self.app.call_from_thread(self._edit_done_ok, param, seen)
-            except Exception:
-                self._edit_done_ok(param, seen)
-        except Exception as exc:
-            try:
-                self.app.call_from_thread(self._edit_done_mismatch, param, str(exc))
-            except Exception:
-                self._edit_done_mismatch(param, str(exc))
+            return
+        app.call_from_thread(self._edit_done_ok, param, seen)
 
     def _edit_done_ok(self, param, value: int) -> None:
         self._notice = f"{param.label} = {value}"

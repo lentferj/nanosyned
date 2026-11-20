@@ -334,6 +334,7 @@ class DemoDevice:
         if not 0 <= number <= 127:
             raise m.ProtocolError(f"effects {number} is outside 0-127")
         stored = bytes(record)
+        self._effects[number] = stored
         self.effect_writes.append((number, stored))
 
     def write_edit_effects(

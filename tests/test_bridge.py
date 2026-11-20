@@ -321,6 +321,18 @@ class TestDemoWrites:
         assert demo.read_global() == record
         assert demo.global_writes == [record]
 
+    def test_a_effects_round_trips(self):
+        demo = DemoDevice()
+        record = bytes((index * 7 + 3) & 0xFF for index in range(rec.EFFECTS_BYTES))
+
+        demo.write_effects(42, record)
+
+        assert demo.read_effects(42) == record
+        assert verify.describe(record, demo.read_effects(42)) == (
+            "record read back byte-for-byte"
+        )
+        assert demo.effect_writes == [(42, record)]
+
     def test_edits_and_mode_changes_are_logged(self):
         demo = DemoDevice()
 

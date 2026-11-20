@@ -170,6 +170,31 @@ class TestImportHelp:
 class TestImportWrite:
     """``--program SRC=DST`` and ``--all`` write with the family's safety."""
 
+    def test_all_and_program_together_is_refused(
+        self, config_path, tmp_path, monkeypatch, capsys
+    ):
+        """--all and --program together must be refused; no device write occurs."""
+        device = use_device(monkeypatch, PersistentDemo())
+        path = tmp_path / "one.syx"
+        path.write_bytes(_program(7, "Invented7"))
+        code, _out, err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "import",
+            str(path),
+            "--all",
+            "--program",
+            "7=5",
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 2
+        assert "--all" in err.lower() and "--program" in err.lower()
+        assert device.program_writes == []
+        assert len(bk.list_backups()) == 0
+
     def test_one_program_maps_to_one_destination(
         self, config_path, tmp_path, monkeypatch, capsys
     ):

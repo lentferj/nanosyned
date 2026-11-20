@@ -35,30 +35,7 @@ from nanosyned.editor import EditGate
 from nanosyned.text import literal
 from vinsynlib.ui.confirm import ConfirmScreen
 
-__all__ = [
-    "ImportSingleScreen",
-    "MappingScreen",
-    "SingleImportScreen",
-    "SingleMappingScreen",
-    "SingleScreen",
-]
-
-#: Table ids the screen accepts as aliases, so a caller that guessed any
-#: of the natural names still finds the one table it has.
-_TABLE_ALIASES = frozenset(
-    {
-        "single-table",
-        "map-table",
-        "mapping-table",
-        "single-map-table",
-        "import-table",
-        "single",
-        "map",
-        "bank-table",
-    }
-)
-_STATUS_ALIASES = frozenset({"single-status", "bank-status", "status", "map-status"})
-_GATE_ALIASES = frozenset({"single-gate", "bank-gate", "gate", "map-gate"})
+__all__ = ["SingleMappingScreen"]
 
 _TARGET_BANK = "User"
 
@@ -470,11 +447,15 @@ class SingleMappingScreen(ModalScreen[Any]):
         program = self._focused_program()
         if program is None:
             return
-        if self._on_preview is not None:
-            self._on_preview(program.record)
-            self._notice = "loaded into the edit buffer; nothing stored"
-        else:
+        if self._on_preview is None:
             self._notice = "preview is not wired"
+        elif self._on_preview(program.record) is False:
+            # The app refused -- busy, or its exchange was held -- and has
+            # already said why. Nothing was loaded, so do not claim a load.
+            self._say("preview refused", refused=True)
+            return
+        else:
+            self._notice = "loaded into the edit buffer; nothing stored"
         self._refresh()
         self._fill()
 
@@ -558,31 +539,6 @@ class SingleMappingScreen(ModalScreen[Any]):
             return
         self.dismiss(None)
 
-    # --- query aliasing -----------------------------------------------
-
-    def _map_selector(self, selector: str) -> str:
-        stripped = selector.strip()
-        if not stripped.startswith("#"):
-            return selector
-        name = stripped[1:]
-        if name in _TABLE_ALIASES:
-            return "#single-table"
-        if name in _STATUS_ALIASES:
-            return "#single-status"
-        if name in _GATE_ALIASES:
-            return "#single-gate"
-        return selector
-
-    def query(self, *args: Any, **kwargs: Any) -> Any:
-        if args and isinstance(args[0], str):
-            args = (self._map_selector(args[0]), *args[1:])
-        return super().query(*args, **kwargs)
-
-    def query_one(self, *args: Any, **kwargs: Any) -> Any:
-        if args and isinstance(args[0], str):
-            args = (self._map_selector(args[0]), *args[1:])
-        return super().query_one(*args, **kwargs)
-
 
 def _label_of(bank: Any) -> str:
     if bank is None:
@@ -597,10 +553,3 @@ def _program_name(program: Any) -> str:
     if program is None:
         return ""
     return str(getattr(program, "name", ""))
-
-
-# Aliases for the names a caller or a test might use.
-SingleScreen = SingleMappingScreen
-MappingScreen = SingleMappingScreen
-SingleImportScreen = SingleMappingScreen
-ImportSingleScreen = SingleMappingScreen

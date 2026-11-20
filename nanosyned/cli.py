@@ -880,6 +880,9 @@ def _cmd_import(device, args) -> int:
     if not args.program and not args.all:
         _usage("nothing selected; nothing sent (use --program or --all)")
 
+    if args.program and args.all:
+        _usage("--all and --program may not be used together")
+
     plan = _import_plan(source, args)
     if not plan.steps:
         _usage("nothing selected; nothing sent")

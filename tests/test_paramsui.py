@@ -17,6 +17,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from dataclasses import replace
 
 import pytest
@@ -36,20 +39,90 @@ def app():
     return NanosynedApp(DemoDevice(), catalog=None, allow_write=True)
 
 
+async def _settle(pilot, predicate, *, timeout: float = 2.0) -> None:
+    """Pause until ``predicate`` holds, for a worker's sleep to land."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+        await pilot.pause()
+        if predicate():
+            return
+    raise AssertionError("the worker never settled")
+
+
+class _FailingDevice(DemoDevice):
+    """A demo whose edit send or read-back fails like a dropped port."""
+
+    def __init__(self, failing: str) -> None:
+        super().__init__()
+        self._failing = failing
+
+    def midi_edit(self, *args, **kwargs):
+        if self._failing == "midi_edit":
+            raise OSError("port gone")
+        return super().midi_edit(*args, **kwargs)
+
+    def read_edit_program(self, **kwargs):
+        if self._failing == "read_edit_program":
+            raise TimeoutError("no reply")
+        return super().read_edit_program(**kwargs)
+
+
 class TestParameterScreen:
     async def test_opening_sends_mode_select_and_shows_warning(self, app):
+        """`p` sends one Mode Select through the app, then opens the screen.
+
+        A Program ``10`` lands only in the per-channel Mix buffer, so the
+        open asks for Mix mode -- but through the gate and the exchange,
+        not from the screen's mount.
+        """
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.push_screen(
-                ParameterScreen(app.device, app._write_gate, channel=app._channel())
-            )
-            await pilot.pause()
+            app.action_edit_parameter()
+            for _ in range(50):
+                await pilot.pause()
+                if isinstance(app.screen, ParameterScreen):
+                    break
             assert isinstance(app.screen, ParameterScreen)
-            assert app.device.mode_selects
-            assert True in app.device.mode_selects or app.device.mode_selects  # called
+            assert app.device.mode_selects == [True]
+            assert not app._exchange.locked()
             warning = str(app.screen.query_one("#param-warning").content)
             assert "Mix mode" in warning
             assert "Program 10" in warning
+
+    async def test_opening_with_the_gate_locked_sends_nothing(self):
+        app2 = NanosynedApp(DemoDevice(), catalog=None, allow_write=False)
+        async with app2.run_test() as pilot:
+            await pilot.pause()
+            app2.action_edit_parameter()
+            await pilot.pause()
+            assert app2.device.mode_selects == []
+            assert not isinstance(app2.screen, ParameterScreen)
+            status = str(app2.query_one("#status").content)
+            assert "write gate" in status
+            assert not app2._exchange.locked()
+
+    async def test_opening_while_the_exchange_is_held_sends_nothing(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._exchange.acquire(blocking=False)
+            try:
+                app.action_edit_parameter()
+                await pilot.pause()
+                assert app.device.mode_selects == []
+                assert not isinstance(app.screen, ParameterScreen)
+                assert "busy" in str(app.query_one("#status").content)
+            finally:
+                app._exchange.release()
+
+    async def test_a_directly_built_screen_sends_no_mode_select(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = ParameterScreen(app.device, app._write_gate, channel=0)
+            app.push_screen(screen)
+            await pilot.pause()
+            assert app.screen is screen
+            assert app.device.mode_selects == []
 
     async def test_only_verified_rows_appear(self, app):
         async with app.run_test() as pilot:
@@ -348,3 +421,80 @@ class TestParameterScreen:
             status = str(screen.query_one("#param-status").content)
             assert "refused" in status.lower()
             assert "maybe" in status
+
+    async def test_an_edit_refuses_while_the_exchange_is_held(self, app):
+        """A claim taken elsewhere refuses the edit and leaves it alone."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = ParameterScreen(app.device, app._write_gate, channel=0)
+            app.push_screen(screen)
+            await pilot.pause()
+            assert app._write_gate.armed
+            param = screen._params[0]
+            edits_before = len(app.device.midi_edits)
+            assert app._exchange.acquire(blocking=False)
+            try:
+                screen._typed(param, str(param.clamp(param.low)))
+                await pilot.pause()
+                assert len(app.device.midi_edits) == edits_before
+                assert app._exchange.locked()
+                status = str(screen.query_one("#param-status").content)
+                assert "refused" in status.lower()
+                assert "busy" in status.lower()
+            finally:
+                app._exchange.release()
+
+    async def test_two_rapid_edits_do_not_overlap(self, app):
+        """The first call's claim is still held when the second arrives."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = ParameterScreen(app.device, app._write_gate, channel=0)
+            app.push_screen(screen)
+            await pilot.pause()
+            assert app._write_gate.armed
+            param = screen._params[0]
+            edits_before = len(app.device.midi_edits)
+            screen._typed(param, "1")
+            screen._typed(param, "2")
+            status = str(screen.query_one("#param-status").content)
+            assert "busy" in status.lower()
+            await _settle(pilot, lambda: not app._exchange.locked())
+            assert len(app.device.midi_edits) == edits_before + 1
+
+    @pytest.mark.parametrize(
+        ("failing", "expected"),
+        [
+            ("midi_edit", "port gone"),
+            ("read_edit_program", "read-back failed: no reply"),
+        ],
+    )
+    async def test_a_failed_edit_releases_the_exchange_and_reports(
+        self, failing, expected
+    ):
+        """A device fault releases the claim and is said on the main thread."""
+        app = NanosynedApp(_FailingDevice(failing), catalog=None, allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = ParameterScreen(app.device, app._write_gate, channel=0)
+            app.push_screen(screen)
+            await pilot.pause()
+            param = screen._params[0]
+            threads: list[threading.Thread] = []
+            original = screen._edit_done_mismatch
+
+            def record_thread(param, message):
+                threads.append(threading.current_thread())
+                original(param, message)
+
+            screen._edit_done_mismatch = record_thread
+            screen._typed(param, str(param.clamp(param.low)))
+
+            def reported() -> bool:
+                return bool(threads) and expected in str(
+                    screen.query_one("#param-status").content
+                )
+
+            await _settle(pilot, reported)
+            assert threads == [threading.main_thread()]
+            assert expected in str(screen.query_one("#param-status").content)
+            assert not app._exchange.locked()

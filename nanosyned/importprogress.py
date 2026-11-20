@@ -76,9 +76,9 @@ class ImportProgressScreen(ModalScreen[str | None]):
         self.query_one("#import-progress", Static).update("\n".join(lines))
 
     def set_progress(
-        self, done: int, total: int, slot: int, name: str, failures: int
+        self, done: int, total: int, slot: int | None, name: str, failures: int
     ) -> None:
-        """Update the display from the worker thread."""
+        """Update the display on the main thread via ``call_from_thread``."""
         self.done = done
         self.total = total
         self.failures = failures

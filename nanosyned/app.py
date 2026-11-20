@@ -328,7 +328,10 @@ class NanosynedApp(App):
         #: session. A set, not a boolean: the rule is once per slot. The
         #: destination is still read in full before *every* store -- the
         #: read is what makes the write undoable and what fails the write if
-        #: the slot cannot be read -- but the file is written once.
+        #: the slot cannot be read -- but the file is written once. The
+        #: workers add to it inside the same ``_busy_gate``/``_lock`` block
+        #: as the backup, so the shared set is serialised even though it is
+        #: reached from a worker thread.
         self._backed_up: set[str] = set()
         #: Which of the 100 mixes `m` offers first. Restored below when a
         #: config path was injected, so the second visit to a mix is one
@@ -1392,7 +1395,10 @@ class NanosynedApp(App):
         for record in reversed(failed):
             self._undo_log.push(record)
         if failed:
-            detail = "; ".join(sentences) if sentences else "the unit refused it"
+            detail = (
+                "; ".join(sentence for sentence in sentences if sentence)
+                or "the unit refused it"
+            )
             self.notify_status(f"{summary}; {detail}", refused=True)
             return
         for record in records:
@@ -1901,16 +1907,13 @@ class NanosynedApp(App):
         """**MIDI only.** One global dump; the modal opens on the main thread."""
         failure: BaseException | None = None
         record: bytes | None = None
-        exchange_acquired = False
         try:
             with self._busy_gate, self._lock:
                 record = self.device.read_global()
-            exchange_acquired = True
         except _BRIDGE_ERRORS as exc:
             failure = exc
         finally:
-            if exchange_acquired:
-                self._exchange.release()
+            self._exchange.release()
         if failure is not None:
             self.call_from_thread(
                 self.notify_status, f"global: {failure}", refused=True
@@ -2035,7 +2038,47 @@ class NanosynedApp(App):
         self._effects_read_worker()
 
     def action_edit_parameter(self) -> None:
-        """Open the verified-parameter editor for direct ``10`` edits."""
+        """Put the unit in Mix mode, then open the parameter editor.
+
+        Opening `p` sends one Mode Select, because a Program ``10`` edit
+        lands only in the per-channel Mix buffer (see
+        ``docs/PARAMETER_VERIFICATION_RUN_LOG.md`` and section 20 of
+        ``docs/RESOLUTION_NOTES.md``). That is a send the app treats as a
+        write everywhere else, so it asks the gate first and claims the
+        exchange before a worker exists -- a locked gate means no Mode
+        Select and no editor, and a busy port means the same. The screen
+        itself sends nothing on mount.
+        """
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._parameter_open_worker()
+
+    @work(thread=True)
+    def _parameter_open_worker(self) -> None:
+        """**MIDI only.** One Mode Select; the modal opens on the main thread."""
+        failure: BaseException | None = None
+        try:
+            with self._busy_gate, self._lock:
+                self.device.mode_select(True)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        self.call_from_thread(self._open_parameter, failure)
+
+    def _open_parameter(self, failure: BaseException | None) -> None:
+        """Show the parameter modal, or say why it did not open. Main thread."""
+        if failure is not None:
+            self.notify_status(f"parameters: {failure}", refused=True)
+            return
         self.push_screen(
             ParameterScreen(self.device, self._write_gate, channel=self._channel())
         )
@@ -2045,19 +2088,13 @@ class NanosynedApp(App):
         """**MIDI only.** One effects dump; the modal opens on the main thread."""
         failure: BaseException | None = None
         record: bytes | None = None
-        exchange_acquired = False
         try:
             with self._busy_gate, self._lock:
                 record = self.device.read_effects(0)  # User effects bank, slot 0
-            exchange_acquired = True
         except _BRIDGE_ERRORS as exc:
             failure = exc
         finally:
-            if exchange_acquired:
-                try:
-                    self._exchange.release()
-                except RuntimeError:
-                    pass  # Lock already released, ignore
+            self._exchange.release()
         if failure is not None:
             self.call_from_thread(
                 self.notify_status, f"effects: {failure}", refused=True
@@ -2496,8 +2533,8 @@ class NanosynedApp(App):
                 return
             self._import_plan(plan)
 
-        def preview(record) -> None:
-            self._preview_import(record)
+        def preview(record) -> bool:
+            return self._preview_import(record)
 
         self.push_screen(
             SingleMappingScreen(
@@ -2558,7 +2595,7 @@ class NanosynedApp(App):
                         progress.set_progress,
                         index,
                         len(plan.steps),
-                        number or 0,
+                        number,
                         name,
                         failures,
                     )
@@ -2670,14 +2707,40 @@ class NanosynedApp(App):
             return rec.mix_name(result.record).rstrip()
         return ""
 
-    def _preview_import(self, record) -> None:
-        """Load a source record into the program edit buffer (no store)."""
+    def _preview_import(self, record) -> bool:
+        """Load a source record into the program edit buffer (no store).
+
+        A load (opcode ``02``) is not a store, so it needs no write gate --
+        but it is still a MIDI send, and every send in this app is claimed
+        before it goes out. The claim is taken here, on the main thread,
+        before the message exists: while a worker holds the exchange (an
+        ``r`` read, a store) the preview is refused rather than
+        interleaved. ``write_edit_program`` drains the port first, so an
+        unclaimed preview would steal the replies of whatever is running.
+
+        Returns ``True`` when the record was loaded, ``False`` when it was
+        refused or the device failed; the screen uses that to decide
+        whether it may claim a load in its own status line.
+        """
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return False
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return False
+        failure: BaseException | None = None
         try:
-            self.device.write_edit_program(record, edit=0)
-        except Exception as exc:
-            self.notify_status(f"preview: {exc}", refused=True)
-            return
+            with self._lock:
+                self.device.write_edit_program(record, edit=0)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        if failure is not None:
+            self.notify_status(f"preview: {failure}", refused=True)
+            return False
         self.notify_status("loaded into the edit buffer; nothing stored")
+        return True
 
     def action_help(self) -> None:
         self.push_screen(ReportScreen("nanosyned", f"{_HELP}\n\n{_build_line()}"))

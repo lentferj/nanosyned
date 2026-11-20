@@ -886,6 +886,79 @@ class TestWriting:
             assert app.device.read_program(0) == original
 
 
+class _FailedReadDevice(DemoDevice):
+    """The demo, except one dump request times out like a quiet bridge.
+
+    The exchange is claimed by the caller on the main thread, so a read
+    that fails must still release it -- otherwise every later MIDI action
+    refuses with "busy" for the rest of the session.
+    """
+
+    def __init__(self, method: str) -> None:
+        super().__init__()
+        self._failed_method = method
+
+    def read_global(self, *, timeout: float | None = None) -> bytes:
+        if self._failed_method == "global":
+            raise TimeoutError("no reply")
+        return super().read_global(timeout=timeout)
+
+    def read_effects(self, number: int, *, timeout: float | None = None) -> bytes:
+        if self._failed_method == "effects":
+            raise TimeoutError("no reply")
+        return super().read_effects(number, timeout=timeout)
+
+
+class TestAFailedReadLeavesTheAppUsable:
+    """R1/R2: the release runs in a ``finally`` on every path."""
+
+    @staticmethod
+    async def _wait(pilot, predicate, tries=160):
+        for _ in range(tries):
+            await pilot.pause()
+            if predicate():
+                return
+        assert predicate(), "the worker never finished"
+
+    @staticmethod
+    def _status(app) -> str:
+        return str(app.query_one("#status").content)
+
+    async def test_a_failed_g_read_releases_the_exchange(self):
+        app = NanosynedApp(
+            _FailedReadDevice("global"), catalog=cat.empty(), allow_write=True
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_edit_global()
+            await self._wait(pilot, lambda: "global:" in self._status(app))
+            assert "no reply" in self._status(app)
+            assert not app._exchange.locked()
+            assert not app._busy
+            # Usable: the next exchange is claimed and released normally.
+            app.query_one("#slot-table").focus()
+            app.action_select()
+            await self._wait(pilot, lambda: len(app.device.selected_log) == 1)
+            assert not app._exchange.locked()
+
+    async def test_a_failed_x_read_releases_the_exchange(self):
+        app = NanosynedApp(
+            _FailedReadDevice("effects"), catalog=cat.empty(), allow_write=True
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_edit_effects()
+            await self._wait(pilot, lambda: "effects:" in self._status(app))
+            assert "no reply" in self._status(app)
+            assert not app._exchange.locked()
+            assert not app._busy
+            # Usable: the next exchange is claimed and released normally.
+            app.query_one("#slot-table").focus()
+            app.action_select()
+            await self._wait(pilot, lambda: len(app.device.selected_log) == 1)
+            assert not app._exchange.locked()
+
+
 class TestTheSubtitleShowsTheChannel:
     """The send channel is always in play and never asked about.
 

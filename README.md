@@ -186,7 +186,7 @@ beside a session that is driving the hardware.
 | `m` | edit a mix: its sixteen channels |
 | `M` | set the sound mode, Program or Mix — **a write, and it changes what plays** |
 | `g` | edit the global record |
-| `I` | import programs (and effects, mixes, global) from a `.syx` / `.sqs` file |
+| `I` | import programs from a `.syx` / `.sqs` file |
 | `w` | arm / lock the write gate |
 | `z` / `Z` | undo / undo all — put back what a store replaced |
 | `i` / `?` / `q` | device identity / help / quit |
@@ -194,6 +194,8 @@ beside a session that is driving the hardware.
 The cursor never sends a byte, `⏎` is the one key that makes the instrument
 play, and every write key is inert until `w` has armed the gate — see
 [Writing to the instrument](#writing-to-the-instrument) for the whole fence.
+`l` is a preview load, not a store: it needs no gate, but it is refused while
+another read or write is in flight.
 
   ![Favourites view](docs/screenshots/favourites.png)
   ![Search](docs/screenshots/search.png)
@@ -368,8 +370,9 @@ Limit sits one past the unit's top, so those rows carry the measured top
 (99/12/24) and were re-probed there before promotion. A row becomes writable only after that probe confirms its
 offset and its value law, and the findings -- including the mix and program
 rows that did not confirm, and the Effects mode the unit ignores -- are in
-`docs/PARAMETER_VERIFICATION_RUN_LOG.md`. `.sqs` import remains a shared
-family gap and is out of scope for this branch.
+`docs/PARAMETER_VERIFICATION_RUN_LOG.md`. The `.sqs` container is read by
+`nano/sqs.py`; its scanning rules are in `docs/RESOLUTION_NOTES.md` §21.
+`.mid` and `.lib` remain out of scope.
 
   ![The program editor](docs/screenshots/editor.png)
 
@@ -391,10 +394,13 @@ nanocli --demo import FILE --program 0=5 --dry-run
                                        # show the plan; send nothing
 ```
 
-The browser: `I` opens the file picker; choose a file, then map source
-programs to User slots on the screen that follows (or press `ctrl+s` to
-import the whole bank with no mapping). The write gate must be armed; a
-locked gate refuses the import with no message sent.
+The browser: `I` opens the file picker; choose a file, then choose **Whole
+bank** or **Single / multiple programs**. The whole-bank path writes each
+source program to its own slot; the mapping screen lets you assign source
+programs to chosen User slots, and `ctrl+s` there imports the mapping you
+built. The browser imports programs only; effects, mixes and global are the
+CLI's `--all` extras. The write gate must be armed; a locked gate refuses
+the import with no message sent.
 
 Source 127 is hardwired silent and is skipped on bank import; destination
 127 is refused as a destination everywhere. Mix slot 100 is the edit

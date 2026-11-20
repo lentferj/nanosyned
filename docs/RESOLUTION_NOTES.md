@@ -412,3 +412,66 @@ only after a controlled before/after change on the unit confirms its
 offset and its value law. Until then the editors write only what the
 specification documents, and rows the specification marks for another
 model are shown and are not editable.
+
+## 20. Opening `p` sends one Mode Select, and the gate decides
+
+The parameter editor opens in **Mix mode on purpose**, and the open itself
+is where that Mode Select is sent. The bench reason is the one in
+`docs/PARAMETER_VERIFICATION_RUN_LOG.md`: a Program ``10`` edit lands only
+in the per-channel Mix buffer. In Program mode the same message changes
+nothing at all, so an editor that opened without asking for Mix mode would
+offer rows whose edits silently do not happen.
+
+That send is a send, and the app treats a Mode Select as a write
+everywhere else (`M` asks the gate and a confirmation first). So `p` is now
+gated like the other write keys:
+
+- `w` decides. A locked gate means no Mode Select **and no editor** -- the
+  status line carries the gate sentence and nothing goes on the wire.
+- The exchange is claimed on the main thread, before the worker exists,
+  and a port that is already busy refuses with "busy". This is the same
+  shape as `M`, `g`, `x` and the stores: a worker that failed still
+  releases the exchange in a ``finally``.
+- The worker sends one Mode Select and nothing else. It stores nothing and
+  reads nothing back; this protocol does not answer a Mode Select, so no
+  state is claimed about the unit's mode.
+- `ParameterScreen.on_mount` sends nothing at all. It builds its table,
+  shows the Mix-mode warning and fills from the buffer. A screen
+  constructed directly -- by a test, or by a later caller -- is silent.
+
+This closes the review's R4/R9 finding without giving up the bench reason.
+The previous shape sent an ungated Mode Select from the screen's mount,
+swallowed every failure with a bare ``except Exception: pass``, and pinned
+that violation in a test. The test now asserts the discipline instead:
+gate first, one claimed send, the warning on screen, and no send when the
+gate is locked or the port is busy.
+
+## 21. The MidiQuest `.sqs` container is scanned, not walked
+
+`nano/sqs.py` is the `.sqs` reader used by `nanocli import` and the
+browser. A `.sqs` is an IFF-like container: four-byte chunk type, four-byte
+big-endian size, then data. A `LIST` wraps one `FORM` per bank, and each
+`FORM` ends in a `BODY` whose payload is plain concatenated Alesis SysEx --
+the bytes an All Dump would have, or a slice of one.
+
+**The chunk sizes are not trusted.** The files this was written against
+have a first `FORM` whose declared size ends 44 bytes before the next
+`FORM` begins; a walker that trusts the size steps into the next bank's
+header. The reader therefore scans for the Alesis header
+`F0 00 00 0E 0E` and its terminating `F7`. Packed data is 7-bit by
+construction, so an `F7` cannot occur inside a message and the first one
+after a header ends that message. A header with no `F7`, or a second header
+before the terminator, is dropped rather than repaired.
+
+**Only Alesis messages are taken.** One test file carries a Roland XV-2020
+patch; a foreign `F0` is skipped. Bank boundaries are the `FORM`
+signatures that fall *outside* an extracted message's byte span -- a
+`FORM` can occur inside 7-bit packed data, so a naive search would invent a
+bank. Each message belongs to the last boundary before it; a `FORM` that
+receives no Alesis message stays an empty bank. The result is byte-for-byte
+what a plain `.syx` holding the same messages would be, so
+`nano.dumps.read_bytes` handles both formats through one path.
+
+`.mid` and `.lib` are still unread. Nothing in the current import path
+needs them; the scanner is written so another container reader can be
+added without changing the planner or the screens.
