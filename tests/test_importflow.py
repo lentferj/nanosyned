@@ -213,6 +213,7 @@ class TestTheImportFlow:
             await pilot.press("enter")
             await _until(pilot, lambda: isinstance(app.screen, ChoiceScreen))
             await pilot.press("down")
+            await pilot.press("down")
             await pilot.press("enter")
             await _until(pilot, lambda: len(single) == 1)
         assert len(single) == 1

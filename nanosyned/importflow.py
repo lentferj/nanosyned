@@ -41,6 +41,7 @@ from nanosyned.screens import ReportScreen
 from vinsynlib.ui.modals import ChoiceScreen
 
 __all__ = [
+    "APPEND",
     "IMPORT_MODES",
     "SINGLE",
     "WHOLE_BANK",
@@ -53,9 +54,11 @@ __all__ = [
 #: The import screen's choices, as ``(answer, label)`` pairs in screen
 #: order: whole bank first, then the mapping.
 WHOLE_BANK = "whole"
+APPEND = "append"
 SINGLE = "single"
 IMPORT_MODES: tuple[tuple[str, str], ...] = (
     (WHOLE_BANK, "Whole bank"),
+    (APPEND, "Append to free slots"),
     (SINGLE, "Single / multiple programs"),
 )
 
@@ -90,6 +93,7 @@ def run_import_flow(
     path: str,
     *,
     open_whole_bank: Callable[[importplan.ImportPlan], None] | None = None,
+    open_append: Callable[[importing.SourceBank], None] | None = None,
     open_single: Callable[[importing.SourceBank], None] | None = None,
 ) -> None:
     """Run the flow off one chosen file path.
@@ -105,7 +109,7 @@ def run_import_flow(
     def on_picked(chosen: str | None) -> None:
         if chosen is None:
             return
-        _ask_after_read(app, chosen, open_whole_bank, open_single)
+        _ask_after_read(app, chosen, open_whole_bank, open_append, open_single)
 
     app.push_screen(FilePickerScreen(path=path), on_picked)
 
@@ -114,6 +118,7 @@ def _ask_after_read(
     app: Any,
     path: str,
     open_whole_bank: Callable[[importplan.ImportPlan], None] | None,
+    open_append: Callable[[importing.SourceBank], None] | None,
     open_single: Callable[[importing.SourceBank], None] | None,
 ) -> None:
     """Read the chosen file, then ask the next question it needs."""
@@ -129,20 +134,21 @@ def _ask_after_read(
         def answered(index: int | None) -> None:
             if index is None:
                 return
-            _ask_mode(app, banks[index], open_whole_bank, open_single)
+            _ask_mode(app, banks[index], open_whole_bank, open_append, open_single)
 
         app.push_screen(ChoiceScreen(_BANK_TITLE, choices), answered)
         return
     if not banks:
         _report(app, f"{path} holds no programs to import")
         return
-    _ask_mode(app, banks[0], open_whole_bank, open_single)
+    _ask_mode(app, banks[0], open_whole_bank, open_append, open_single)
 
 
 def _ask_mode(
     app: Any,
     bank: importing.SourceBank,
     open_whole_bank: Callable[[importplan.ImportPlan], None] | None,
+    open_append: Callable[[importing.SourceBank], None] | None,
     open_single: Callable[[importing.SourceBank], None] | None,
 ) -> None:
     """Ask which kind of import this is, then hand the answer onward."""
@@ -155,6 +161,10 @@ def _ask_mode(
             if open_whole_bank is None:
                 return
             open_whole_bank(whole_bank_plan(bank))
+            return
+        if kind == APPEND:
+            if open_append is not None:
+                open_append(bank)
             return
         if open_single is not None:
             open_single(bank)
