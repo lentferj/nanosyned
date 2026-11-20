@@ -302,8 +302,8 @@ class MixScreen(ModalScreen[bytes | None]):
     never one field, so the fence stays the app's single write path.
 
     The browser's banks are programs, not mixes, so this screen is reached
-    through the app's mix picker (`m`): the mix number is chosen there, and
-    this screen only ever edits the record it was handed.
+    by pressing `e` on a focused row in the Mixes pane. This screen only
+    ever edits the record it was handed.
 
     A part is one row, collapsed to ``prog N · vol N · pan N``. Enter
     expands it into all :data:`nanosyned.mix.FIELDS`; Enter on the part

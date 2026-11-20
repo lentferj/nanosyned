@@ -30,7 +30,7 @@ from nano import messages as m
 from nano import params, verify
 from nano import records as rec
 from nanosyned import mix as mixview
-from nanosyned.app import NanosynedApp
+from nanosyned.app import MIXES_BANK, NanosynedApp
 from nanosyned.demo import DemoDevice
 from nanosyned.editor import GlobalEditor
 from nanosyned.screens import GlobalScreen, MixScreen
@@ -316,7 +316,7 @@ class TestMixStore(_AppCase):
             assert saved[0]["blocks"]["mix"] == original
             assert saved[0]["name"] == rec.mix_name(original).rstrip()
 
-    async def test_m_while_locked_refuses_and_reads_nothing(self):
+    async def test_e_on_mixes_while_locked_refuses_and_reads_nothing(self):
         reads = []
 
         class CountingDevice(DemoDevice):
@@ -325,28 +325,33 @@ class TestMixStore(_AppCase):
                 return super().read_mix(number, timeout=timeout)
 
         app = NanosynedApp(CountingDevice(), catalog=cat.empty())
+        app._mix_names_loaded = True
         async with app.run_test() as pilot:
             await pilot.pause()
-            await pilot.press("m")
+            app._fill(MIXES_BANK)
+            app.query_one("#slot-table").focus()
+            app.query_one("#slot-table").move_cursor(row=0)
+            await pilot.press("e")
             for _ in range(8):
                 await pilot.pause()
-            assert not isinstance(app.screen, PromptScreen)
+            assert not isinstance(app.screen, MixScreen)
             assert reads == []
             assert app.device.mix_writes == []
             assert "write gate" in str(app.query_one("#status").content)
 
-    async def test_m_picks_the_mix_and_the_screen_stages_then_stores(
+    async def test_e_opens_the_focused_mix_and_the_screen_stages_then_stores(
         self, monkeypatch, tmp_path
     ):
         saved = []
         self._backup_into(monkeypatch, tmp_path, saved)
         app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        app._mix_names_loaded = True
         async with app.run_test() as pilot:
             await pilot.pause()
-            await pilot.press("m")
-            await self._wait(pilot, lambda: isinstance(app.screen, PromptScreen))
-            app.screen.query_one(Input).value = "7"
-            await pilot.press("enter")
+            app._fill(MIXES_BANK)
+            app.query_one("#slot-table").focus()
+            app.query_one("#slot-table").move_cursor(row=7)
+            await pilot.press("e")
             await self._wait(pilot, lambda: isinstance(app.screen, MixScreen))
 
             # Stage volume 44 on channel 1 through the two small dialogs.

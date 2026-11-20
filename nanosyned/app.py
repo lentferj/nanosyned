@@ -184,9 +184,8 @@ VIEW_LABELS = {
 #: canonical editor keys, spelled the family's way; this browser legend has
 #: no editor tier, so they are carried here as this tool's hints.
 WRITE_HINTS: tuple[str, ...] = (
-    "e edit program",
+    "e edit",
     "x effects",
-    "m mix",
     "p parameters",
     "M program/mix mode",
     "g global",
@@ -295,13 +294,12 @@ class NanosynedApp(App):
         Binding("slash", "search", "Search"),
         Binding("a", "toggle_auto_load", "Auto-load"),
         # The write path. `e` opens the editor only while the gate is armed;
-        # `m` opens the mix picker/editor and `g` the global editor under the
-        # same rule; `M` sends Mode Select, which changes what plays and
+        # `e` opens the focused mix editor in Mixes and `g` the global editor
+        # under the same rule; `M` sends Mode Select, which changes what plays and
         # stores nothing. `w` is the family's canonical gate key, and `z`/`Z`
         # re-send what a store replaced. Every one of them is inert until `w`.
-        Binding("e", "edit_program", "Edit program"),
+        Binding("e", "edit_program", "Edit"),
         Binding("x", "edit_effects", "Effects"),
-        Binding("m", "open_mix", "Mix"),
         Binding("p", "edit_parameter", "Parameters"),
         Binding("M", "mode_select", "Program/Mix mode"),
         Binding("g", "edit_global", "Global"),
@@ -411,9 +409,9 @@ class NanosynedApp(App):
         #: as the backup, so the shared set is serialised even though it is
         #: reached from a worker thread.
         self._backed_up: set[str] = set()
-        #: Which of the 100 mixes `m` offers first. Restored below when a
-        #: config path was injected, so the second visit to a mix is one
-        #: keystroke rather than a number typed again.
+        #: The last mix focused in the Mixes pane. Restored below when a
+        #: config path was injected; it is used by the editor's own state,
+        #: not as an input prompt.
         self._mix_number = 0
         #: The mode the last Mode Select asked for, or ``None`` before one
         #: has been sent. **Not a reading of the unit**: this protocol has
@@ -1756,7 +1754,7 @@ class NanosynedApp(App):
         since only the User bank can be read back.
         """
         if self._current_bank == MIXES_BANK:
-            self.notify_status("Mixes are not a program bank", refused=True)
+            self._open_mix_focused()
             return
         refusal = self._write_gate.check()
         if refusal is not None:
@@ -2115,16 +2113,8 @@ class NanosynedApp(App):
         """
         return f"mix:{number:03d}"
 
-    def action_open_mix(self) -> None:
-        """Pick one of the hundred mixes, read it, and open the mix editor.
-
-        The gate is asked **first**, before the picker is opened: a locked
-        gate means the key sends and reads nothing at all, and the refusal
-        names the gate. The browser's banks are programs, so there is no
-        mix "under the cursor" to open -- the picker takes a number, with
-        the one used last (0 the first time) already filled in, and the
-        mix is read on a worker exactly as a program is.
-        """
+    def _open_mix_focused(self) -> None:
+        """Read and edit the mix under the cursor in the Mixes pane."""
         refusal = self._write_gate.check()
         if refusal is not None:
             self.notify_status(refusal, refused=True)
@@ -2132,39 +2122,16 @@ class NanosynedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
-        self.push_screen(
-            PromptScreen(f"Mix (0-{banks.MIXES - 1}):", str(self._mix_number)),
-            self._mix_chosen,
-        )
-
-    def _mix_chosen(self, text: str | None) -> None:
-        """The picker's answer, on the main thread. Sends nothing yet."""
-        if text is None:
-            return
-        text = text.strip()
-        try:
-            number = int(text)
-        except ValueError:
-            self.notify_status(f"{literal(text)!r} is not a number", refused=True)
-            return
-        if not 0 <= number < banks.MIXES:
-            self.notify_status(f"mixes are 0-{banks.MIXES - 1}", refused=True)
-            return
-        # Asked again, and not only at `m`: the gate can be locked while the
-        # prompt is open, and the last answer is the one that decides.
-        refusal = self._write_gate.check()
-        if refusal is not None:
-            self.notify_status(refusal, refused=True)
-            return
-        if self._busy:
-            self.notify_status("busy", refused=True)
+        table = self.query_one("#slot-table", DataTable)
+        row = table.cursor_row
+        if not 0 <= row < banks.MIXES:
             return
         if not self._exchange.acquire(blocking=False):
             self.notify_status("busy", refused=True)
             return
-        self._mix_number = number
-        self._save_ui_state(mix_number=number)
-        self._mix_read_worker(number)
+        self._mix_number = row
+        self._save_ui_state(mix_number=row)
+        self._mix_read_worker(row)
 
     @work(thread=True)
     def _mix_read_worker(self, number: int) -> None:
@@ -2386,9 +2353,9 @@ class NanosynedApp(App):
     def action_edit_global(self) -> None:
         """Read the global set, then open its table-driven editor.
 
-        The gate is asked first, as it is for `e` and `m`: a locked gate
-        means the unit sees no traffic at all. A global read is one dump,
-        so there is no slot to choose.
+        The gate is asked first, as it is for `e`: a locked gate means the
+        unit sees no traffic at all. A global read is one dump, so there is
+        no slot to choose.
         """
         refusal = self._write_gate.check()
         if refusal is not None:
@@ -3543,8 +3510,7 @@ Keys
   t n       tags, note
   *         rate the slot under the cursor, 0-5
   V         show only slots at/above a star rating
-  e         edit the User program under the cursor
-  m         edit one of the hundred mixes (asks which first)
+  e         edit the focused program, or the focused mix in Mixes
   M         send Mode Select: program mode or mix mode
   g         edit the global settings
   w         arm or lock the write gate
