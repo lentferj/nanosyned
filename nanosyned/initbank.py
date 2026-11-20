@@ -2,6 +2,16 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026  nanosyned contributors
 #
 # This file is part of nanosyned.
+#
+# nanosyned is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 2 of the License, or (at your option)
+# any later version.
+#
+# nanosyned is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+# more details.
 
 r"""The init-bank confirmation screen.
 
@@ -73,7 +83,9 @@ class InitBankScreen(ModalScreen[bool | None]):
             yield Static(
                 "Programs 000-126 will be replaced with the unit's Init "
                 "program. Program 127 (Off) is untouched. Every replaced "
-                "slot is backed up first. One z restores the batch.",
+                "slot is backed up first. One z restores the programs, not "
+                "the favourite marks; those are hidden, and their old content "
+                "and annotations stay in the preset memory.",
                 id="init-text",
             )
             yield Static("", id="init-gate")

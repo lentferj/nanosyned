@@ -66,6 +66,26 @@ class TestTheCli:
 
         assert args.preset_memory == path
 
+    def test_favorites_works_after_send(self, tmp_path):
+        path = str(tmp_path / "after.db")
+        args = cli.build_parser().parse_args(["send", "bank.syx", "--favorites", path])
+
+        assert args.favorites == path
+
+    def test_favorites_works_after_import(self, tmp_path):
+        path = str(tmp_path / "after.db")
+        args = cli.build_parser().parse_args(
+            ["import", "bank.syx", "--favorites", path]
+        )
+
+        assert args.favorites == path
+
+    def test_favorites_works_after_init_bank(self, tmp_path):
+        path = str(tmp_path / "after.db")
+        args = cli.build_parser().parse_args(["init-bank", "--favorites", path])
+
+        assert args.favorites == path
+
 
 class TestTheApp:
     def test_a_path_opens_the_memory(self, tmp_path):

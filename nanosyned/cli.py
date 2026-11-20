@@ -1161,25 +1161,20 @@ def _cmd_init_bank(device, args) -> int:
     from nano import importplan
     from nano.initbank import init_record
 
-    # read User 127 (already imported: read_record, truncate)
     off_record = truncate(
         "program",
         read_record(device, "program", 127),
         "the 127 Off record",
     )
-    # build init_record
     template = init_record(off_record)
-    # build plan_init
     plan = importplan.plan_init(template)
     if args.dry_run:
         print("127 programs, 000-126; 127 untouched")
         print(f"{len(plan.steps)} record(s) to write (init bank)")
         return 0
-    # otherwise run writing.run with the existing read/backup/store/verify style
     failed = 0
 
     def stop(result) -> None:
-        nonlocal failed
         raise SystemExit(f"error: {result.failure}")
 
     def on_phase(name, results):
@@ -1763,6 +1758,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
     )
     _write_flags(sp)
     _inherit(sp, "preset_memory")
+    _store_flag(sp)
     sp = sub.add_parser(
         "backup", help="backups on disk, and restoring one (restore WRITES)"
     )
@@ -1890,6 +1886,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
     )
     _write_flags(sp)
     _inherit(sp, "preset_memory")
+    _store_flag(sp)
     sp = sub.add_parser(
         "init-bank",
         help="initialise the User bank: replace slots 000-126 with Init",
@@ -1902,6 +1899,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
     )
     _write_flags(sp)
     _inherit(sp, "preset_memory")
+    _store_flag(sp)
     sp = sub.add_parser("find", help="search known names (no hardware)")
     sp.add_argument("name")
     sp = sub.add_parser(

@@ -2,6 +2,16 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026  nanosyned contributors
 #
 # This file is part of nanosyned.
+#
+# nanosyned is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 2 of the License, or (at your option)
+# any later version.
+#
+# nanosyned is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+# more details.
 
 r"""The append import: free slots, cut list, and two answers."""
 
@@ -16,7 +26,7 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Label, Static
 
-from nano import importplan
+from nano import importing, importplan
 from nanosyned.editor import EditGate
 from nanosyned.text import literal
 from vinsynlib.ui.confirm import ConfirmScreen
@@ -53,11 +63,10 @@ class AppendBankScreen(ModalScreen[importplan.ImportPlan | str | None]):
 
     def __init__(
         self,
-        bank=None,
-        plan=None,
-        start=127,
-        gate=None,
-        catalog=None,
+        bank: importing.SourceBank | None = None,
+        plan: importplan.ImportPlan | None = None,
+        start: int = 127,
+        gate: EditGate | None = None,
     ) -> None:
         super().__init__()
         self._bank = bank
@@ -68,7 +77,6 @@ class AppendBankScreen(ModalScreen[importplan.ImportPlan | str | None]):
         )
         self._start = int(start)
         self._gate = gate if gate is not None else EditGate()
-        self._catalog_arg = catalog
         self._notice = ""
 
     @property

@@ -46,7 +46,7 @@ from nano import identity
 __all__ = ["MEMORY_NAME", "MemoryEntry", "PresetMemory", "default_path"]
 
 #: The sidecar's filename, beside ``favorites.db``.
-MEMORY_NAME = "preset-memory.db"
+MEMORY_NAME = favs.MEMORY_NAME
 
 #: Bumped whenever the schema changes. A newer file is refused, not guessed
 #: at, because a memory is user work.
@@ -332,4 +332,4 @@ class PresetMemory:
 
 def default_path() -> str:
     """Where the sidecar lives unless ``--preset-memory`` says otherwise."""
-    return os.path.join(favs.data_dir(), MEMORY_NAME)
+    return favs.memory_path()

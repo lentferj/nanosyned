@@ -20,6 +20,7 @@ from __future__ import annotations
 from textual.widgets import Static
 
 from nano import catalog as cat
+from nano import favorites, identity
 from nano import records as rec
 from nanosyned.app import NanosynedApp
 from nanosyned.demo import DemoDevice
@@ -53,6 +54,37 @@ class TestInitWorker:
             assert app.device.read_program(127) == before_127
             status = str(app.query_one("#status", Static).content)
             assert "init: 127 of 127 stored" in status
+
+    async def test_init_preserves_the_old_favourite_content(self, tmp_path):
+        store = favorites.Favorites(str(tmp_path / "favorites.db"))
+        store.add("USER", 0, name="Old", rating=3, tags="pad", note="keep")
+        app = NanosynedApp(
+            DemoDevice(),
+            catalog=cat.empty(),
+            favorites=store,
+            memory_path=str(tmp_path / "memory.db"),
+            allow_write=True,
+        )
+        old = app.device.read_program(0)
+        try:
+            async with app.run_test(size=(160, 50)) as pilot:
+                await pilot.pause()
+                app._start_init()
+                await _until(
+                    pilot,
+                    lambda: not isinstance(app.screen, ImportProgressScreen),
+                )
+                await pilot.pause()
+                assert store.get("USER", 0) is None
+                entry = app.memory.get(identity.digest(old))
+                assert entry is not None
+                assert entry.favourite is True
+                assert entry.rating == 3
+                assert entry.tags == "pad"
+                assert entry.note == "keep"
+        finally:
+            app.memory.close()
+            store.close()
 
     async def test_a_locked_gate_sends_nothing(self):
         app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=False)

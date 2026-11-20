@@ -1468,10 +1468,12 @@ class NanosynedApp(App):
             edit = record.payload
             if isinstance(edit, EditRecord):
                 self.catalog.set_live_name("USER", edit.number, edit.name)
+                self._bind_memory_slot(edit.number, edit.previous)
             elif isinstance(edit, ImportRecord):
                 for item in edit.edits:
                     if isinstance(item, EditRecord):
                         self.catalog.set_live_name("USER", item.number, item.name)
+                        self._bind_memory_slot(item.number, item.previous)
         if self._current_bank == "USER":
             self._refill_keeping_place()
 
@@ -1658,6 +1660,14 @@ class NanosynedApp(App):
             )
         else:
             self.memory.set_favourite(digest, True)
+
+    def _bind_memory_slot(self, number: int, record: bytes) -> None:
+        """Rebind a slot after an undo put ``record`` back."""
+        if self.memory is None:
+            return
+        name = rec.program_name(record).rstrip()
+        entry = self.memory.remember(record, name=name)
+        self.memory.bind_slot("USER", number, entry.digest)
 
     def _remember_program(
         self,
@@ -2856,7 +2866,7 @@ class NanosynedApp(App):
                         raise RuntimeError("cancelled")
                     self.call_from_thread(
                         progress.set_progress,
-                        126 - number,
+                        127 - number,
                         127,
                         number,
                         "",
@@ -2903,7 +2913,6 @@ class NanosynedApp(App):
                 plan=plan,
                 start=start,
                 gate=self._write_gate,
-                catalog=self.catalog,
             ),
             done,
         )
@@ -3163,6 +3172,8 @@ class NanosynedApp(App):
             if self.memory is not None
             else ""
         )
+        if label == "init":
+            memory_note += "; favourite marks hidden; z restores programs, not marks"
         if failed:
             first = failed[0]
             self.notify_status(

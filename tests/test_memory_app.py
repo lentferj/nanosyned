@@ -24,6 +24,8 @@ from nano import messages as m
 from nano import records as rec
 from nanosyned.app import NanosynedApp
 from nanosyned.demo import DemoDevice
+from nanosyned.editor import EditRecord, ImportRecord
+from vinsynlib.undo import Record
 
 
 def _record(name: str, seed: int = 0) -> bytes:
@@ -201,6 +203,29 @@ class TestImport:
                 await pilot.pause()
                 assert store.get("USER", 3) is None
         finally:
+            store.close()
+
+
+class TestUndo:
+    async def test_undo_rebinds_the_restored_content(self, tmp_path):
+        store = fav.Favorites(str(tmp_path / "favorites.db"))
+        app = _app(tmp_path, store)
+        memory = app.memory
+        assert memory is not None
+        old = _record("Old", 1)
+        new = _record("New", 2)
+        entry = memory.remember(new)
+        memory.bind_slot("USER", 5, entry.digest)
+        payload = ImportRecord(edits=(EditRecord(number=5, previous=old, name="Old"),))
+        record = Record("import", payload)
+        try:
+            async with app.run_test(size=(160, 50)) as pilot:
+                await pilot.pause()
+                app._undo_done([record], [True], [""])
+                await pilot.pause()
+                assert memory.slot_digest("USER", 5) == identity.digest(old)
+        finally:
+            memory.close()
             store.close()
 
 
