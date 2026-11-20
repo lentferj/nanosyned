@@ -53,6 +53,7 @@ import argparse
 import os
 import sys
 import threading
+import time
 from typing import Any, ClassVar, cast
 
 from textual import work
@@ -64,6 +65,7 @@ from textual.widgets import DataTable, Header, Static
 from nano import (
     banks,
     exporting,
+    fullbackup,
     identity,
     importplan,
     initbank,
@@ -179,8 +181,8 @@ VIEW_LABELS = {
 #: to be a tuple of its own, in its own order. ``keys.legend`` puts this
 #: tool's own hints in the one place the family leaves for them -- after
 #: `n note`, before `i device` -- and this tool's are the scan key, the two
-#: rating keys, and the ones the write path adds (edit program, mix, global,
-#: mode select, gate, undo, undo all). ``w``/``z``/``Z`` are the family's
+#: rating keys, auto-load and pane focus, and its editors, import/export,
+#: full backup, init, gate and undo keys. ``w``/``z``/``Z`` are the family's
 #: canonical editor keys, spelled the family's way; this browser legend has
 #: no editor tier, so they are carried here as this tool's hints.
 WRITE_HINTS: tuple[str, ...] = (
@@ -192,6 +194,7 @@ WRITE_HINTS: tuple[str, ...] = (
     "w write gate",
     "I import",
     "E export favourites",
+    "B backup",
     "N init bank",
     "z undo",
     "Z undo all",
@@ -309,6 +312,7 @@ class NanosynedApp(App):
         Binding("i", "device_info", "Device"),
         Binding("I", "import", "Import"),
         Binding("E", "export_favourites", "Export favourites"),
+        Binding("B", "backup", "Backup"),
         Binding("N", "init_bank", "Init bank"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
@@ -3062,6 +3066,90 @@ class NanosynedApp(App):
             f"exported {result.count} program(s) to {literal(result.path)}"
         )
 
+    def action_backup(self) -> None:
+        """Back up the whole unit to a .syx file."""
+        remembered = cfg.load_ui_str("import.folder", self._ui_state_path)
+        folder = remembered if remembered is not None else os.path.expanduser("~")
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        default = os.path.join(folder, f"nanosyned-backup-{timestamp}.syx")
+
+        def after_path(path: str | None) -> None:
+            if not path:
+                return
+            path = os.path.expanduser(path)
+            if os.path.exists(path):
+
+                def after_confirm(answer) -> None:
+                    if not answer:
+                        return
+                    self._start_backup(path)
+
+                self.push_screen(
+                    ConfirmScreen(f"{literal(path)} already exists; replace it?"),
+                    after_confirm,
+                )
+                return
+            self._start_backup(path)
+
+        self.push_screen(PromptScreen("Back up to:", default), after_path)
+
+    def _start_backup(self, path: str) -> None:
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        cancel = threading.Event()
+        progress = ImportProgressScreen(
+            total=fullbackup.TOTAL_RECORDS, on_stop=cancel.set, verb="backing up"
+        )
+        self.push_screen(progress)
+        self._backup_worker(path, progress, cancel)
+
+    @work(thread=True)
+    def _backup_worker(self, path: str, progress, cancel) -> None:
+        try:
+            with self._busy_gate, self._lock:
+                result = fullbackup.backup_device(
+                    self.device,
+                    path,
+                    overwrite=True,
+                    on_read=lambda kind, number, name, done, total: (
+                        self.call_from_thread(
+                            progress.set_progress, done, total, number, name, 0
+                        )
+                    ),
+                    cancelled=cancel.is_set,
+                )
+        except fullbackup.BackupCancelled as exc:
+            self.call_from_thread(self._backup_done, progress, None, str(exc))
+            return
+        except _BRIDGE_ERRORS as exc:
+            self.call_from_thread(self._backup_done, progress, None, str(exc))
+            return
+        except OSError as exc:
+            self.call_from_thread(self._backup_done, progress, None, str(exc))
+            return
+        finally:
+            self._exchange.release()
+        self.call_from_thread(self._backup_done, progress, result, None)
+
+    def _backup_done(self, progress, result, error) -> None:
+        try:
+            progress.dismiss(None)
+        except Exception:
+            pass
+        if error is not None:
+            self.notify_status(error, refused=True)
+            return
+        if result is None:
+            self.notify_status("backup cancelled", refused=True)
+            return
+        self.notify_status(
+            f"backed up {result.count} record(s) to {literal(result.path)}"
+        )
+
     def _open_whole_bank(self, plan) -> None:
         """Push the whole-bank screen; run the plan when it confirms."""
 
@@ -3518,6 +3606,7 @@ Keys
   i         what the unit says it is
   I         import programs from a .syx / .sqs file
   E         export favourited User programs to a .syx file
+  B         back up the whole unit to a .syx file
   N         initialise the User bank (programs 000-126)
   q         quit
 
