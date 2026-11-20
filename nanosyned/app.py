@@ -24,9 +24,10 @@ Two panes: banks on the left, that bank's programs on the right.
 
 Four rules, each about not lying to the user:
 
-**Moving the cursor never sends anything.** Selecting a program changes
-what the instrument plays. Selection is bound to Enter and nothing else,
-and a test enforces it.
+**Moving the cursor is silent by default.** Selecting a program changes
+what the instrument plays. Enter always selects; `a` explicitly enables
+cursor-follow auto-load, and the choice is remembered. A test enforces the
+default silence.
 
 **Reading names makes no sound**, and reaches exactly one bank. The
 protocol has a request for the 128 user programs and for nothing else: the
@@ -52,7 +53,7 @@ import argparse
 import os
 import sys
 import threading
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -187,7 +188,14 @@ WRITE_HINTS: tuple[str, ...] = (
     "Z undo all",
 )
 KEY_HINTS = keys.legend(
-    extras=("S scan device", "* rating", "V rating filter", *WRITE_HINTS)
+    extras=(
+        "S scan device",
+        "* rating",
+        "V rating filter",
+        "a auto-load",
+        "←/→ pane",
+        *WRITE_HINTS,
+    )
 )
 
 
@@ -199,6 +207,31 @@ def wrap_blocks(blocks, width: int, sep: str = _SEP) -> str:
     module's published surface.
     """
     return _wrap_blocks(blocks, width, sep)
+
+
+class PaneTable(DataTable):
+    """A pane table whose left/right arrows move focus between panes."""
+
+    BINDINGS: ClassVar[list[BindingType]] = cast(
+        list[BindingType],
+        [
+            binding
+            for binding in DataTable.BINDINGS
+            if isinstance(binding, Binding) and binding.key not in ("left", "right")
+        ]
+        + [
+            Binding("left", "focus_left_pane", "Left pane", show=False),
+            Binding("right", "focus_right_pane", "Right pane", show=False),
+        ],
+    )
+
+    def action_focus_left_pane(self) -> None:
+        app: Any = self.app
+        app.action_focus_left_pane()
+
+    def action_focus_right_pane(self) -> None:
+        app: Any = self.app
+        app.action_focus_right_pane()
 
 
 class NanosynedApp(App):
@@ -250,6 +283,7 @@ class NanosynedApp(App):
         Binding("asterisk", "edit_rating", "Rating"),
         Binding("V", "rating_filter", "Rating filter"),
         Binding("slash", "search", "Search"),
+        Binding("a", "toggle_auto_load", "Auto-load"),
         # The write path. `e` opens the editor only while the gate is armed;
         # `m` opens the mix picker/editor and `g` the global editor under the
         # same rule; `M` sends Mode Select, which changes what plays and
@@ -378,6 +412,10 @@ class NanosynedApp(App):
         #: means a test that asked for silence and gets it. The cursor is
         #: clamped to whatever the first fill produced, in ``on_mount``.
         self._saved_slot_cursor: int | None = None
+        #: Whether moving the slot cursor sends the focused preset to the
+        #: unit. Off by default; toggled with `a` and remembered.
+        self._auto_load = False
+        self._auto_load_timer: Any = None
         #: The remembered rating filter, or None for "show everything".
         #: Restored here rather than in ``on_mount`` for the same reason
         #: as the view: the first ``_fill`` builds rows through
@@ -421,6 +459,9 @@ class NanosynedApp(App):
                     self.rating_filter = RatingFilter(
                         stars=saved_stars, at_least=bool(saved_at_least)
                     )
+                saved_auto = _cfg.load_ui_bool("auto_load", ui_path)
+                if saved_auto is not None:
+                    self._auto_load = bool(saved_auto)
                 # Restore the remembered MIDI channel for the device.
                 saved_channel = _cfg.load_channel(self._config_path)
                 if saved_channel is not None and 0 <= saved_channel <= 15:
@@ -451,8 +492,8 @@ class NanosynedApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="panes"):
-            yield DataTable(id="bank-table", cursor_type="row")
-            yield DataTable(id="slot-table", cursor_type="row")
+            yield PaneTable(id="bank-table", cursor_type="row")
+            yield PaneTable(id="slot-table", cursor_type="row")
         yield Static("", id="detail")
         yield Static("", id="status")
         # KEY_HINTS passed explicitly: the shared widget defaults to the
@@ -582,6 +623,7 @@ class NanosynedApp(App):
                 row=min(self._remembered_slot, len(self._current) - 1)
             )
         self._restoring = False
+        self._schedule_auto_load()
 
     # --- filling ------------------------------------------------------------
 
@@ -688,6 +730,7 @@ class NanosynedApp(App):
         rating_stars: Any = UNSET,
         rating_at_least: Any = UNSET,
         scan_offer_dismissed: Any = UNSET,
+        auto_load: Any = UNSET,
     ) -> None:
         """Persist where the user was and what the browser remembers.
 
@@ -717,6 +760,7 @@ class NanosynedApp(App):
                 ("rating_stars", rating_stars),
                 ("rating_at_least", rating_at_least),
                 ("scan_offer_dismissed", scan_offer_dismissed),
+                ("auto_load", auto_load),
             ):
                 if value is UNSET:
                     continue
@@ -1152,6 +1196,7 @@ class NanosynedApp(App):
             # neither must a queued highlight while the restore settles.
             if event.data_table.has_focus and not self._restoring:
                 self._save_ui_state(slot_cursor=event.cursor_row)
+                self._schedule_auto_load()
 
     def on_data_table_row_selected(self, event) -> None:
         """Enter on a slot. It arrives here, not as a binding."""
@@ -1160,12 +1205,66 @@ class NanosynedApp(App):
 
     def action_switch_pane(self) -> None:
         left = self.query_one("#bank-table", DataTable)
-        right = self.query_one("#slot-table", DataTable)
-        (right if left.has_focus else left).focus()
+        if left.has_focus:
+            self.action_focus_right_pane()
+        else:
+            self.action_focus_left_pane()
+
+    def action_focus_left_pane(self) -> None:
+        if self._auto_load_timer is not None:
+            self._auto_load_timer.stop()
+            self._auto_load_timer = None
+        self.query_one("#bank-table", DataTable).focus()
+
+    def action_focus_right_pane(self) -> None:
+        self.query_one("#slot-table", DataTable).focus()
+        self._schedule_auto_load()
+
+    def action_toggle_auto_load(self) -> None:
+        """Turn cursor-follow selection on or off; remember the choice."""
+        self._auto_load = not self._auto_load
+        self._save_ui_state(auto_load=self._auto_load)
+        if not self._auto_load and self._auto_load_timer is not None:
+            self._auto_load_timer.stop()
+            self._auto_load_timer = None
+        state = "on" if self._auto_load else "off"
+        self.notify_status(f"auto-load {state}")
+        if self._auto_load:
+            self._schedule_auto_load()
+
+    def _schedule_auto_load(self) -> None:
+        """Send the focused preset after a short pause, not on every repeat."""
+        if not self._auto_load or self._restoring or self._filling:
+            return
+        slots = self.query_one("#slot-table", DataTable)
+        if not slots.has_focus:
+            return
+        if self._auto_load_timer is not None:
+            self._auto_load_timer.stop()
+        self._auto_load_timer = self.set_timer(0.12, self._auto_load_focused)
+
+    def _auto_load_focused(self) -> None:
+        self._auto_load_timer = None
+        if not self._auto_load or self._restoring or self._filling:
+            return
+        slots = self.query_one("#slot-table", DataTable)
+        if not slots.has_focus:
+            return
+        row = slots.cursor_row
+        if not 0 <= row < len(self._current):
+            return
+        if self._busy:
+            return
+        if not self._exchange.acquire(blocking=False):
+            return
+        self._select_worker(self._current[row])
 
     # --- operations ---------------------------------------------------------
 
     def action_select(self) -> None:
+        if self._auto_load_timer is not None:
+            self._auto_load_timer.stop()
+            self._auto_load_timer = None
         table = self.query_one("#slot-table", DataTable)
         row = table.cursor_row
         if not 0 <= row < len(self._current):
@@ -3263,6 +3362,8 @@ Keys
   /         search names, tags or notes
   [ ]       previous / next MIDI channel
   c         set the MIDI channel
+  a         auto-load the focused preset (PC/LSB/MSB)
+  ← →       switch pane
   f         favourite the slot under the cursor
   F         all slots / favourites here / every favourite
   t n       tags, note

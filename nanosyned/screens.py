@@ -101,11 +101,11 @@ class KeyHints(_LibraryKeyHints):
 
     # The family caps the legend and lets an app pick the cap. The default of
     # two lines is right for the canonical list, but this browser's is longer:
-    # at a hundred columns it needs four, and a two-line cap would hide the
-    # whole write path -- ``g global``, ``w write gate``, ``z undo``,
-    # ``Z undo all`` -- and ``? help`` behind the pointer. Four shows the
-    # whole list at that width and still caps it on a narrow terminal.
-    MAX_LINES = 4
+    # at a hundred columns it needs five, and a smaller cap would hide the
+    # write path, auto-load/pane hints or ``? help`` behind the pointer.
+    # Five shows the whole list at that width and still caps it on a narrow
+    # terminal.
+    MAX_LINES = 5
 
     def on_mount(self) -> None:
         super().on_mount()

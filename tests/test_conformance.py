@@ -92,7 +92,14 @@ def test_the_legend_matches_the_family() -> None:
     # shared hint. test_favorites.py checks that every binding appears.
     problems = conformance.check_legend(
         KEY_HINTS,
-        extras=("S scan device", "* rating", "V rating filter", *WRITE_HINTS),
+        extras=(
+            "S scan device",
+            "* rating",
+            "V rating filter",
+            "a auto-load",
+            "←/→ pane",
+            *WRITE_HINTS,
+        ),
     )
     assert not problems, "\n".join(problems)
 

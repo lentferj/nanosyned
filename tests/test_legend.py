@@ -198,19 +198,19 @@ class TestTheFooterIsCapped:
     two-line cap would hide the write path behind the pointer.
     """
 
-    def test_the_cap_is_four_lines(self):
-        assert KeyHints.MAX_LINES == 4
+    def test_the_cap_is_five_lines(self):
+        assert KeyHints.MAX_LINES == 5
 
-    def test_the_whole_legend_needs_four_lines_at_a_hundred_columns(self):
-        """Four is the measured need, not a round number.
+    def test_the_whole_legend_needs_five_lines_at_a_hundred_columns(self):
+        """Five is the measured need after auto-load and pane navigation.
 
         ``98`` is the usable width of a hundred-column terminal -- the
         width the family sizes its footers for -- and the wrapped legend
-        is exactly four lines there, so the cap hides nothing at that
+        is exactly five lines there, so the cap hides nothing at that
         width.
         """
         packed = wrap_blocks(KEY_HINTS, 98)
-        assert len(packed.splitlines()) == 4
+        assert len(packed.splitlines()) == 5
         assert _unpack(packed) == list(KEY_HINTS)
 
     async def test_a_hundred_columns_renders_everything_with_no_pointer(self):
@@ -243,7 +243,9 @@ class TestTheFooterIsCapped:
             visible = lines[-1][: -len(KeyHints.MORE)].rstrip()
             for line in [*lines[:-1], visible]:
                 for piece in line.split(keys.LEGEND_SEPARATOR):
-                    assert piece.strip() in KEY_HINTS, piece
+                    text = piece.strip().rstrip("·").strip()
+                    if text:
+                        assert text in KEY_HINTS, text
             # The cut really happened: untruncated, this width needs more.
             wrapped = wrap_blocks(KEY_HINTS, widget.size.width - 2)
             assert len(wrapped.splitlines()) > len(lines)
