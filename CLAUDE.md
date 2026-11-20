@@ -101,6 +101,14 @@ rule the siblings apply to their instruments' ROM contents.
   out; if the read fails, nothing is written, because a write that cannot
   be undone is not performed. Backups live in the per-platform settings
   directory under `backups/` and never overwrite one another.
+- **A full backup is a normal `.syx`, not an envelope.** `B` in the browser
+  or `nanocli backup save --file FILE` (no gate, no `--allow-write` /
+  `--yes`) reads the whole unit to one file — 356 messages, 79,071 bytes:
+  programs 000-126 (program 127 excluded), effects 000-127, mixes 000-099
+  (mix 100 excluded), and the global record. It reads all first, then writes
+  atomically; it is read-only toward the unit. Restore it through
+  `nanocli send FILE --allow-write --yes`; `backup list` / `backup restore`
+  remain for the pre-write JSON envelopes, not full `.syx` files.
 - **Every store is verified by read-back.** The unit answers a store with
   silence whether it took it or not, so a store is compared byte for byte
   against what the unit holds afterwards, and what did not match is named

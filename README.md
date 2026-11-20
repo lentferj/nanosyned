@@ -202,6 +202,7 @@ beside a session that is driving the hardware.
 | `g` | edit the global record |
 | `I` | import programs from a `.syx` / `.sqs` file |
 | `E` | export favourited User programs to a `.syx` file |
+| `B` | full backup: read the whole unit into one `.syx` file — silent, no gate |
 | `N` | initialise the User bank: replace 000-126 with the unit's Init program; 127 Off untouched; backup/verify/one undo |
 | `w` | arm / lock the write gate |
 | `z` / `Z` | undo / undo all — put back what a store replaced |
@@ -246,6 +247,10 @@ nanocli send FILE --allow-write --yes
 nanocli set program 8 0 0 42 --allow-write --yes
                                    # write one parameter (MIDI Edit; the
                                    #   working copy moves, nothing is stored)
+nanocli backup save --file PATH       # silent, read-only FULL backup of the
+                                    #   whole unit to one .syx; --force
+                                    #   replaces an existing file; no gate,
+                                    #   no --allow-write / --yes
 nanocli backup list                # backups on disk (no unit needed)
 nanocli backup restore FILE --allow-write --yes
                                    # write a backup back — DESTRUCTIVE
@@ -355,6 +360,37 @@ overwrites one already there, so the restore points accumulate. `nanocli
 backup list` shows them newest first, and a backup that cannot be read is
 listed with its error rather than dropped — a restore point you cannot read
 is exactly the thing to be told about.
+
+### Full backups
+
+The per-write envelopes above protect a single destination. A **full backup**
+captures the whole unit in one file: press `B` in the browser, or run
+`nanocli backup save --file FILE`. The browser prompts for a path and
+defaults to `nanosyned-backup-YYYYMMDD-HHMMSS.syx` in the remembered import
+folder (or the home directory); the CLI writes the file it is given, with
+`--force` to replace an existing one.
+
+It is one ordinary Alesis `.syx` — the same kind of file `nanocli send`
+takes — not the JSON envelope used for pre-write backups. It holds **356
+messages / 79,071 bytes**: user programs 000-126 (127 programs; 127 is
+hardwired silent and excluded), user effects 000-127 (128), user mixes
+000-099 (100; 100 is the non-stored edit buffer and excluded), and the one
+global settings record.
+
+All 356 destinations are read first, and only then is the file written
+atomically — to `path + ".tmp"`, fsynced, then `os.replace`d into place. A
+failed or cancelled read leaves no file behind, and a partial file never
+appears. Individual record reads are used rather than the All Dump request,
+so a failure names the destination it stopped on. Because it only reads the
+unit, a full backup is silent: no write gate, no `--allow-write` / `--yes`.
+
+Restore it with the normal send path: `nanocli send FILE --allow-write
+--yes` reads and backs up every destination, stores, and verifies. (A full
+backup is a plain `.syx`, not a pre-write JSON envelope, so
+`nanocli backup restore` is not the tool for it — that command remains for
+the envelopes. Likewise `nanocli backup list` still lists only the pre-write
+JSON envelopes in the settings `backups/` directory; a full `.syx` is
+wherever you wrote it.)
 
 ## Writing to the instrument
 

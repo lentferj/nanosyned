@@ -628,3 +628,31 @@ Mode Select updates it on success. The direct mix selection does not use the
 write gate because it is a selection, like Enter on a program; `M` remains
 the gated manual mode change. `e` on the focused mix opens its editor; the
 old `m` prompt is gone.
+
+## 28. A full backup is a normal `.syx`, not another envelope
+
+A full backup captures the whole unit in one file so the entire state can be
+restored in a single send. It is deliberately not another JSON envelope: the
+file is one ordinary Alesis `.syx`, the same shape `nanocli send` accepts.
+
+- **What it holds:** 356 messages / 79,071 bytes. User programs 000-126
+  (127 programs; 127 is hardwired silent and excluded), user effects
+  000-127 (128), user mixes 000-099 (100; 100 is the non-stored edit buffer
+  and excluded), and the one global settings record.
+- **Individual reads, not All Request.** Each record is read with the same
+  per-destination read used elsewhere, so a failure names the destination it
+  stopped on instead of collapsing into one opaque All Dump error.
+- **Read all first, then write atomically.** All 356 destinations are read
+  before any file is created; only then is the file written to
+  `path + ".tmp"`, fsynced, and `os.replace`d into place. A failed or
+  cancelled read leaves no file behind.
+- **Read-only toward the unit.** It needs no write gate and no
+  `--allow-write` / `--yes`; the browser confirms before replacing an
+  existing file, and the CLI uses `--force` for the same purpose.
+- **Entry points:** `B` in the browser (a path prompt defaulting to
+  `nanosyned-backup-YYYYMMDD-HHMMSS.syx` in the remembered import folder,
+  or home) and `nanocli backup save --file PATH`.
+- **Restore:** the normal send path — `nanocli send FILE --allow-write
+  --yes` reads and backs up every destination, stores, and verifies.
+  `nanocli backup restore` remains for the pre-write JSON envelopes, not full
+  `.syx` files, and `nanocli backup list` still lists only those envelopes.
