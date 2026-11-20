@@ -133,8 +133,9 @@ missing-subject " is provided **as is**" defects the siblings fixed; no
 
 These are not style. A task that breaks one is wrong even if `make check` is green.
 
-1. **Cursor movement sends nothing.** `select()` is bound to Enter and nothing
-   else; enforced by `tests/test_app.py::TestCursorIsSilent` and the new
+1. **Cursor movement is silent by default.** `select()` is bound to Enter;
+   the explicit `a` auto-load mode is the only exception, and it is off by
+   default. Enforced by `tests/test_app.py::TestCursorIsSilent` and
    `test_no_sound.py`.
 2. **Only the User bank can be read.** The other four are ROM and have no
    request. Five banks, one dump request.

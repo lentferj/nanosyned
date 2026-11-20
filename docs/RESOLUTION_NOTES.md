@@ -215,7 +215,8 @@ Dump is not one message and is not read by seeking to offsets.
 
 Arrived with the code and did not have to be rediscovered:
 
-* Moving the cursor sends nothing, enforced by a test.
+* Moving the cursor sends nothing by default, enforced by a test. The
+  explicit `a` auto-load mode is the only exception; it is remembered.
 * Workers do MIDI and nothing else; the favourites store is SQLite and
   refuses cross-thread use.
 * `_busy` is set on the thread that checks it, not inside the worker.
@@ -591,3 +592,20 @@ programs.
 - **No free slots:** points to `N` (init bank) or the single/multiple picker.
 - **Programs only:** effects, mixes and global records are not appended.
 - **CLI:** `nanocli import FILE --append` (plus `--cut`, `--dry-run`).
+
+## 26. Auto-load and left/right pane focus
+
+Cursor movement is silent by default. `a` explicitly enables **auto-load**:
+while the slot pane has focus, moving the cursor sends the focused slot's
+Bank Select MSB/LSB and Program Change after a 120 ms debounce. The debounce
+coalesces key repeat and fast scrolling; Enter cancels a pending auto-load
+and performs its explicit select. The toggle is remembered in
+`ui-state.toml` as `auto_load`. Going left, or leaving the slot pane, cancels
+a pending send. Auto-load never uses the write gate: a selection is not a
+store.
+
+The two panes are focused with `tab` or with `←`/`→`. The pane tables replace
+the DataTable's left/right cursor bindings with pane-focus actions; up/down
+and Enter remain the DataTable's. The default silence invariant is now
+"cursor movement sends nothing unless the user has explicitly enabled
+auto-load"; `tests/test_auto_load.py` pins both states and the persistence.

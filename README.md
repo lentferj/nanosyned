@@ -171,9 +171,10 @@ beside a session that is driving the hardware.
 
 | key | |
 |---|---|
-| `↑↓` | move the cursor — this sends nothing, ever |
+| `↑↓` | move the cursor — silent unless auto-load is on |
 | `⏎` | select this slot **on the unit** — it will sound |
-| `tab` | switch pane (banks ↔ slots) |
+| `tab` / `←` / `→` | switch pane (banks ↔ slots) |
+| `a` | auto-load the focused preset: send PC/LSB/MSB when the cursor moves |
 | `S` | scan the unit: read the User bank's names, with progress, cancellable |
 | `r` | read the User bank's names again (silent) |
 | `/` | search names, tags and notes |
@@ -193,8 +194,9 @@ beside a session that is driving the hardware.
 | `z` / `Z` | undo / undo all — put back what a store replaced |
 | `i` / `?` / `q` | device identity / help / quit |
 
-The cursor never sends a byte, `⏎` is the one key that makes the instrument
-play, and every write key is inert until `w` has armed the gate — see
+The cursor is silent until `a` turns auto-load on; after that, moving the slot
+cursor sends the focused preset's PC/LSB/MSB. `⏎` is always the explicit
+one-key select, and every write key is inert until `w` has armed the gate — see
 [Writing to the instrument](#writing-to-the-instrument) for the whole fence.
 `l` is a preview load, not a store: it needs no gate, but it is refused while
 another read or write is in flight.

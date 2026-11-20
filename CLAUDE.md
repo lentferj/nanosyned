@@ -109,10 +109,11 @@ rule the siblings apply to their instruments' ROM contents.
 - **User program 127 is hardwired silent** and cannot be changed; the
   editor, `nanocli send` and `nanocli backup restore` all refuse it
   outright.
-- `select()` is the only thing here that makes a sound, it is bound to
-  Enter and nothing else, and `tests/test_app.py`'s `TestCursorIsSilent`
-  enforces that moving the cursor never sends MIDI. That test matters
-  more than any other in the suite.
+- `select()` is the only thing here that makes a sound: Enter always
+  selects, and `a` explicitly enables cursor-follow auto-load. The cursor
+  is silent by default, and `tests/test_app.py`'s `TestCursorIsSilent`
+  enforces that default. That test matters more than any other in the
+  suite.
 - `SEND_GAP` is **measured at 0.000 on the bench**; `SELECT_GAP` in
   `nano/bridge.py` is a **guess** and is labelled as such at the point of
   use. `tools/measure_send_gap.py` measures both on the bench.
