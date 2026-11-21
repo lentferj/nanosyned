@@ -79,11 +79,15 @@ except ImportError:  # pragma: no cover - environment check
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from nano import banks  # noqa: E402
+from nano import (  # noqa: E402
+    banks,
+    fullbackup,
+)
 from nano import catalog as cat  # noqa: E402
 from nano.favorites import Favorites  # noqa: E402
-from nanosyned.app import NanosynedApp  # noqa: E402
+from nanosyned.app import MIXES_BANK, NanosynedApp  # noqa: E402
 from nanosyned.demo import DemoDevice, demo_name  # noqa: E402
+from nanosyned.restorebank import FullRestoreScreen  # noqa: E402
 from nanosyned.scan import ScanOfferScreen  # noqa: E402
 from nanosyned.screens import KeyHints, ReportScreen  # noqa: E402
 from vinsynlib.ui.modals import SearchScreen  # noqa: E402
@@ -266,6 +270,15 @@ async def shot_detail(app: NanosynedApp, pilot: Any) -> None:
     await wait_for_text(app, pilot, "hardwired silent program")
 
 
+async def shot_mixes(app: NanosynedApp, pilot: Any) -> None:
+    """The Mixes row, its 100 slots, and a mix's detail line."""
+    await wait_for_idle(app, pilot)
+    app._fill(MIXES_BANK)
+    await wait_for_idle(app, pilot)
+    await wait_for_text(app, pilot, "Mixes")
+    await wait_for_text(app, pilot, "Mix mode")
+
+
 async def shot_favourites(app: NanosynedApp, pilot: Any) -> None:
     """The favourites view, with a few invented slots marked."""
     await wait_for_idle(app, pilot)
@@ -275,7 +288,7 @@ async def shot_favourites(app: NanosynedApp, pilot: Any) -> None:
         await pilot.pause()
         await pilot.press("down")
         await pilot.pause()
-    await pilot.press("v")
+    await pilot.press("F")
     await pilot.pause()
     await wait_for_text(app, pilot, "favourites in this bank")
 
@@ -370,6 +383,19 @@ async def shot_editor(app: NanosynedApp, pilot: Any) -> None:
         raise SkipShot(f"the editor could not be opened: {exc}") from exc
 
 
+async def shot_restore(app: NanosynedApp, pilot: Any) -> None:
+    """The full-restore confirmation, with a real demo backup file."""
+    shot_dir = Path(tempfile.gettempdir()) / "nanosyned-demo"
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    path = shot_dir / "nanosyned-backup-demo.syx"
+    fullbackup.backup_device(DemoDevice(), str(path), overwrite=True)
+    app._restore_file_chosen(str(path))
+    await wait_for_screen(app, pilot, FullRestoreScreen)
+    await pilot.press("w")
+    await pilot.pause()
+    await wait_for_text(app, pilot, "ARMED")
+
+
 SHOTS: list[tuple[str, Any, tuple[int, int], bool, list[str]]] = [
     (
         "browser",
@@ -383,7 +409,14 @@ SHOTS: list[tuple[str, Any, tuple[int, int], bool, list[str]]] = [
         shot_detail,
         BROWSER_SIZE,
         True,
-        ["hardwired silent program", "Program Change"],
+        ["hardwired silent program"],
+    ),
+    (
+        "mixes",
+        shot_mixes,
+        BROWSER_SIZE,
+        True,
+        ["Mixes", "Mix mode"],
     ),
     (
         "favourites",
@@ -403,6 +436,13 @@ SHOTS: list[tuple[str, Any, tuple[int, int], bool, list[str]]] = [
     ),
     ("device", shot_device, MODAL_SIZE, True, ["manufacturer"]),
     ("editor", shot_editor, BROWSER_SIZE, True, ["edit user", "arm the store"]),
+    (
+        "restore",
+        shot_restore,
+        MODAL_SIZE,
+        True,
+        ["Restore full backup", "127 user program"],
+    ),
 ]
 
 
