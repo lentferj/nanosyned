@@ -51,6 +51,7 @@ __all__ = [
     "plan_append",
     "plan_bank",
     "plan_init",
+    "plan_restore",
     "plan_single",
 ]
 
@@ -405,3 +406,26 @@ def plan_all_global(bank: SourceBank) -> ImportPlan:
         "source global settings",
     )
     return _assemble([step], [])
+
+
+def plan_restore(bank: SourceBank) -> ImportPlan:
+    """Every restorable record in one source bank, in backup order.
+
+    This is the full-file counterpart of the program-only plans: programs
+    first, then effects, mixes and the global record. The same exclusions
+    apply -- source program 127 is hardwired silent and source mix 100 is
+    the non-stored edit buffer -- and they are reported in ``skipped``
+    rather than silently dropped.
+
+    It is pure, like every planner here. The caller reads the file, shows
+    the counts, and sends the steps through :mod:`nano.writing`.
+    """
+    parts = (
+        plan_bank(bank),
+        plan_all_effects(bank),
+        plan_all_mixes(bank),
+        plan_all_global(bank),
+    )
+    steps = [step for part in parts for step in part.steps]
+    skipped = [sentence for part in parts for sentence in part.skipped]
+    return _assemble(steps, skipped)

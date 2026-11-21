@@ -53,6 +53,49 @@ def _mixes(*numbers: int, label: str = "bank 0") -> importing.SourceBank:
     return bank
 
 
+class TestPlanRestore:
+    def test_every_kind_goes_in_backup_order(self):
+        bank = _bank(0, 126, 127)
+        bank.effects[0] = bytes(rec.EFFECTS_BYTES)
+        bank.effects[127] = bytes(rec.EFFECTS_BYTES)
+        bank.mixes[0] = bytes(rec.MIX_BYTES)
+        bank.mixes[99] = bytes(rec.MIX_BYTES)
+        bank.mixes[100] = bytes(rec.MIX_BYTES)
+        bank.globals_ = bytes(rec.GLOBAL_BYTES)
+
+        plan = importplan.plan_restore(bank)
+
+        assert [step.kind for step in plan.steps] == [
+            "program",
+            "program",
+            "effects",
+            "effects",
+            "mix",
+            "mix",
+            "global",
+        ]
+        assert [step.target for step in plan.steps] == [
+            0,
+            126,
+            0,
+            127,
+            0,
+            99,
+            None,
+        ]
+        assert plan.skipped == (
+            "source 127 is hardwired silent",
+            "source mix 100 is the edit buffer; skipped",
+        )
+        assert len(plan.overwrites) == len(plan.steps)
+
+    def test_a_program_only_bank_still_plans(self):
+        plan = importplan.plan_restore(_bank(0))
+
+        assert [step.kind for step in plan.steps] == ["program"]
+        assert plan.skipped == ()
+
+
 class TestPlanBank:
     def test_every_program_goes_to_its_own_slot(self):
         plan = importplan.plan_bank(_bank(0, 5, 126))
