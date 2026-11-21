@@ -29,7 +29,7 @@ async def _until(pilot, ready, attempts=300):
     for _ in range(attempts):
         if ready():
             return
-        await pilot.pause()
+        await pilot.pause(0.01)
     raise AssertionError("the app never reached the expected state")
 
 

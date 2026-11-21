@@ -276,7 +276,7 @@ class _AppCase:
     @staticmethod
     async def _wait(pilot, predicate, tries=400):
         for _ in range(tries):
-            await pilot.pause()
+            await pilot.pause(0.01)
             if predicate():
                 return
         assert predicate(), "the worker never finished"

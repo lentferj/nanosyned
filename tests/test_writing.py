@@ -145,7 +145,9 @@ class TestBackup:
         # directory produces. No internal is patched, so this is the loop's
         # own error path -- and the loop here is whatever object the module
         # holds, which another test's sys.modules cleanup may have replaced.
-        blocked = tmp_path / "config-home" / "nanosyned"
+        # The platform settings directory, whatever this runner calls it:
+        # make its parent a file so ``save`` cannot create ``backups`` under it.
+        blocked = pathlib.Path(bk.backup_dir()).parent
         blocked.parent.mkdir(parents=True, exist_ok=True)
         blocked.write_text("not a directory")
 

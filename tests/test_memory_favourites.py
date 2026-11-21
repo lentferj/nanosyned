@@ -53,8 +53,12 @@ def _bind(app, number: int, record: bytes) -> str:
 async def _cursor(app, pilot, number: int) -> None:
     app._fill("USER")
     await pilot.pause()
-    app.query_one("#slot-table").move_cursor(row=number)
-    await pilot.pause()
+    table = app.query_one("#slot-table")
+    table.move_cursor(row=number)
+    for _ in range(200):
+        await pilot.pause(0.01)
+        if table.cursor_row == number:
+            break
 
 
 class TestKnownDigest:

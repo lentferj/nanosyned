@@ -147,7 +147,7 @@ class TestReadingNames:
             await pilot.pause()
             await pilot.press("r")
             for _ in range(400):
-                await pilot.pause()
+                await pilot.pause(0.01)
                 if app.catalog.live_name("USER", 0) is not None:
                     break
             assert app.catalog.live_name("USER", 0) is not None
@@ -204,7 +204,7 @@ class TestFavouritesActOnTheRowNotThePane:
             app.query_one("#slot-table").focus()
             await pilot.press("f")
             for _ in range(400):
-                await pilot.pause()
+                await pilot.pause(0.01)
                 if bank_table.get_row("P2")[3] == "1":
                     break
 
@@ -215,7 +215,7 @@ class TestFavouritesActOnTheRowNotThePane:
             # Toggle off: count goes back to empty.
             await pilot.press("f")
             for _ in range(400):
-                await pilot.pause()
+                await pilot.pause(0.01)
                 if bank_table.get_row("P2")[3] == "":
                     break
             p2_row = bank_table.get_row("P2")
@@ -742,7 +742,7 @@ class TestWriting:
     async def _wait(pilot, predicate, tries=400):
         """Pause until ``predicate()`` holds; the work runs on a worker."""
         for _ in range(tries):
-            await pilot.pause()
+            await pilot.pause(0.01)
             if predicate():
                 return
         assert predicate(), "the worker never finished"
@@ -925,7 +925,7 @@ class TestAFailedReadLeavesTheAppUsable:
     @staticmethod
     async def _wait(pilot, predicate, tries=400):
         for _ in range(tries):
-            await pilot.pause()
+            await pilot.pause(0.01)
             if predicate():
                 return
         assert predicate(), "the worker never finished"
@@ -998,7 +998,7 @@ class TestTheSubtitleShowsTheChannel:
             assert "General MIDI" in app.sub_title
             app._fill("USER")
             for _ in range(400):
-                await pilot.pause()
+                await pilot.pause(0.01)
                 if "User" in app.sub_title:
                     break
             assert "User" in app.sub_title

@@ -49,7 +49,7 @@ async def _until(pilot, ready, attempts=200):
     for _ in range(attempts):
         if ready():
             return
-        await pilot.pause()
+        await pilot.pause(0.01)
     raise AssertionError("condition never met")
 
 
@@ -62,7 +62,9 @@ async def _open(pilot, screen, seen):
 
 def make(tmp_path):
     return NanosynedApp(
-        DemoDevice(), catalog=cat.empty(), config_path=str(tmp_path / "config.toml")
+        DemoDevice(),
+        catalog=cat.Catalog([cat.Entry("GM", 0, "Invented One")]),
+        config_path=str(tmp_path / "config.toml"),
     )
 
 
@@ -116,7 +118,13 @@ async def test_ctrl_s_returns_plan(tmp_path):
         await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
         assert "Append 2 programs?" in app.screen.prompt_text
         await pilot.press("y")
-        await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await _until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, ConfirmScreen)
+                and "Init placeholders" in app.screen.prompt_text
+            ),
+        )
         await pilot.press("y")
         await _until(pilot, lambda: bool(seen))
         assert seen == [plan]
@@ -195,7 +203,13 @@ async def test_markup_like_names_do_not_crash_the_warning_or_confirmation(tmp_pa
         await pilot.press("ctrl+s")
         await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
         await pilot.press("y")
-        await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await _until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, ConfirmScreen)
+                and "Init placeholders" in app.screen.prompt_text
+            ),
+        )
         assert "\\[/red]" in app.screen.prompt_text
         await pilot.press("n")
         await pilot.pause()
