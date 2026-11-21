@@ -288,7 +288,11 @@ class TestAWholeScan:
             await pilot.press("escape")
             assert await _until(
                 pilot,
-                lambda: not app._busy and not isinstance(app.screen, ScanScreen),
+                lambda: (
+                    not app._busy
+                    and not isinstance(app.screen, ScanScreen)
+                    and "cancelled" in str(app.query_one("#status").content)
+                ),
             )
 
             assert app.catalog.live_name("USER", 0) is None

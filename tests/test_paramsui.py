@@ -79,10 +79,12 @@ class TestParameterScreen:
         async with app.run_test() as pilot:
             await pilot.pause()
             app.action_edit_parameter()
-            for _ in range(50):
-                await pilot.pause()
+            for _ in range(400):
+                await pilot.pause(0.01)
                 if isinstance(app.screen, ParameterScreen):
-                    break
+                    warning = str(app.screen.query_one("#param-warning").content)
+                    if "Mix mode" in warning:
+                        break
             assert isinstance(app.screen, ParameterScreen)
             assert app.device.mode_selects == [True]
             assert not app._exchange.locked()

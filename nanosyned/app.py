@@ -1158,12 +1158,18 @@ class NanosynedApp(App):
         self._ensure_mix_names()
 
     def _ensure_mix_names(self) -> None:
-        """Read the 100 mix names once, in a worker, when Mixes is shown."""
+        """Read the 100 mix names once, in a worker, when Mixes is shown.
+
+        A fill can land while another exchange is still settling; retry
+        rather than leaving the pane permanently on ``Mix 000`` names.
+        """
         if self._mix_names_loaded or self._mix_names_reading:
             return
         if self._busy:
+            self.set_timer(0.05, self._ensure_mix_names)
             return
         if not self._exchange.acquire(blocking=False):
+            self.set_timer(0.05, self._ensure_mix_names)
             return
         self._mix_names_reading = True
         self.notify_status("reading mix names...")
@@ -1245,8 +1251,15 @@ class NanosynedApp(App):
         The family's shape (rxved): the widget carries a ``refused`` class
         rather than a text prefix, so a refusal is a red bar the eye cannot
         miss instead of another grey status line.
+
+        A worker can finish after the app has shut down, when the screen has
+        no status widget left. That is not a status to report and not a
+        reason to fail the worker.
         """
-        status = self.query_one("#status", Static)
+        try:
+            status = self.query_one("#status", Static)
+        except (LookupError, NoMatches):  # pragma: no cover - app shutting down
+            return
         status.update(message)
         status.set_class(refused, "refused")
 
@@ -1381,7 +1394,10 @@ class NanosynedApp(App):
         self._auto_load_timer = None
         if not self._auto_load or self._restoring or self._filling:
             return
-        slots = self.query_one("#slot-table", DataTable)
+        try:
+            slots = self.query_one("#slot-table", DataTable)
+        except (LookupError, NoMatches):  # pragma: no cover - app shutting down
+            return
         if not slots.has_focus:
             return
         row = slots.cursor_row
