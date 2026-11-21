@@ -158,7 +158,13 @@ class TestTheEnvelope:
 
     def test_the_default_directory_is_not_the_checkout(self, monkeypatch, tmp_path):
         """Beside ``config.toml``, because ``git clean`` empties a checkout."""
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        # Point every platform branch at this test's tree: Linux reads XDG,
+        # macOS reads HOME, and Windows reads LOCALAPPDATA.
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+        monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
         default = REAL_BACKUP_DIR()
         assert default == os.path.join(config_dir("nanosyned"), "backups")
         assert default.startswith(str(tmp_path))

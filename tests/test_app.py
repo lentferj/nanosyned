@@ -146,8 +146,10 @@ class TestReadingNames:
             app._fill("USER")
             await pilot.pause()
             await pilot.press("r")
-            for _ in range(40):
+            for _ in range(400):
                 await pilot.pause()
+                if app.catalog.live_name("USER", 0) is not None:
+                    break
             assert app.catalog.live_name("USER", 0) is not None
 
     async def test_reading_names_makes_no_sound(self, app):
@@ -156,7 +158,7 @@ class TestReadingNames:
             app._fill("USER")
             await pilot.pause()
             await pilot.press("r")
-            for _ in range(40):
+            for _ in range(400):
                 await pilot.pause()
             assert app.device.selected_log == []
 
@@ -201,8 +203,10 @@ class TestFavouritesActOnTheRowNotThePane:
             await pilot.pause()
             app.query_one("#slot-table").focus()
             await pilot.press("f")
-            for _ in range(4):
+            for _ in range(400):
                 await pilot.pause()
+                if bank_table.get_row("P2")[3] == "1":
+                    break
 
             # The count column should now show "1".
             p2_row = bank_table.get_row("P2")
@@ -210,8 +214,10 @@ class TestFavouritesActOnTheRowNotThePane:
 
             # Toggle off: count goes back to empty.
             await pilot.press("f")
-            for _ in range(4):
+            for _ in range(400):
                 await pilot.pause()
+                if bank_table.get_row("P2")[3] == "":
+                    break
             p2_row = bank_table.get_row("P2")
             assert p2_row[3] == ""
         store.close()
@@ -733,7 +739,7 @@ class TestWriting:
         monkeypatch.setattr(bk, "save", save)
 
     @staticmethod
-    async def _wait(pilot, predicate, tries=160):
+    async def _wait(pilot, predicate, tries=400):
         """Pause until ``predicate()`` holds; the work runs on a worker."""
         for _ in range(tries):
             await pilot.pause()
@@ -917,7 +923,7 @@ class TestAFailedReadLeavesTheAppUsable:
     """R1/R2: the release runs in a ``finally`` on every path."""
 
     @staticmethod
-    async def _wait(pilot, predicate, tries=160):
+    async def _wait(pilot, predicate, tries=400):
         for _ in range(tries):
             await pilot.pause()
             if predicate():
@@ -991,5 +997,8 @@ class TestTheSubtitleShowsTheChannel:
             await pilot.pause()
             assert "General MIDI" in app.sub_title
             app._fill("USER")
-            await pilot.pause()
+            for _ in range(400):
+                await pilot.pause()
+                if "User" in app.sub_title:
+                    break
             assert "User" in app.sub_title

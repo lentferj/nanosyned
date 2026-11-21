@@ -32,6 +32,7 @@ opened: the demo device is the only device here.
 
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 
@@ -228,7 +229,7 @@ class TestAnOldSettingsFileIsMigrated:
             "bank_index = 2\n"
             "slot_cursor = 33\n"
             "mix_number = 0\n"
-            f'import.folder = "{folder}"\n',
+            f"import.folder = {json.dumps(folder)}\n",
             encoding="utf-8",
         )
         app = make(tmp_path)

@@ -71,6 +71,40 @@ def _asked_for_hardware(config: pytest.Config) -> bool:
     )
 
 
+@pytest.fixture(autouse=True)
+def isolated_user_dirs(tmp_path_factory, monkeypatch):
+    """Keep every platform's settings and backup directory inside a private root.
+
+    ``XDG_CONFIG_HOME`` is enough on Linux and is what the local fixtures
+    used to set -- but macOS ignores it in favour of ``~/Library/Application
+    Support`` and Windows uses ``%LOCALAPPDATA%``. On those two runners the
+    old fixtures therefore wrote real settings and accumulated backups
+    between tests, which is exactly the kind of state a test must not share.
+
+    The root is deliberately *not* ``tmp_path``: file-picker tests list that
+    directory and count its entries, so helper directories next to the
+    fixture file would become extra rows.
+    """
+    root = tmp_path_factory.mktemp("user-dirs")
+    home = root / "home"
+    config_home = root / "xdg-config"
+    data_home = root / "xdg-data"
+    local_appdata = root / "local-appdata"
+    appdata = root / "appdata"
+    for directory in (home, config_home, data_home, local_appdata, appdata):
+        directory.mkdir()
+    for key, value in (
+        ("HOME", home),
+        ("USERPROFILE", home),
+        ("XDG_CONFIG_HOME", config_home),
+        ("XDG_DATA_HOME", data_home),
+        ("LOCALAPPDATA", local_appdata),
+        ("APPDATA", appdata),
+    ):
+        monkeypatch.setenv(key, str(value))
+    return root
+
+
 @pytest.fixture(scope="session")
 def unit(request: pytest.FixtureRequest) -> Iterator["NanoBridge"]:
     """A live :class:`nano.bridge.NanoBridge`, or a skip saying why not.

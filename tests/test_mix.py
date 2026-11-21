@@ -274,7 +274,7 @@ class _AppCase:
         monkeypatch.setattr(bk, "save", save)
 
     @staticmethod
-    async def _wait(pilot, predicate, tries=200):
+    async def _wait(pilot, predicate, tries=400):
         for _ in range(tries):
             await pilot.pause()
             if predicate():

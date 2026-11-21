@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from nano import importing
@@ -158,9 +160,20 @@ class TestDuplicates:
         assert bank.programs[0].name == "Second"
 
 
+def _owner_fixture(env: str, fallback: str) -> str:
+    """A file from the maintainer's collection, or a skip on a clean runner."""
+    path = os.environ.get(env, fallback)
+    if not os.path.isfile(path):
+        pytest.skip(f"{env} fixture not present at {path}")
+    return path
+
+
 class TestFactory:
     def test_factory_five_banks(self):
-        path = "/home/lentferj/Dokumente/SYNTHS/Nanosynth/Nanosynth_Factory_User.sqs"
+        path = _owner_fixture(
+            "NANOSYNED_FACTORY_SQS",
+            "/home/lentferj/Dokumente/SYNTHS/Nanosynth/Nanosynth_Factory_User.sqs",
+        )
         source = importing.read_import(path)
         assert source.kind == "sqs"
         assert len(source.banks) == 5
@@ -169,7 +182,10 @@ class TestFactory:
         assert banks_with_programs[0].index == 2
 
     def test_qesence_one_bank_128(self):
-        path = "/home/lentferj/Dokumente/SYNTHS/Nanosynth/qesence1.syx"
+        path = _owner_fixture(
+            "NANOSYNED_QESENCE_SYX",
+            "/home/lentferj/Dokumente/SYNTHS/Nanosynth/qesence1.syx",
+        )
         source = importing.read_import(path)
         assert source.kind == "syx"
         assert len(source.banks) == 1
