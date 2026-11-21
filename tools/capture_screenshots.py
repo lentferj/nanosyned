@@ -142,7 +142,7 @@ def fix_svg(svg: str) -> str:
     svg = re.sub(r"<circle[^>]*/>", "", svg)
     svg = re.sub(r"<circle[^>]*>.*?</circle>", "", svg)
     svg = re.sub(r'<text[^>]*class="[^"]*-title"[^>]*>.*?</text>', "", svg)
-    return svg
+    return "\n".join(line.rstrip() for line in svg.splitlines()) + "\n"
 
 
 def screen_text(svg: str) -> str:
