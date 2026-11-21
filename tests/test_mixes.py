@@ -25,7 +25,7 @@ from nanosyned.app import MIXES_BANK, NanosynedApp
 from nanosyned.demo import DemoDevice
 
 
-async def _until(pilot, ready, attempts=300):
+async def _until(pilot, ready, attempts=1500):
     for _ in range(attempts):
         if ready():
             return

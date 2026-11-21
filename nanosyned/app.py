@@ -1069,7 +1069,10 @@ class NanosynedApp(App):
             self.notify_status(f"{VIEW_LABELS[self.view_mode]} - {shown}")
 
     def _refill_keeping_place(self) -> None:
-        table = self.query_one("#slot-table", DataTable)
+        try:
+            table = self.query_one("#slot-table", DataTable)
+        except (LookupError, NoMatches):  # pragma: no cover - app shutting down
+            return
         row = table.cursor_row or 0
         self._fill(self._current_bank)
         if self._current:
@@ -1077,7 +1080,10 @@ class NanosynedApp(App):
 
     def _refresh_bank_fav_count(self, bank_id: str) -> None:
         """Update the favourite counter in the bank-table column for *bank_id*."""
-        table = self.query_one("#bank-table", DataTable)
+        try:
+            table = self.query_one("#bank-table", DataTable)
+        except (LookupError, NoMatches):  # pragma: no cover - app shutting down
+            return
         marked = len(self._favorite_keys(bank_id))
         table.update_cell(bank_id, "fav", str(marked) if marked else "")
 
@@ -1180,13 +1186,16 @@ class NanosynedApp(App):
         """**MIDI only.** Read every mix name; the main thread refills."""
         failure: BaseException | None = None
         names: dict[int, str] = {}
+
+        def report(done: int, total: int) -> None:
+            # A status line does not need 100 cross-thread hops on a slow
+            # runner; every tenth name is enough, plus the final one.
+            if done == total or done % 10 == 0:
+                self.call_from_thread(self._mix_names_progress, done, total)
+
         try:
             with self._busy_gate, self._lock:
-                names = self.device.read_mix_names(
-                    on_progress=lambda done, total: self.call_from_thread(
-                        self._mix_names_progress, done, total
-                    )
-                )
+                names = self.device.read_mix_names(on_progress=report)
         except _BRIDGE_ERRORS as exc:
             failure = exc
         finally:
@@ -1212,13 +1221,17 @@ class NanosynedApp(App):
         self.notify_status(f"mixes: {failure}", refused=True)
 
     def _detail(self, row: int) -> None:
+        try:
+            detail = self.query_one("#detail", Static)
+        except (LookupError, NoMatches):  # pragma: no cover - app shutting down
+            return
         if not self._current or row >= len(self._current):
-            self.query_one("#detail", Static).update("")
+            detail.update("")
             return
         entry = self._current[row]
         if entry.bank_id == MIXES_BANK:
             name = literal(self._mix_names.get(entry.number, f"Mix {entry.number:03d}"))
-            self.query_one("#detail", Static).update(
+            detail.update(
                 f"[b]{entry.display}[/b]  {name}   "
                 f"[dim]Mix mode · Program Change {entry.program_change}[/dim]"
             )
@@ -1238,7 +1251,7 @@ class NanosynedApp(App):
                 "   [dim]this one is the hardwired silent program; "
                 "selecting it mutes the channel[/dim]"
             )
-        self.query_one("#detail", Static).update(
+        detail.update(
             f"[b]{entry.display}[/b]  {name}   [dim]{entry.category}[/dim]\n"
             f"Bank Select (CC0) [b]{entry.msb}[/b] · LSB (CC32) "
             f"[b]{entry.lsb}[/b] · PC [b]{entry.program_change}[/b] · "

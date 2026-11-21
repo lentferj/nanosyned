@@ -81,7 +81,9 @@ class TestParameterScreen:
             app.action_edit_parameter()
             for _ in range(400):
                 await pilot.pause(0.01)
-                if isinstance(app.screen, ParameterScreen):
+                if isinstance(app.screen, ParameterScreen) and list(
+                    app.screen.query("#param-warning")
+                ):
                     warning = str(app.screen.query_one("#param-warning").content)
                     if "Mix mode" in warning:
                         break
