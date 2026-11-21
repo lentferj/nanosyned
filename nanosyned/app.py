@@ -67,6 +67,7 @@ from nano import (
     exporting,
     fullbackup,
     identity,
+    importing,
     importplan,
     initbank,
     livenames,
@@ -92,6 +93,7 @@ from nanosyned.editor import (
     ImportRecord,
     MixEditRecord,
     ProgramEditor,
+    RestoreRecord,
 )
 from nanosyned.importbank import WholeBankScreen
 from nanosyned.importflow import run_import_flow
@@ -99,6 +101,8 @@ from nanosyned.importprogress import ImportProgressScreen
 from nanosyned.importsingle import SingleMappingScreen
 from nanosyned.initbank import InitBankScreen
 from nanosyned.paramsui import ParameterScreen
+from nanosyned.picker import FilePickerScreen
+from nanosyned.restorebank import FullRestoreScreen
 from nanosyned.scan import SCAN_OFFER, ScanOfferScreen, ScanScreen
 from nanosyned.screens import (
     ConfirmScreen,
@@ -182,7 +186,7 @@ VIEW_LABELS = {
 #: tool's own hints in the one place the family leaves for them -- after
 #: `n note`, before `i device` -- and this tool's are the scan key, the two
 #: rating keys, auto-load and pane focus, and its editors, import/export,
-#: full backup, init, gate and undo keys. ``w``/``z``/``Z`` are the family's
+#: full backup/restore, init, gate and undo keys. ``w``/``z``/``Z`` are the family's
 #: canonical editor keys, spelled the family's way; this browser legend has
 #: no editor tier, so they are carried here as this tool's hints.
 WRITE_HINTS: tuple[str, ...] = (
@@ -195,6 +199,7 @@ WRITE_HINTS: tuple[str, ...] = (
     "I import",
     "E export favourites",
     "B backup",
+    "R restore",
     "N init bank",
     "z undo",
     "Z undo all",
@@ -313,6 +318,7 @@ class NanosynedApp(App):
         Binding("I", "import", "Import"),
         Binding("E", "export_favourites", "Export favourites"),
         Binding("B", "backup", "Backup"),
+        Binding("R", "restore", "Restore backup"),
         Binding("N", "init_bank", "Init bank"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
@@ -1629,17 +1635,24 @@ class NanosynedApp(App):
             return
         self._undo_worker(taken)
 
-    def _rewrite(self, edit: EditRecord | MixEditRecord | GlobalEditRecord) -> bytes:
+    def _rewrite(
+        self,
+        edit: EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord,
+    ) -> bytes:
         """Re-send one edit's previous bytes; return what the unit read back.
 
-        Three kinds, one door: a program store names a user slot, a mix
-        names one of the hundred mixes, and the global set has no number.
-        The worker below reads back through the same kind it wrote, so an
-        undo of a mix can never be verified against a program slot.
+        Four kinds, one door: a program store names a user slot, a mix
+        names one of the hundred mixes, effects name one of the 128 patches,
+        and the global set has no number. The worker below reads back through
+        the same kind it wrote, so an undo of a mix can never be verified
+        against a program slot.
         """
         if isinstance(edit, MixEditRecord):
             self.device.write_mix(edit.number, edit.previous)
             return self.device.read_mix(edit.number)
+        if isinstance(edit, EffectsEditRecord):
+            self.device.write_effects(edit.number, edit.previous)
+            return self.device.read_effects(edit.number)
         if isinstance(edit, GlobalEditRecord):
             self.device.write_global(edit.previous)
             return self.device.read_global()
@@ -1661,7 +1674,7 @@ class NanosynedApp(App):
                 for i in range(len(records)):
                     record = records[i]
                     edit = record.payload
-                    if isinstance(edit, ImportRecord):
+                    if isinstance(edit, (ImportRecord, RestoreRecord)):
                         failed_edits: list = []
                         detail_sentences: list[str] = []
                         for item in reversed(edit.edits):
@@ -1681,7 +1694,7 @@ class NanosynedApp(App):
                                     )
                                 )
                         if failed_edits:
-                            reduced = ImportRecord(edits=tuple(failed_edits))
+                            reduced = type(edit)(edits=tuple(failed_edits))
                             records[i] = Record(edit.label, reduced)
                             results.append(False)
                             sentences.append(", ".join(detail_sentences))
@@ -1690,7 +1703,13 @@ class NanosynedApp(App):
                         sentences.append("")
                         continue
                     if not isinstance(
-                        edit, (EditRecord, MixEditRecord, GlobalEditRecord)
+                        edit,
+                        (
+                            EditRecord,
+                            MixEditRecord,
+                            EffectsEditRecord,
+                            GlobalEditRecord,
+                        ),
                     ):
                         results.append(False)
                         sentences.append(f"{record.label}: not an edit record")
@@ -1740,7 +1759,7 @@ class NanosynedApp(App):
             if isinstance(edit, EditRecord):
                 self.catalog.set_live_name("USER", edit.number, edit.name)
                 self._bind_memory_slot(edit.number, edit.previous)
-            elif isinstance(edit, ImportRecord):
+            elif isinstance(edit, (ImportRecord, RestoreRecord)):
                 for item in edit.edits:
                     if isinstance(item, EditRecord):
                         self.catalog.set_live_name("USER", item.number, item.name)
@@ -3150,6 +3169,46 @@ class NanosynedApp(App):
             f"backed up {result.count} record(s) to {literal(result.path)}"
         )
 
+    def action_restore(self) -> None:
+        """Choose a full-backup file and open its confirmation screen."""
+        self.push_screen(FilePickerScreen(path=None), self._restore_file_chosen)
+
+    def _restore_file_chosen(self, path: str | None) -> None:
+        """Read the chosen file offline, plan every record, then ask."""
+        if not path:
+            return
+        try:
+            source = importing.read_import(path)
+        except (OSError, ValueError) as exc:
+            self._restore_report(f"could not read {path}: {exc}")
+            return
+        if len(source.banks) != 1:
+            self._restore_report(
+                f"{path} holds {len(source.banks)} banks; full restore expects one"
+            )
+            return
+        try:
+            plan = importplan.plan_restore(source.banks[0])
+        except ValueError as exc:
+            self._restore_report(str(exc))
+            return
+        if not plan.steps:
+            self._restore_report(f"{path} holds no records this app can restore")
+            return
+        self.push_screen(
+            FullRestoreScreen(plan, path=path, gate=self._write_gate),
+            self._restore_confirmed,
+        )
+
+    def _restore_report(self, sentence: str) -> None:
+        """A read-only restore refusal, in the same report screen as import."""
+        self.push_screen(ReportScreen("Restore", sentence), lambda _answer: None)
+
+    def _restore_confirmed(self, plan) -> None:
+        """Start a confirmed full restore through the normal fence."""
+        if plan is not None:
+            self._import_plan(plan, label="restore")
+
     def _open_whole_bank(self, plan) -> None:
         """Push the whole-bank screen; run the plan when it confirms."""
 
@@ -3271,16 +3330,13 @@ class NanosynedApp(App):
             done,
         )
 
-    def _import_plan(self, plan) -> None:
-        """Hand a confirmed plan to the import worker.
+    def _import_plan(self, plan, *, label: str = "import") -> None:
+        """Hand a confirmed plan to the import or restore worker.
 
         The gate is asked here, on the main thread, before a port is opened:
         a locked gate means nothing is sent and the refusal names what to do
         next. The progress screen is pushed before the worker starts so the
         user can cancel between records.
-
-        ``None`` as the starting path lets the picker consult its remembered
-        folder rather than overriding it.
         """
         refusal = self._write_gate.check()
         if refusal is not None:
@@ -3293,13 +3349,16 @@ class NanosynedApp(App):
             self.notify_status("busy", refused=True)
             return
         cancel = threading.Event()
-        progress = ImportProgressScreen(total=len(plan.steps), on_stop=cancel.set)
+        verb = "restoring" if label == "restore" else "importing"
+        progress = ImportProgressScreen(
+            total=len(plan.steps), on_stop=cancel.set, verb=verb
+        )
         self.push_screen(progress)
-        self._import_worker(plan, progress, cancel)
+        self._import_worker(plan, progress, cancel, label)
 
     @work(thread=True)
-    def _import_worker(self, plan, progress, cancel) -> None:
-        """**MIDI only.** Import a plan one record at a time with a progress screen.
+    def _import_worker(self, plan, progress, cancel, label: str = "import") -> None:
+        """**MIDI only.** Import or restore a plan one record at a time.
 
         Each step is read, backed up, stored and read back in turn; the
         progress screen is updated between steps so a cooperative cancel can
@@ -3313,7 +3372,7 @@ class NanosynedApp(App):
                 results = self._run_plan_locked(plan, progress, cancel)
         finally:
             self._exchange.release()
-        self.call_from_thread(self._import_done, plan, results, progress)
+        self.call_from_thread(self._import_done, plan, results, progress, label)
 
     def _run_plan_locked(self, plan, progress, cancel) -> list[writing.Result]:
         """Run one plan while the caller holds the busy gate and lock."""
@@ -3450,7 +3509,7 @@ class NanosynedApp(App):
             return rec.mix_name(step.record).rstrip()
         return ""
 
-    def _import_done(  # noqa: C901
+    def _import_done(  # noqa: C901, PLR0912
         self, plan, results, progress, label: str = "import"
     ) -> None:
         """Main thread: refresh names, push undo, report the summary."""
@@ -3484,17 +3543,24 @@ class NanosynedApp(App):
             self._refill_keeping_place()
         # One undo entry for the whole session; an edit's name is the name
         # that was there before the store, so `z` restores both bytes and name.
-        edits = tuple(
-            EditRecord(
-                number=r.number,
-                previous=r.previous,
-                name=writing.record_name(r.kind, r.previous),
+        # A full restore spans every record kind, so its batch is a
+        # RestoreRecord; an ordinary program import keeps its older shape.
+        if label == "restore":
+            batch = tuple(self._batch_edit(r) for r in agreed)
+            if batch:
+                self._undo_log.push(Record("restore", RestoreRecord(edits=batch)))
+        else:
+            edits = tuple(
+                EditRecord(
+                    number=r.number,
+                    previous=r.previous,
+                    name=writing.record_name(r.kind, r.previous),
+                )
+                for r in agreed
+                if r.kind == "program" and r.number is not None
             )
-            for r in agreed
-            if r.kind == "program" and r.number is not None
-        )
-        if edits:
-            self._undo_log.push(Record("import", ImportRecord(edits=edits)))
+            if edits:
+                self._undo_log.push(Record("import", ImportRecord(edits=edits)))
         memory_note = (
             f"; remembered {remembered}, re-marked {remarked}"
             if self.memory is not None
@@ -3522,6 +3588,32 @@ class NanosynedApp(App):
         if result.kind == "mix":
             return rec.mix_name(result.record).rstrip()
         return ""
+
+    @staticmethod
+    def _batch_edit(
+        result: writing.Result,
+    ) -> EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord:
+        """The undo record for one verified full-restore step."""
+        name = writing.record_name(result.kind, result.previous)
+        if result.kind == "program":
+            return EditRecord(
+                number=cast(int, result.number),
+                previous=result.previous,
+                name=name,
+            )
+        if result.kind == "mix":
+            return MixEditRecord(
+                number=cast(int, result.number),
+                previous=result.previous,
+                name=name,
+            )
+        if result.kind == "effects":
+            return EffectsEditRecord(
+                number=result.number or 0,
+                previous=result.previous,
+                name=name,
+            )
+        return GlobalEditRecord(previous=result.previous)
 
     def _preview_import(self, record) -> bool:
         """Load a source record into the program edit buffer (no store).
@@ -3607,6 +3699,7 @@ Keys
   I         import programs from a .syx / .sqs file
   E         export favourited User programs to a .syx file
   B         back up the whole unit to a .syx file
+  R         restore a full backup from a .syx file
   N         initialise the User bank (programs 000-126)
   q         quit
 

@@ -57,6 +57,7 @@ __all__ = [
     "ImportRecord",
     "MixEditRecord",
     "ProgramEditor",
+    "RestoreRecord",
     "choice_text",
 ]
 
@@ -221,19 +222,23 @@ class MixEditRecord:
 class EffectsEditRecord:
     """One completed effects store, carrying enough to put the effects back.
 
-    The effects counterpart of :class:`EditRecord`: the 65 bytes that were
-    there immediately before the write, and the name those bytes spell.
-    ``z`` re-sends them with ``write_effects``; nothing here reaches the
-    wire itself.
+    The effects counterpart of :class:`EditRecord`: the slot, the 65 bytes
+    that were there immediately before the write, and the name those bytes
+    spell. ``z`` re-sends them with ``write_effects``; nothing here reaches
+    the wire itself. ``number`` defaults to slot 0, the effects editor's
+    historic single slot; a full restore names every user effects patch.
     """
 
     previous: bytes
     name: str = ""
+    number: int = 0
 
     @property
     def label(self) -> str:
         """What the undo history calls this edit."""
-        return "the effects settings"
+        if self.number == 0:
+            return "the effects settings"
+        return f"effects patch {self.number:03d}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +273,25 @@ class ImportRecord:
     def label(self) -> str:
         """What the undo history calls this batch."""
         return f"import ({len(self.edits)} edit(s))"
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreRecord:
+    """One full-restore session's undo entry, across every record kind.
+
+    Unlike :class:`ImportRecord`, which carries User-program edits only, a
+    full restore can replace programs, effects, mixes and the global set in
+    one batch. ``z`` sends each previous record back newest-first through
+    the kind-specific writer, and a partial failure keeps the reduced entry
+    so the next undo can try again.
+    """
+
+    edits: tuple[EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord, ...]
+
+    @property
+    def label(self) -> str:
+        """What the undo history calls this batch."""
+        return f"restore ({len(self.edits)} edit(s))"
 
 
 #: The global rows a store must not present as editable, and the model the
