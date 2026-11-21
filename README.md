@@ -3,8 +3,9 @@
 
 # nanosyned
 
-A terminal browser for the **Alesis NanoSynth** — the 640 programs, the
-ones the front panel cannot reach, and the names the unit will tell you.
+A terminal browser, editor and verified SysEx backup/restore tool for the
+**Alesis NanoSynth** — the 640 programs, the ones the front panel cannot
+reach, and the names the unit will tell you.
 
 Sibling to [rxved](../rxved) (Roland XV-2020), [kwsed](../kwsed) (Korg
 Wavestation SR), [p2ked](../p2ked) (E-MU Proteus 2000) and
@@ -103,7 +104,7 @@ what any of them are called. nanosyned selects them by Bank Select and
 Program Change, reads back the names of the one bank that can be read,
 and keeps your favourites.
 
-![The browser: the five banks, and the User bank with names read off the unit](docs/screenshots/browser.png)
+![The browser: the five banks plus Mixes, with names read off the unit](docs/screenshots/browser.png)
 
 ## What it knows, and how it knows it
 
@@ -149,6 +150,8 @@ best-effort from what this app sent; it is not a reading. The currently
 playing mix is likewise not readable, so the picker does not claim to show
 one. `e` on a focused mix opens its editor; `M` still sends a manual Mode
 Select.
+
+![The Mixes pane: the sixth bank row, its 100 mixes, and the mix detail line](docs/screenshots/mixes.png)
 
 ## Install
 
@@ -198,6 +201,8 @@ beside a session that is driving the hardware.
 | `t` / `n` / `*` | tags / note / rating, 0–5 stars (on a favourite) |
 | `V` | filter by rating — exactly that many, or that many and up |
 | `e` | edit the focused program, or the focused mix in Mixes — **only while the gate is armed** |
+| `x` | edit effects patch 000 |
+| `p` | verified parameter editor: Global / Mix / Program rows |
 | `M` | set the sound mode, Program or Mix — **a write, and it changes what plays** |
 | `g` | edit the global record |
 | `I` | import programs from a `.syx` / `.sqs` file |
@@ -213,8 +218,8 @@ The cursor is silent until `a` turns auto-load on; after that, moving the slot
 cursor sends the focused preset's PC/LSB/MSB. `⏎` is always the explicit
 one-key select, and every write key is inert until `w` has armed the gate — see
 [Writing to the instrument](#writing-to-the-instrument) for the whole fence.
-`l` is a preview load, not a store: it needs no gate, but it is refused while
-another read or write is in flight.
+`x` edits the effects record through the same store fence; `p` opens the
+parameter editor, which moves the working copy but does not store it.
 
   ![Favourites view](docs/screenshots/favourites.png)
   ![Search](docs/screenshots/search.png)
@@ -234,8 +239,8 @@ nanocli read                       # the User bank's names (silent)
 nanocli mixes                      # the mix names (silent)
 nanocli dump program 12 --file p.syx   # one record off the unit, as .syx
 nanocli dump global --file g.syx       # the global settings, the same way
-nanocli dump favourites --file favs.syx # read the User bank; write only active
-                                    #   favourites; --force replaces an existing file
+nanocli dump favourites --file favs.syx # read the active favourite slots;
+                                    #   --force replaces an existing file
 nanocli select USER 12             # select it ON THE UNIT — plays; asks first
 nanocli syx FILE                   # read a .syx file (no hardware)
 nanocli find "bass"                # search known names (no hardware)
@@ -248,13 +253,13 @@ nanocli send FILE --allow-write --yes
 nanocli set program 8 0 0 42 --allow-write --yes
                                    # write one parameter (MIDI Edit; the
                                    #   working copy moves, nothing is stored)
-nanocli backup save --file PATH       # silent, read-only FULL backup of the
+nanocli backup save --file PATH     # silent, read-only FULL backup of the
                                     #   whole unit to one .syx; --force
                                     #   replaces an existing file; no gate,
                                     #   no --allow-write / --yes
-nanocli backup list                # backups on disk (no unit needed)
+nanocli backup list                 # JSON undo envelopes on disk (no unit needed)
 nanocli backup restore FILE --allow-write --yes
-                                   # write a backup back — DESTRUCTIVE
+                                    # write one JSON envelope back — DESTRUCTIVE
 nanocli init-bank --allow-write --yes
                                     # initialise User bank 000-126 with Init; 127 untouched
 nanocli init-bank --dry-run
@@ -276,10 +281,11 @@ subcommand, which is the shape people type.
 `ports`, `banks`, `list`, `syx`, `find`, `fav`, `tags` and `backup list`
 construct no bridge and open no port — they work on a headless box and while
 somebody else is using the hardware. `select` asks before it plays unless
-`--yes`. `send`, `set` and `backup restore` refuse to run without **both**
-`--allow-write` and `--yes`, and the check happens before a port is opened,
-so a refusal costs nothing. Each names what it is about to replace — by the
-name the unit holds — backs it up, sends, and reads it back.
+`--yes`. Every write invocation — `send`, `set`, `import`, `init-bank` and
+`backup restore` — refuses to run without **both** `--allow-write` and
+`--yes`, and the check happens before a port is opened, so a refusal costs
+nothing. Each names what it is about to replace — by the name the unit
+holds — backs it up, sends, and reads it back.
 
 `nanocli fav USER 12 --add --rate 4 --tags "bass" --note "for the intro"`
 favourites that slot; `--remove` un-favourites it, `--rate` alone rates one
@@ -395,6 +401,8 @@ the envelopes. Likewise `nanocli backup list` still lists only the pre-write
 JSON envelopes in the settings `backups/` directory; a full `.syx` is
 wherever you wrote it.)
 
+![The full-restore screen: file path, record counts, skipped slots, and the armed write gate](docs/screenshots/restore.png)
+
 ## Writing to the instrument
 
 Writing here is destructive and **unacknowledged**: the unit answers a store
@@ -419,8 +427,9 @@ family's arm-then-fire shape, not a suggestion:
 `nanocli send` and `nanocli backup restore` all refuse it outright.
 
 What can be written: a User program's name (the editor sends the whole
-350-byte record; the sound blocks travel through untouched), a mix's sixteen
-channels, and the global record — whole-record stores behind `w` — plus
+350-byte record; the sound blocks travel through untouched), an effects
+patch, a mix's sixteen channels, and the global record — whole-record stores
+behind `w` — plus
 single parameters through the MIDI Edit message (`nanocli set`), which moves
 the unit's working copy and is not stored, and the Program/Mix sound mode
 (`M`, the `0D` Mode Select), which changes what the unit plays. The store
@@ -435,9 +444,10 @@ unit** by a controlled before/after probe (10 Global, 27 Mix, 38 Program, 0
 Effects); the rest are still transcriptions, and the editors must treat them
 as read-only. The multi-value pass found that on 13 signed rows the spec's
 Limit sits one past the unit's top, so those rows carry the measured top
-(99/12/24) and were re-probed there before promotion. A row becomes writable only after that probe confirms its
-offset and its value law, and the findings -- including the mix and program
-rows that did not confirm, and the Effects mode the unit ignores -- are in
+(99/12/24) and were re-probed there before promotion. A row becomes writable
+only after that probe confirms its offset and its value law, and the
+findings -- including the mix and program rows that did not confirm, and the
+Effects mode the unit ignores -- are in
 `docs/PARAMETER_VERIFICATION_RUN_LOG.md`. The `.sqs` container is read by
 `nano/sqs.py`; its scanning rules are in `docs/RESOLUTION_NOTES.md` §21.
 `.mid` and `.lib` remain out of scope.
@@ -456,33 +466,26 @@ nanocli --demo --allow-write --yes import FILE --program 0=5
 nanocli --demo --allow-write --yes import FILE --all
                                        # every program in the source -> the
                                        #   same User slot, in order
-nanocli --demo --allow-write --yes import FILE --all --effects
-                                       # every program and every effects patch
+nanocli --demo --allow-write --yes import FILE --all --effects --mixes --global
+                                       # also import effects, mixes and global
 nanocli --demo import FILE --program 0=5 --dry-run
                                        # show the plan; send nothing
 ```
 
-The browser: `I` opens the file picker; choose a file, then choose **Whole
-bank** or **Single / multiple programs**. The whole-bank path writes each
-source program to its own slot; the mapping screen lets you assign source
-programs to chosen User slots, and `ctrl+s` there imports the mapping you
-built. The browser imports programs only; effects, mixes and global are the
-CLI's `--all` extras. The write gate must be armed; a locked gate refuses
-the import with no message sent.
+The browser: `I` opens the file picker, then asks **Whole bank**, **Append
+to free slots**, or **Single / multiple programs**. The whole-bank path
+writes each source program to its own slot; the mapping screen lets you
+assign source programs to chosen User slots, and `ctrl+s` there imports the
+mapping you built. The browser imports programs only; effects, mixes and
+global are the CLI's `--all` extras, or a full restore with `R`. The write
+gate must be armed; a locked gate refuses the import with no message sent.
 
 Source 127 is hardwired silent and is skipped on bank import; destination
 127 is refused as a destination everywhere. Mix slot 100 is the edit
-buffer's own slot and is never stored. Every store is backed up (once per
-slot per session), read back, and compared byte for byte; only an agreed
-read-back is recorded for undo, so `z` restores a whole import as one
-entry, and a partial failure keeps a reduced entry for the slots that did
-not come back.
-
-The browser's import mode picker offers three choices: **Whole bank**,
-**Append to free slots**, and **Single / multiple programs**. The whole-bank
-path writes each source program to its own slot; the mapping screen lets you
-assign source programs to chosen User slots, and `ctrl+s` there imports the
-mapping you built.
+buffer's own slot and is never stored. Every store is backed up, read back,
+and compared byte for byte; only an agreed read-back is recorded for undo,
+so `z` restores a whole import as one entry, and a partial failure keeps a
+reduced entry for the slots that did not come back.
 
 ### Appending imports
 
@@ -507,10 +510,9 @@ unit's Init program. User `127` (`Off`) is hardwired silent and is never
 written. Every replaced slot is read, backed up, stored and read back through
 the normal fence, and one `z` restores the whole batch. Favourite marks on the
 replaced slots are hidden; the old content and its annotations stay in the
-preset memory and return if those bytes are loaded again. The Init template is
-the unit's own
-hardwired `Off` record from slot `127` with only its name changed to `Init`;
-no parameter byte is invented. The template candidate passed a data
+preset memory and return if those bytes are loaded again. The Init template
+is the unit's own hardwired `Off` record from slot `127` with only its name
+changed to `Init`; no parameter byte is invented. The template candidate passed a data
 write/read-back check on the bench and was confirmed silent; the scratch
 slot was then restored byte-for-byte. The CLI equivalent is
 `nanocli init-bank --allow-write --yes`
@@ -551,8 +553,8 @@ The memory stores the last-seen name, the favourite flag, rating, tags,
 note, first/last seen and a seen count, in `preset-memory.db` beside
 `favorites.db`. Both files are user data and should be backed up together.
 A test or embedder can point the sidecar elsewhere with `--preset-memory`;
-the browser and `nanocli import`, `nanocli send` and `nanocli init-bank` use
-the same file.
+the browser, `R` restore, `nanocli import`, `nanocli send` and
+`nanocli init-bank` use the same file.
 
 `favorites.db` still decides which slots currently show a heart. The
 sidecar decides whether those bytes were favourited before. On a verified
@@ -609,14 +611,15 @@ believes, which is why the bench exists.
   bank is in GM order, so a standard name list fits it exactly — and the
   three preset banks are not; those names are yours to type, and they are
   not this project's to redistribute.
-- **The parameter tables are transcribed, not bench-verified.** The record
-  sizes are pinned on the unit (program 350, mix 138, effects 65, global 20
-  bytes) and one rename has been written, read back and restored on the
-  bench; the parameter *rows* in `nano/params.py` are the QS specification's,
-  and which of them this firmware honors is not established. The global
-  editor shows rows the spec documents for another model — and will not write
-  them, because a store writes the whole record and reporting success over a
-  value the unit is documented to ignore would be a lie.
+- **The parameter tables are only partly bench-verified.** The record sizes
+  are pinned on the unit (program 350, mix 138, effects 65, global 20 bytes)
+  and one rename has been written, read back and restored on the bench.
+  **75 of 178 parameter rows** have been confirmed by a controlled probe;
+  the rest in `nano/params.py` are transcriptions, and the editors keep them
+  read-only. The global editor shows rows the spec documents for another
+  model — and will not write them, because a store writes the whole record
+  and reporting success over a value the unit is documented to ignore would
+  be a lie.
 - **Mixes are decoded, not catalogued.** Their names come off the unit
   (`nanocli mixes`, `e` on a focused Mixes row); the manual never mentions them, and
   they live outside the catalog like every other live read.
@@ -626,11 +629,12 @@ believes, which is why the bench exists.
 ## Screenshots
 
 The frames in this README live in `docs/screenshots/`, each as a `.png` with
-its `.svg` source beside it: `browser` (the five banks and the slot pane),
-`detail` (the row under the cursor), `favourites` (the `F` views), `search`
-(`/`), `scan-offer` (the `S` scan), `editor`, `device` (the `i` report) and
-`help` (`?`). They are captured from `--demo` with invented names, so no real
-unit's contents appear in them.
+its `.svg` source beside it: `browser` (the five banks, Mixes and the slot
+pane), `mixes`, `detail` (the row under the cursor), `favourites` (the `F`
+views), `search` (`/`), `scan-offer` (the `S` scan), `editor`, `restore`
+(the `R` confirmation), `device` (the `i` report) and `help` (`?`). They are
+captured from `--demo` with invented names, so no real unit's contents appear
+in them.
 
   ![The detail line](docs/screenshots/detail.png)
   ![The scan offer](docs/screenshots/scan-offer.png)
@@ -650,7 +654,7 @@ make check        # everything below, in order; stops at the first failure
 | `make format` | `ruff check --fix` and `ruff format` — **the only target that edits your code** |
 | `make typecheck` | `mypy` |
 | `make test` | `pytest`, with coverage and a `term-missing` report |
-| `make test-hardware` | the same, against a real NanoSynth — opens MIDI ports, so **not** part of `check` |
+| `make test-hardware` | the hardware suite against a real NanoSynth — opens MIDI ports, so **not** part of `check` |
 | `make audit` | `pip-audit`, `vulture`, `deptry`, `detect-secrets` |
 
 All configuration lives in `pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`,
