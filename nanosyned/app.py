@@ -60,6 +60,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
+from textual.css.query import NoMatches
 from textual.widgets import DataTable, Header, Static
 
 from nano import (
@@ -641,7 +642,7 @@ class NanosynedApp(App):
         try:
             bank_table = self.query_one("#bank-table", DataTable)
             slot_table = self.query_one("#slot-table", DataTable)
-        except LookupError:  # pragma: no cover - the app is shutting down
+        except (LookupError, NoMatches):  # pragma: no cover - app shutting down
             self._restoring = False
             return
         if self._current_bank != self._remembered_bank:

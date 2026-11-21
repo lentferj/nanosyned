@@ -112,8 +112,8 @@ class FullRestoreScreen(ModalScreen[importplan.ImportPlan | None]):
             yield Static("", id="restore-gate")
             yield Static("", id="restore-status")
             yield Static(
-                "[dim]Every destination is read and backed up before it is "
-                "replaced. Program 127 and mix 100 are never destinations. "
+                "[dim]Every destination is read and backed up before it is replaced.\n"
+                "Program 127 and mix 100 are never destinations.\n"
                 "w gate · ctrl+s restore · esc / q cancel[/dim]",
                 id="restore-note",
                 classes="note",
