@@ -7,9 +7,10 @@ A terminal browser, editor and verified SysEx backup/restore tool for the
 **Alesis NanoSynth** — the 640 programs, the ones the front panel cannot
 reach, and the names the unit will tell you.
 
-Sibling to [rxved](../rxved) (Roland XV-2020), [kwsed](../kwsed) (Korg
-Wavestation SR), [p2ked](../p2ked) (E-MU Proteus 2000) and
-[x5ded](../x5ded) (Korg X5D/X5DR), and it follows their conventions.
+Sibling to [rxved](https://github.com/lentferj/rxved) (Roland XV-2020),
+kwsed (Korg Wavestation SR), [p2ked](https://github.com/lentferj/p2ked)
+(E-MU Proteus 2000) and x5ded (Korg X5D/X5DR), and it follows their
+conventions.
 
 ## Support this project
 
