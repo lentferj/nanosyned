@@ -603,7 +603,14 @@ class NanosynedApp(App):
         # queued highlight may have moved the bank, so the remembered bank,
         # cursor and guard are all put right once the dust settles -- the
         # shape rxved applies its cursor after, extended to the bank.
-        self.set_timer(0.1, self._finish_restore)
+        #
+        # With no config path there is no remembered place to settle back
+        # to, and scheduling the timer would only undo a later programmatic
+        # fill (the tests' path). The guard is released immediately instead.
+        if self._config_path is None or self._ui_state_path is None:
+            self._restoring = False
+        else:
+            self.set_timer(0.1, self._finish_restore)
         printed = len(self.catalog)
         if printed and applied:
             self.notify_status(

@@ -182,7 +182,7 @@ class TestWriteSyx:
     def test_a_write_error_removes_the_temp(self, tmp_path, monkeypatch):
         path = tmp_path / "favourites.syx"
 
-        def broken_replace(source: str, destination: str) -> None:
+        def broken_replace(source: str, _destination: str) -> None:
             raise OSError("the disk went away")
 
         monkeypatch.setattr(os, "replace", broken_replace)

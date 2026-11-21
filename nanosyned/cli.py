@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, NoReturn, cast
 
@@ -1177,7 +1176,7 @@ def _import_write(device, args, plan: importplan.ImportPlan) -> int:
 
     results = run(
         device,
-        cast("Sequence[WStep]", plan.steps),
+        cast(tuple[WStep, ...], plan.steps),
         on_phase=on_phase,
         on_result=on_result,
     )
@@ -1250,7 +1249,7 @@ def _cmd_init_bank(device, args) -> int:
 
     results = run(
         device,
-        cast("Sequence[WStep]", plan.steps),
+        cast(tuple[WStep, ...], plan.steps),
         on_phase=on_phase,
         on_result=on_result,
     )
