@@ -203,6 +203,7 @@ beside a session that is driving the hardware.
 | `I` | import programs from a `.syx` / `.sqs` file |
 | `E` | export favourited User programs to a `.syx` file |
 | `B` | full backup: read the whole unit into one `.syx` file — silent, no gate |
+| `R` | restore a full backup from a `.syx` file — armed gate, two confirmations, backup/verify/one undo |
 | `N` | initialise the User bank: replace 000-126 with the unit's Init program; 127 Off untouched; backup/verify/one undo |
 | `w` | arm / lock the write gate |
 | `z` / `Z` | undo / undo all — put back what a store replaced |
@@ -384,9 +385,11 @@ appears. Individual record reads are used rather than the All Dump request,
 so a failure names the destination it stopped on. Because it only reads the
 unit, a full backup is silent: no write gate, no `--allow-write` / `--yes`.
 
-Restore it with the normal send path: `nanocli send FILE --allow-write
---yes` reads and backs up every destination, stores, and verifies. (A full
-backup is a plain `.syx`, not a pre-write JSON envelope, so
+Restore it with the browser's `R`, choose the `.syx`, arm the write gate
+and confirm twice, or use the normal send path: `nanocli send FILE
+--allow-write --yes` reads and backs up every destination, stores, and
+verifies. A browser restore is one undo entry spanning all four record
+kinds. (A full backup is a plain `.syx`, not a pre-write JSON envelope, so
 `nanocli backup restore` is not the tool for it — that command remains for
 the envelopes. Likewise `nanocli backup list` still lists only the pre-write
 JSON envelopes in the settings `backups/` directory; a full `.syx` is

@@ -106,9 +106,11 @@ rule the siblings apply to their instruments' ROM contents.
   `--yes`) reads the whole unit to one file — 356 messages, 79,071 bytes:
   programs 000-126 (program 127 excluded), effects 000-127, mixes 000-099
   (mix 100 excluded), and the global record. It reads all first, then writes
-  atomically; it is read-only toward the unit. Restore it through
-  `nanocli send FILE --allow-write --yes`; `backup list` / `backup restore`
-  remain for the pre-write JSON envelopes, not full `.syx` files.
+  atomically; it is read-only toward the unit. Restore it through `R` in
+  the browser (one gate, two confirmations, one undo entry across all four
+  kinds) or `nanocli send FILE --allow-write --yes`; `backup list` /
+  `backup restore` remain for the pre-write JSON envelopes, not full `.syx`
+  files.
 - **Every store is verified by read-back.** The unit answers a store with
   silence whether it took it or not, so a store is compared byte for byte
   against what the unit holds afterwards, and what did not match is named

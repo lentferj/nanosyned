@@ -652,7 +652,11 @@ file is one ordinary Alesis `.syx`, the same shape `nanocli send` accepts.
 - **Entry points:** `B` in the browser (a path prompt defaulting to
   `nanosyned-backup-YYYYMMDD-HHMMSS.syx` in the remembered import folder,
   or home) and `nanocli backup save --file PATH`.
-- **Restore:** the normal send path — `nanocli send FILE --allow-write
-  --yes` reads and backs up every destination, stores, and verifies.
+- **Restore:** `R` in the browser chooses a `.syx`, refuses a file with more
+  than one source bank, shows the record counts, asks the shared gate and
+  two confirmations, then runs the normal read/backup/store/read-back
+  fence. Program, effects, mix and global edits become one `restore` undo
+  entry, so `z` sends every previous record back through its kind-specific
+  writer. The CLI path remains `nanocli send FILE --allow-write --yes`.
   `nanocli backup restore` remains for the pre-write JSON envelopes, not full
   `.syx` files, and `nanocli backup list` still lists only those envelopes.
