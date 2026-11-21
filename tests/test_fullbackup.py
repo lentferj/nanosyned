@@ -193,6 +193,19 @@ class TestBackupDeviceCancellation:
 
 
 class TestWriteSyx:
+    def test_refuses_an_existing_path_before_reading_the_unit(self, tmp_path) -> None:
+        path = str(tmp_path / "full.syx")
+        with open(path, "wb") as handle:
+            handle.write(b"junk")
+        device = CountingDevice(DemoDevice())
+
+        with pytest.raises(FileExistsError):
+            fullbackup.backup_device(device, path)
+
+        assert device.reads == []
+        with open(path, "rb") as handle:
+            assert handle.read() == b"junk"
+
     def test_refuses_an_existing_path(self, tmp_path) -> None:
         path = str(tmp_path / "full.syx")
         with open(path, "wb") as handle:

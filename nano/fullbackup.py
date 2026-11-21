@@ -208,8 +208,12 @@ def backup_device(
 
     The order is the plan's: every destination is read first and only then is
     the file written, so a read that fails or one that was cancelled leaves no
-    file behind.
+    file behind. An existing destination is refused before the first read:
+    the user asked not to replace it, and making 356 requests to discover that
+    would waste the unit's time and say the wrong thing when it is offline.
     """
+    if os.path.exists(path) and not overwrite:
+        raise FileExistsError(f"{path} already exists; pass overwrite to replace it")
     records = read_all(device, on_read=on_read, cancelled=cancelled)
     byte_count = write_syx(path, records, overwrite=overwrite)
     counts = {"program": 0, "effects": 0, "mix": 0, "global": 0}
