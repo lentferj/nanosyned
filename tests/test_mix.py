@@ -316,6 +316,23 @@ class TestMixStore(_AppCase):
             assert saved[0]["blocks"]["mix"] == original
             assert saved[0]["name"] == rec.mix_name(original).rstrip()
 
+    async def test_storing_the_selected_mix_reloads_the_live_buffer(
+        self, monkeypatch, tmp_path
+    ):
+        saved = []
+        self._backup_into(monkeypatch, tmp_path, saved)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            original = app.device.read_mix(0)
+            changed = mixview.set_channel_field(original, 2, "volume", 0)
+            app._selected_mix = 0
+            app._mix_edited(0, changed)
+            await self._wait(pilot, lambda: len(app._undo_log) == 1)
+
+            assert [number for number, _ in app.device.mix_writes] == [0, 100]
+            assert app.device.read_mix(100) == changed
+
     async def test_e_on_mixes_while_locked_refuses_and_reads_nothing(self):
         reads = []
 

@@ -46,7 +46,7 @@ class TestMixesPane:
             assert len(app._current) == banks.MIXES
             assert app.query_one("#slot-table", DataTable).row_count == banks.MIXES
 
-    async def test_selecting_a_mix_sends_mix_mode_then_program_change(self):
+    async def test_selecting_a_mix_loads_it_into_the_edit_buffer(self):
         app = NanosynedApp(DemoDevice(), catalog=cat.empty())
         async with app.run_test(size=(160, 50)) as pilot:
             await pilot.pause()
@@ -58,7 +58,9 @@ class TestMixesPane:
             await _until(pilot, lambda: bool(app.device.mix_selects))
             assert app.device.mode_selects == [True]
             assert app.device.mix_selects[-1][0] == 5
+            assert app.device.read_mix(100) == app.device.read_mix(5)
             assert app._unit_mode == "mix"
+            assert app._selected_mix == 5
 
     async def test_a_program_selected_from_mix_mode_sends_program_mode_first(self):
         app = NanosynedApp(DemoDevice(), catalog=cat.empty())
