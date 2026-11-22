@@ -1,20 +1,21 @@
 # Undo audit: destructive actions and the gaps
 
-**Status:** recorded 2026-11-22 at commit `c706467`. No fixes applied.
-This is an audit and an implementation plan, not a change to behaviour.
+**Status:** recorded 2026-11-22 at commit `c706467`; the P0/P1 fixes and
+the two CLI safety fixes landed afterwards. This document keeps the audit
+history and now marks what is fixed and what is deliberately deferred.
 
 **Scope:** actions in the TUI that replace stored unit memory, plus the
 command-line writes and user data that have no browser undo. Read-only
 actions, selections, live-buffer edits and file reads are in a separate
 section so they are not mistaken for missing undo work.
 
-## Short answer: the mix copy *is* logged, but it does not look undone
+## Short answer: the mix copy *is* logged, but it did not look undone
 
 `C` in the Mixes pane pushes a `MixEditRecord` for the **destination**
 slot. `z` does restore the destination's previous 138 bytes: the undo test
 passes, and on the demo device the target bytes go back exactly.
 
-What is missing is the visible half of the undo:
+At audit time the visible half of the undo was missing:
 
 - `_undo_done()` has no branch for `MixEditRecord`, so `_mix_names[target]`
   keeps the **copied** name.
@@ -24,25 +25,49 @@ What is missing is the visible half of the undo:
 - `_undo_done()` refreshes only when `_current_bank == "USER"`, never the
   Mixes pane.
 
-Result: `z` says "undid 1", the stored target is restored, but the Mixes
-row still shows the copy's name and the live sound is still the copy. That
-is why it reads as "not undoable" even though the bytes are safe.
+Result at audit time: `z` said "undid 1", the stored target was restored,
+but the Mixes row still showed the copy's name and the live sound was still
+the copy. That is why it read as "not undoable" even though the bytes were
+safe. The "Fixes landed" section records the repair.
 
-The same defect applies to an ordinary **mix editor store**, not only to
-`C`: it is the shared `MixEditRecord` undo path that is incomplete.
+The same defect applied to an ordinary **mix editor store**, not only to
+`C`: it is the shared `MixEditRecord` undo path that was incomplete.
+
+## Fixes landed after this audit
+
+- **Mix/copy undo:** restored mixes now update the name cache, refresh the
+  Mixes pane, and reload buffer `100` when they are the selected mix.
+  Nested `MixEditRecord`s in a full restore use the same path.
+- **Partial batches:** successful leaves are reconciled even when another
+  leaf in the same batch fails; failed leaves stay on the log.
+- **Favourite snapshots:** `EditRecord` now carries the slot's pre-write
+  favourite mark and annotations. Program stores, imports, init and the
+  program part of a full restore capture them, and successful undo restores
+  them exactly. Older records without a snapshot do not clear a mark.
+- **CLI dump safety:** `dump program|mix|effects|global --file` refuses an
+  existing file unless `--force`, and uses the atomic `.syx` writer.
+- **CLI restore metadata:** `backup restore` reconciles program
+  favourites/preset memory after a verified restore.
+
+The init completion message no longer warns that `z` cannot restore marks.
+
+Still open by design in this pass: the `f` multi-slot content-identity
+behaviour, favourites metadata history, CLI session undo, and redo /
+persistent undo. Those are P2/P3 below, not regressions in the fixes above.
 
 ## What is recorded and what is actually restored
 
 | Action | Stores on unit | Backup first | Undo entry | Bytes restored by `z`/`Z` | Visible state restored | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
-| `e` → `s` program editor | User program | yes | `EditRecord` | yes | name yes; favourite mark/annotations no | partial |
-| `e` → `s` mix editor | mix slot | yes | `MixEditRecord` | yes | name and live buffer no | partial |
-| `C` copy mix | destination mix | yes, destination only | `MixEditRecord` | yes | name and live buffer no | partial |
+| `e` → `s` program editor | User program | yes | `EditRecord` | yes | name, favourite mark and annotations yes | fixed |
+| `e` → `s` mix editor | mix slot | yes | `MixEditRecord` | yes | name and live buffer yes | fixed |
+| `C` copy mix | destination mix | yes, destination only | `MixEditRecord` | yes | name and live buffer yes | fixed |
 | `x` → store effects | effects 000 | yes | `EffectsEditRecord` | yes | effects screen re-reads on open; no cache to refresh | bytes undoable |
 | `g` → store global | global set | yes | `GlobalEditRecord` | yes | global screen re-reads on open; no cache to refresh | bytes undoable |
-| `R` full restore | programs, mixes, effects, global | yes, per record | one `RestoreRecord` | yes | program names yes; mix names/live buffer no; favourite marks no | partial |
-| `N` init bank | User programs 000-126 | yes, per slot | one `ImportRecord` | yes | program names yes; favourite marks/annotations no; status says so | partial |
-| `I` import whole/append/single | User programs | yes, per slot | one `ImportRecord` (programs only) | yes | program names yes; favourite marks/annotations no | partial |
+| `R` full restore | programs, mixes, effects, global | yes, per record | one `RestoreRecord` | yes | program/mix names, selected live mix, favourite marks yes | fixed |
+| `N` init bank | User programs 000-126 | yes, per slot | one `ImportRecord` | yes | program names and favourite marks/annotations yes | fixed |
+| `I` import whole/append/single | User programs | yes, per slot | one `ImportRecord` (programs only) | yes | program names and favourite marks/annotations yes | fixed |
+| Partial import/restore undo | varies | already backed up | reduced `ImportRecord`/`RestoreRecord` | successful leaves yes | successful leaves refresh names/marks; failed leaves stay on log | fixed |
 | `p` parameter editor | live edit buffers only (MIDI Edit) | no | none | n/a | not stored; a later store needs its own backup | not a stored write |
 | Mix editor live field/name edits | buffer `100` only | no | none | n/a | not stored until `a`/`s` | not a stored write |
 | `⏎` select, `a` auto-load, `M` mode select | no memory | no | none | n/a | changes what plays, not what is stored | no undo needed |
@@ -57,7 +82,7 @@ fence. It is a recovery path, not the `z` log.
 
 ## Findings in detail
 
-### 1. Mix undo has no presentation refresh (P0)
+### 1. Mix undo has no presentation refresh (P0) — **fixed**
 
 Affected records: `MixEditRecord`, both from the editor store and from
 `C`.
@@ -72,14 +97,14 @@ Missing work:
 The storage half is correct. Do not replace it with a new copy-specific
 undo path; fix the shared mix undo path.
 
-### 2. Full restore hides mix undo behind the batch path (P1)
+### 2. Full restore hides mix undo behind the batch path (P1) — **fixed**
 
 `RestoreRecord` contains `MixEditRecord`s. `_undo_done()` walks nested
 records but handles only `EditRecord` for names and memory. The restored
 mix bytes land, but their names stay stale for the same reason as item 1.
 If a restored mix is the selected mix, its live buffer is also stale.
 
-### 3. Program undo does not restore favourite marks (P1)
+### 3. Program undo does not restore favourite marks (P1) — **fixed**
 
 `_undo_done()` restores the program name and binds the old bytes in preset
 memory, but it never calls `favorites.add()` / `favorites.remove()` for the
@@ -135,6 +160,37 @@ The browser's undo log is not persisted. After restart, the only recovery
 is the per-slot backup files or a full backup. This is not a bug in the
 current contract, but it bounds what "undoable" means.
 
+### 9. A partially failed batch does not reconcile its successes (P1) — **fixed**
+
+`_undo_worker()` reduces a partially failed `ImportRecord` or
+`RestoreRecord` to the failed sub-edits, and `_undo_done()` returns early
+when any failure is present. The sub-edits that **did** restore therefore
+get no name, memory, favourite or mix refresh. The failed entries are kept
+correctly, but the successful ones are visually stale and cannot be
+refreshed on a later `z` because they are no longer in the log.
+
+### 10. `f` unfavourites every slot sharing the same content (P2)
+
+`action_toggle_favorite()` calls `memory.slots_for(digest)` and removes the
+favourite row for every occurrence of the same program bytes. That is a
+deliberate content-identity rule, but it is silent and has no undo. A
+future change should either scope removal to the toggled slot or ask before
+clearing other slots' marks.
+
+### 11. CLI restore does not reconcile program metadata (P2) — **fixed**
+
+`nanocli backup restore` writes program bytes through the verified fence,
+but unlike `nanocli send` and `nanocli import` it does not run the
+program/favourite/preset-memory reconciliation afterwards. A restored
+program can therefore leave a stale heart or annotations.
+
+### 12. CLI `dump --file` truncates an existing file (P2) — **fixed**
+
+`nanocli dump program|mix|effects|global --file PATH` opens the path with
+`"wb"` without a refusal or `--force`, unlike `dump favourites` and
+`backup save`. The old file is destroyed with no confirmation and no
+backup.
+
 ## Implementation plan
 
 ### Phase 0 — tests first, no behaviour change
@@ -161,7 +217,7 @@ Add failing tests that pin the desired contract:
 Run them against the demo device and an in-memory `Favorites` store first.
 Only the hardware opt-in test needs a real unit.
 
-### Phase 1 — repair the mix undo path (P0)
+### Phase 1 — repair the mix undo path (P0) — **done**
 
 In `nanosyned/app.py`:
 
@@ -179,22 +235,23 @@ In `nanosyned/app.py`:
 Do not add a copy-only branch. `C` is only one producer of
 `MixEditRecord`.
 
-### Phase 2 — refresh all affected UI after batch undo (P1)
+### Phase 2 — refresh all affected UI after batch undo (P1) — **done**
 
 - Collect the set of affected kinds while the undo worker runs: program,
   mix, effects, global.
-- On success, reconcile caches once: program live names, mix names, selected
+- Reconcile caches once for **every successful sub-edit**, even when another
+  sub-edit in the same batch failed: program live names, mix names, selected
   mix buffer, and the current bank's rows.
-- Keep failed edits on the log as today; a partial undo must not refresh
-  names it did not restore.
+- Keep failed edits on the log as today, but do not lose the success
+  metadata just because the batch reports a partial failure.
 
-### Phase 3 — restore favourite marks (P1)
+### Phase 3 — restore favourite marks (P1) — **done (snapshot design)**
 
-Choose one design before coding:
+Implemented with the snapshot design:
 
-**Preferred: snapshot the slot mark in the undo record.** Add an optional
-favourite snapshot (active, rating, tags, note) to `EditRecord`, captured
-before the write. Capture it for:
+**Snapshot the slot mark in the undo record.** An optional favourite
+snapshot (active, rating, tags, note) on `EditRecord` is captured before the
+write. It is captured for:
 
 - program editor stores;
 - each import/init target before its write;
@@ -203,15 +260,13 @@ before the write. Capture it for:
 On successful undo, restore the snapshot exactly. This is independent of
 the preset-memory sidecar, so it also works for users who run without it.
 
-**Fallback: re-derive from preset memory.** After binding the old digest,
-look up whether that digest is a favourite and re-add its annotations. This
-is less code but loses information when memory is disabled or the entry was
-not remembered.
+The fallback — re-deriving from preset memory — was not used because it
+loses information when memory is disabled or the entry was not remembered.
 
-Whichever design wins, update the `N` completion message: “z restores
-programs, not marks” should disappear once marks are restored.
+The `N` completion message no longer says “z restores programs, not
+marks”.
 
-### Phase 4 — decide the CLI contract (P2)
+### Phase 4 — decide the CLI contract (P2) — **CLI safety fixes done; session undo deferred**
 
 The CLI already writes backups before stores. Either:
 
@@ -221,6 +276,13 @@ The CLI already writes backups before stores. Either:
 
 Do not give the CLI an in-memory undo log; a process ends too soon for that
 to be a useful contract.
+
+Two related CLI fixes are independent of that decision:
+
+- make `nanocli backup restore` run the same program/favourite/preset-memory
+  reconciliation as `send` and `import`;
+- add `--force` and refusal-before-open to every `nanocli dump --file` kind,
+  matching `dump favourites` and `backup save`.
 
 ### Phase 5 — favourites metadata (P2, optional)
 

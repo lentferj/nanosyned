@@ -263,8 +263,9 @@ nanocli read                       # the User bank's names (silent)
 nanocli mixes                      # the mix names (silent)
 nanocli dump program 12 --file p.syx   # one record off the unit, as .syx
 nanocli dump global --file g.syx       # the global settings, the same way
-nanocli dump favourites --file favs.syx # read the active favourite slots;
-                                    #   --force replaces an existing file
+nanocli dump favourites --file favs.syx # read the active favourite slots
+                                    #   every dump refuses an existing file;
+                                    #   add --force to replace it
 nanocli select USER 12             # select it ON THE UNIT — plays; asks first
 nanocli syx FILE                   # read a .syx file (no hardware)
 nanocli find "bass"                # search known names (no hardware)
