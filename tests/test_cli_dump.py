@@ -65,9 +65,7 @@ class TestCliDump:
             assert handle.read() == b"OLD BYTES"
 
     @pytest.mark.parametrize("kind,argv", CASES, ids=[c[0] for c in CASES])
-    def test_with_force_overwrites(
-        self, kind, argv, tmp_path, monkeypatch, capsys
-    ):
+    def test_with_force_overwrites(self, kind, argv, tmp_path, monkeypatch, capsys):
         use_device(monkeypatch, PersistentDemo())
         out_path = str(tmp_path / f"{kind}.syx")
         config_path = str(tmp_path / "config.toml")
