@@ -154,6 +154,9 @@ class DemoDevice:
         self._mixes: dict[int, bytes] = {
             number: _default_mix(number) for number in range(banks.MIXES)
         }
+        #: The live mix edit buffer, number 100. It starts blank, as a unit's
+        #: scratch buffer does before a mix has been loaded into it.
+        self._mixes[banks.MIXES] = bytes(rec.MIX_BYTES)
         self._effects: dict[int, bytes] = {
             number: _default_effect(number) for number in range(128)
         }
@@ -259,8 +262,8 @@ class DemoDevice:
 
     def read_mix(self, number: int, *, timeout: float | None = None) -> bytes:
         self._tick()
-        if not 0 <= number < banks.MIXES:
-            raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES - 1}")
+        if not 0 <= number <= banks.MIXES:
+            raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES}")
         return self._mixes[number]
 
     def read_mix_names(
@@ -402,8 +405,9 @@ class DemoDevice:
         self.selected_log.append((target, self.channel))
 
     def select_mix(self, number: int) -> None:
-        """Select a mix. **This changes what the unit is playing.**"""
+        """Load a stored mix into the live buffer, as the bridge does."""
         self._tick()
         if not 0 <= number < banks.MIXES:
             raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES - 1}")
+        self._mixes[100] = self._mixes[number]
         self.mix_selects.append((number, self.channel))

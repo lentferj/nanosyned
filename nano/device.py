@@ -106,5 +106,5 @@ class Device(Protocol):
         ...
 
     def select_mix(self, number: int) -> None:
-        """Select a mix. **This changes what the unit is playing.**"""
+        """Load a stored mix into the edit buffer. **What plays changes.**"""
         ...

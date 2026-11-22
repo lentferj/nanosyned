@@ -755,14 +755,23 @@ class NanoBridge:
         self._send(m.program_change(target.program_change, self.channel))
 
     def select_mix(self, number: int) -> None:
-        """Select a mix. **This changes what the unit is playing.**
+        """Select a mix by loading it into the mix edit buffer.
 
-        Mixes are not program banks: once the unit is in Mix mode, a
-        Program Change names the mix. No Bank Select is sent.
+        **This changes what the unit is playing.** It is a load, not a
+        store: the stored mix is read first and the same bytes are sent to
+        the edit-buffer number, 100.
+
+        Program Change is deliberately not used here. On this family a
+        Program Change selects a mix only when the global MIDI Mix
+        Selection channel matches; with that setting off, or pointing at
+        another channel, the same message edits the current mix instead and
+        the requested mix never loads. The buffer load does not depend on
+        that setting.
         """
         if not 0 <= number < banks.MIXES:
             raise m.ProtocolError(f"mix {number} is outside 0-{banks.MIXES - 1}")
-        self._send(m.program_change(number, self.channel))
+        record = self.read_mix(number)
+        self.write_mix(100, record)
 
     # --- discovery ----------------------------------------------------------
 
