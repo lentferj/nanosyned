@@ -153,9 +153,11 @@ playing mix is likewise not readable, so the picker does not claim to show
 one. `e` on a focused mix opens its editor; `M` still sends a manual Mode
 Select. Mix edits are **live**: each change loads the edited mix into buffer
 `100`, so it is audible before it is stored. `⏎`/`space` toggle switches, the
-program field opens a User-bank program browser by name, and `a` then `s`
-stores the result. The QS record's undocumented `program_type` field is not
-shown; this unit reads it outside the specification's stated 0-1 range.
+program field opens the five-bank program browser, and the field shows the
+bank, program number and program name together. `a` then `s` stores the
+result. The QS record's `program_type` field is the program bank code
+(0=GM, 1=User, 2-4=Preset 1-3, 5-15=cards), despite the specification
+printing its range as 0-1.
 
 ![The Mixes pane: the sixth bank row, its 100 mixes, and the mix detail line](docs/screenshots/mixes.png)
 

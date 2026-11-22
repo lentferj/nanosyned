@@ -638,16 +638,18 @@ field builds the whole record and loads it back into buffer `100`, then reads
 it back. A whole-buffer load is used rather than the per-field Mix MIDI Edit
 because the program-number field did not change through the direct edit on
 the bench, while the load carries it correctly. Enter and Space toggle the
-one-bit fields; the program field opens the User-bank program picker by name;
-other fields still ask for a number. `a` then `s` stores the result, and
-storing the loaded mix reloads buffer `100` again so the stored and audible
-states agree.
+one-bit fields; the program field opens the five-bank program picker by name
+and shows the bank, number and name together; other fields still ask for a
+number. `a` then `s` stores the result, and storing the loaded mix reloads
+buffer `100` again so the stored and audible states agree.
 
-The QS `program_type` field is deliberately not exposed. The specification
-names it a four-bit field but gives its range as 0-1 and does not say what
-the two values mean; every channel of this unit's stored mixes reads 8,
-outside that range. It stays in the decoder, where it is reported as data,
-but it is not offered as a control.
+The QS `program_type` field is the program **bank** code, not a 0-1 switch.
+The specification prints its range as 0-1, but the unit reads and writes
+0-4 for the five internal banks (GM, User, Preset 1-3) and 5-15 for card
+banks. A stored factory mix reads 8 for a card bank. The parameter table's
+limit was widened to 15; the editor keeps the bank in the combined program
+field rather than showing a separate `program_type` row. Hardware check:
+codes 0-4 loaded GM, User and Preset 1-3 program 000 respectively.
 
 ## 28. A full backup is a normal `.syx`, not another envelope
 
