@@ -235,6 +235,9 @@ beside a session that is driving the hardware.
 | `z` / `Z` | undo / undo all — put back what a store replaced |
 | `i` / `?` / `q` | device identity / help / quit |
 
+Known limitations in what `z` restores are recorded, with an implementation
+plan, in [`docs/UNDO_AUDIT.md`](docs/UNDO_AUDIT.md).
+
 The cursor is silent until `a` turns auto-load on; after that, moving the slot
 cursor sends the focused preset's PC/LSB/MSB. `⏎` is always the explicit
 one-key select, and every write key is inert until `w` has armed the gate — see
