@@ -55,6 +55,7 @@ from nano import records as rec
 from nano.writing import (
     RECORD_BYTES,
     RECORD_NAMES,
+    Result,
     frame,
     label,
     read_record,
@@ -585,6 +586,28 @@ def _cmd_backup_restore(device, args) -> int:
         print(f"verify   MISMATCH: {sentence}; the backup is {path}")
         return 1
     print(f"verify   {sentence}; the backup is {path}")
+    # A verified program restore is evidence that the slot now holds those
+    # bytes, exactly as a successful ``send`` or ``import`` is. Reconcile the
+    # favourites store and the content memory through the same helper those
+    # commands use, so a restored program cannot leave a stale heart or
+    # annotations behind. Nothing else is reconciled: the helper ignores
+    # non-program results, and this branch says so explicitly.
+    if kind == "program":
+        _remember_results(
+            args,
+            [
+                Result(
+                    kind=kind,
+                    number=number,
+                    record=record,
+                    previous=current,
+                    read_back=read_back,
+                    backup=path,
+                    stage="verified",
+                    sentence=sentence,
+                )
+            ],
+        )
     return 0
 
 

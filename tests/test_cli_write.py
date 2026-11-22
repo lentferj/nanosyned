@@ -4,7 +4,7 @@
 import pytest
 
 from nano import backup as bk
-from nano import dumps, params
+from nano import dumps, favorites, params, preset_memory
 from nano import messages as m
 from nano import records as rec
 from nanosyned import cli
@@ -473,6 +473,54 @@ class TestBackupRestore:
         assert len(restore_points) == 1
         assert restore_points[0].slot == "PROGRAM:009"
         assert restore_points[0].blocks["program"] == bytes(rec.PROGRAM_BYTES)
+
+    def test_restore_reconciles_the_program_metadata(
+        self, config_path, tmp_path, monkeypatch, capsys
+    ):
+        device = use_device(monkeypatch, PersistentDemo())
+        old = bytes(device.read_program(9))
+        different = bytes(rec.PROGRAM_BYTES)
+        path = bk.save(
+            "PROGRAM:009",
+            kind="program",
+            name="Old Nine",
+            blocks={"program": old},
+            source="test",
+        )
+        device.write_program(9, different)
+
+        favorites_path = str(tmp_path / "favorites.db")
+        memory_path = str(tmp_path / "memory.db")
+        memory = preset_memory.PresetMemory(memory_path)
+        entry = memory.remember(old, name="Old Nine")
+        memory.set_favourite(entry.digest, True, rating=4, tags="pad", note="keep")
+        memory.close()
+
+        code, _out, _err = run(
+            capsys,
+            "--demo",
+            "--config",
+            config_path,
+            "--favorites",
+            favorites_path,
+            "--preset-memory",
+            memory_path,
+            "backup",
+            "restore",
+            path,
+            "--allow-write",
+            "--yes",
+        )
+        assert code == 0
+        store = favorites.Favorites(favorites_path)
+        try:
+            marked = store.get("USER", 9)
+            assert marked is not None
+            assert marked.rating == 4
+            assert marked.tags == "pad"
+            assert marked.note == "keep"
+        finally:
+            store.close()
 
     def test_restore_refuses_the_hardwired_silent_program(
         self, config_path, tmp_path, monkeypatch, capsys
