@@ -615,19 +615,23 @@ auto-load"; `tests/test_auto_load.py` pins both states and the persistence.
 The left pane's sixth row is **Mixes**, not a program bank. It lists the
 unit's 100 mixes; the names are read with the existing silent Mix Dump
 Request on first use and cached for the session. Mixes have no Bank Select
-and no favorites/catalog entries; the right pane shows number, name and the
-Program Change.
+and no favorites/catalog entries; the right pane shows number and name.
 
-Selecting a mix sends **Mode Select: Mix mode** first when the app does not
-already believe it is in Mix mode, then Program Change `N`. Selecting a
-program while the tracked mode is Mix sends Program mode first, then the
-normal Bank Select + Program Change. The protocol has no mode query and no
-current-mix query, so `_unit_mode` is explicitly best-effort: it records what
-this app last sent, not what the unit is necessarily doing. A manual `M`
-Mode Select updates it on success. The direct mix selection does not use the
-write gate because it is a selection, like Enter on a program; `M` remains
-the gated manual mode change. `e` on the focused mix opens its editor; the
-old `m` prompt is gone.
+Selecting a mix sends **Mode Select: Mix mode**, reads the stored mix and
+loads those bytes into the live mix buffer with a mix dump numbered `100`.
+It does not send Program Change: on this family that selects a mix only when
+the global MIDI Mix Selection channel matches, and with that setting off (or
+on another channel) the message edits the current mix instead. The buffer
+load is independent of that setting. Selecting a program while the tracked
+mode is Mix sends Program mode first, then the normal Bank Select + Program
+Change. The protocol has no mode query and no current-mix query, so
+`_unit_mode` is explicitly best-effort: it records what this app last sent,
+not what the unit is necessarily doing. A manual `M` Mode Select updates it
+on success. The direct mix selection does not use the write gate because it
+is a selection, like Enter on a program; `M` remains the gated manual mode
+change. `e` on the focused mix opens its editor; the old `m` prompt is gone.
+When the edited mix is the one loaded in the buffer, storing it also reloads
+the new bytes into buffer `100`, so the change is audible immediately.
 
 ## 28. A full backup is a normal `.syx`, not another envelope
 

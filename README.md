@@ -143,7 +143,8 @@ many sequencers send instead.
 The left pane has a sixth row, **Mixes**, below the five program banks. The
 right pane lists mixes `000`–`099`, with names read from the unit the first
 time the row is opened. Selecting a mix with `⏎` sends **Mode Select: Mix
-mode** first when needed, then Program Change `N`; no Bank Select is sent.
+mode**, then loads the stored mix into the unit's live mix buffer through
+the mix-edit-buffer number `100`; no Program Change or Bank Select is sent.
 Selecting a program while the app last sent Mix mode sends Program mode first.
 
 The unit has no request that reports its current mode, so the mode is tracked
