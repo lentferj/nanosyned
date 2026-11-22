@@ -20,6 +20,7 @@ from __future__ import annotations
 from nano import banks, identity, writing
 from nano import catalog as cat
 from nano import favorites as fav
+from nano import livenames as ln
 from nano import messages as m
 from nano import records as rec
 from nanosyned.app import NanosynedApp
@@ -226,6 +227,43 @@ class TestUndo:
                 assert memory.slot_digest("USER", 5) == identity.digest(old)
         finally:
             memory.close()
+            store.close()
+
+    async def test_a_store_and_its_undo_persist_the_live_name(self, tmp_path):
+        store = fav.Favorites(str(tmp_path / "favorites.db"))
+        catalog_path = str(tmp_path / "catalog.json")
+        app = NanosynedApp(
+            DemoDevice(),
+            catalog=cat.empty(),
+            favorites=store,
+            memory_path=str(tmp_path / "memory.db"),
+            catalog_path=catalog_path,
+        )
+        old = _record("Old", 1)
+        new = _record("New", 2)
+        try:
+            async with app.run_test(size=(160, 50)) as pilot:
+                await pilot.pause()
+                app._store_done(
+                    banks.slot("USER", 4),
+                    new,
+                    old,
+                    None,
+                    new,
+                    None,
+                    "verified",
+                )
+                names = ln.load(ln.path_for(catalog_path))
+                assert names[ln.key("USER", 4)] == "New"
+
+                records = app._undo_log.plan(1)
+                app._undo_done(records, [True], [""])
+                await pilot.pause()
+                names = ln.load(ln.path_for(catalog_path))
+                assert names[ln.key("USER", 4)] == "Old"
+        finally:
+            if app.memory is not None:
+                app.memory.close()
             store.close()
 
     async def test_undo_restores_the_slot_favourite_snapshot(self, tmp_path):

@@ -1591,6 +1591,26 @@ class NanosynedApp(App):
             return
         self.call_from_thread(self._adopt, bank_id, names)
 
+    def _persist_live_name(self, bank_id: str, number: int) -> None:
+        """Write one changed live name into the sidecar.
+
+        ``_adopt`` already persists a whole read. A verified store, import,
+        init or undo changes a name in the in-memory catalog too, and
+        without this the next launch re-applies the old sidecar name -- the
+        browser and mix editor then agree with each other and disagree with
+        the unit.
+        """
+        name = self.catalog.live_name(bank_id, number)
+        if name is None:
+            return
+        try:
+            livenames.save(
+                livenames.path_for(self._catalog_path),
+                {livenames.key(bank_id, number): name},
+            )
+        except OSError:
+            pass
+
     def _adopt(self, bank_id: str, names: dict[int, str]) -> None:
         for program_change, name in names.items():
             self.catalog.set_live_name(bank_id, program_change, name)
@@ -1896,6 +1916,7 @@ class NanosynedApp(App):
         """
         if isinstance(edit, EditRecord):
             self.catalog.set_live_name("USER", edit.number, edit.name)
+            self._persist_live_name("USER", edit.number)
             self._bind_memory_slot(edit.number, edit.previous)
             self._restore_undo_favourite(edit)
         elif isinstance(edit, MixEditRecord):
@@ -2322,6 +2343,7 @@ class NanosynedApp(App):
                 )
             self._refresh_bank_fav_count("USER")
         self.catalog.set_live_name(entry.bank_id, entry.number, new_name)
+        self._persist_live_name(entry.bank_id, entry.number)
         if entry.bank_id == self._current_bank:
             self._refill_keeping_place()
         self.notify_status(
@@ -3899,6 +3921,7 @@ class NanosynedApp(App):
             name = self._step_name_for(result)
             if result.kind == "program" and result.number is not None:
                 self.catalog.set_live_name("USER", result.number, name)
+                self._persist_live_name("USER", result.number)
                 entry = self._remember_program(
                     "USER",
                     result.number,
