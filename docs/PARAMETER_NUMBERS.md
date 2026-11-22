@@ -45,7 +45,7 @@ The map holds 178 rows across 4 modes; 75 of them are verified.
 | -1 | -1 | -1 | Channel 1 Spare | 1 | 143 | 0..0 | 0 | (inferred) | no |
 | -1 | -1 | -1 | Mix spare | 5 | 75 | 0..0 | 0 | (inferred) | no |
 | 0 | 0 | 0 | Channel 1 program number | 7 | 80 | 0..127 | 0 | (inferred) | no |
-| 0 | 0 | 2 | Channel 1 program type | 4 | 87 | 0..1 | 0 | (inferred) | no |
+| 0 | 0 | 2 | Channel 1 program type | 4 | 87 | 0..15 | 0 | (inferred) | no |
 | 0 | 0 | 3 | Channel 1 enable | 1 | 91 | 0..1 | 0 | raw | yes |
 | 1 | 0 | 0 | Channel 1 volume | 7 | 92 | 0..99 | 0 | raw | yes |
 | 1 | 0 | 1 | Channel 1 pan | 3 | 99 | 0..7 | 0 | raw | yes |

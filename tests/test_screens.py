@@ -170,14 +170,19 @@ class TestMixScreen:
             await _until(pilot, lambda: isinstance(app.screen, ProgramPickerScreen))
             picker = app.screen
             picker_table = picker.query_one("#program-table", DataTable)
-            assert "Invented Program" in str(picker_table.get_row_at(42)[1])
-            picker_table.move_cursor(row=42)
+            user_row = 128 + 42
+            assert "Invented Program" in str(picker_table.get_row_at(user_row)[2])
+            picker_table.move_cursor(row=user_row)
             await pilot.press("enter")
             await _until(pilot, lambda: isinstance(app.screen, MixScreen))
             await _until(
                 pilot,
-                lambda: mixview.get_channel_field(screen.record, 0, "program") == 42,
+                lambda: (
+                    mixview.get_channel_field(screen.record, 0, "program") == 42
+                    and mixview.get_channel_field(screen.record, 0, "program_type") == 1
+                ),
             )
+            assert "User 042 Invented Program" in str(table.get_row_at(1)[1])
 
     async def test_switches_toggle_with_space_and_enter(self) -> None:
         record = bytes(rec.MIX_BYTES)

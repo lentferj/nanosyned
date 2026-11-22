@@ -47,6 +47,7 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Label, Static
 
+from nano import catalog as cat
 from nano import records as rec
 from nanosyned import mix as mixview
 from nanosyned.editor import (
@@ -322,7 +323,7 @@ class MixScreen(ModalScreen[bytes | None]):
     A part is one row, collapsed to ``prog N · vol N · pan N``. Enter
     expands it into all :data:`nanosyned.mix.FIELDS`; Enter on the part
     again collapses it. Enter on a switch toggles it, Enter on the program
-    opens the User-bank program picker, and the other fields ask for a
+    opens the five-bank program picker, and the other fields ask for a
     number. Space toggles a switch from anywhere on its row. `e` is an
     alias for editing a field and, on a collapsed part, still offers the
     old choice of fields.
@@ -428,10 +429,24 @@ class MixScreen(ModalScreen[bytes | None]):
         self._fill()
         table.focus()
 
+    def _program_text(self, channel: int) -> str:
+        """The program field as bank, number and name."""
+        bank = mixview.get_channel_field(self._working, channel, "program_type")
+        program = mixview.get_channel_field(self._working, channel, "program")
+        bank_name = mixview.bank_label(bank)
+        number = "---" if program is None else f"{program:03d}"
+        name = ""
+        bank_id = mixview.bank_id(bank)
+        catalog = getattr(self.app, "catalog", None)
+        if bank_id is not None and catalog is not None and program is not None:
+            shown = catalog.display_name(bank_id, program)
+            name = "" if shown == cat.UNNAMED else shown
+        return f"{bank_name} {number} {name}".rstrip()
+
     def _summary(self, channel: mixview.MixChannel) -> str:
-        """One line for a collapsed part: the three values the old pane showed."""
+        """One line for a collapsed part: program, volume and pan."""
         return (
-            f"prog {_shown(channel.program)} · "
+            f"prog {literal(self._program_text(channel.channel))} · "
             f"vol {_shown(channel.volume)} · "
             f"pan {_shown(channel.pan)}"
         )
@@ -469,10 +484,16 @@ class MixScreen(ModalScreen[bytes | None]):
             for label in mixview.FIELDS:
                 param = mixview.param_for(number, label)
                 value = mixview.get_channel_field(self._working, number, label)
+                if label == "program":
+                    shown_value = self._program_text(number)
+                    shown_choice = ""
+                else:
+                    shown_value = _shown(value)
+                    shown_choice = "" if param is None else choice_text(param, value)
                 table.add_row(
                     label,
-                    _shown(value),
-                    "" if param is None else choice_text(param, value),
+                    literal(shown_value),
+                    shown_choice,
                     f"{param.low}..{param.high}" if param is not None else "read-only",
                     key=f"field:{number}:{label}",
                 )
@@ -536,13 +557,19 @@ class MixScreen(ModalScreen[bytes | None]):
             self._toggle(channel, label)
             return
         if label == "program":
-            current = mixview.get_channel_field(self._working, channel, label)
+            current_bank = mixview.get_channel_field(
+                self._working, channel, "program_type"
+            )
+            current_program = mixview.get_channel_field(
+                self._working, channel, "program"
+            )
             self.app.push_screen(
                 ProgramPickerScreen(
                     getattr(self.app, "catalog", None),
-                    current=current,
+                    current_bank=current_bank,
+                    current_program=current_program,
                 ),
-                lambda number: self._program_picked(channel, number),
+                lambda choice: self._program_picked(channel, choice),
             )
             return
         current = mixview.get_channel_field(self._working, channel, label)
@@ -554,11 +581,21 @@ class MixScreen(ModalScreen[bytes | None]):
             lambda text: self._typed(channel, label, text),
         )
 
-    def _program_picked(self, channel: int, number: int | None) -> None:
-        if number is None:
+    def _program_picked(self, channel: int, choice: tuple[int, int] | None) -> None:
+        if choice is None:
             self._refresh()
             return
-        self._apply_live(channel, "program", number)
+        bank, program = choice
+        changed = mixview.set_channel_field(
+            self._working, channel, "program_type", bank
+        )
+        changed = mixview.set_channel_field(changed, channel, "program", program)
+        self._live_changed(
+            channel,
+            {"program_type": bank, "program": program},
+            changed,
+            "program",
+        )
 
     def _toggle(self, channel: int, label: str) -> None:
         """Flip a one-bit field with no value prompt."""
@@ -644,6 +681,18 @@ class MixScreen(ModalScreen[bytes | None]):
                 refused=True,
             )
             return
+        clamped = param.clamp(value)
+        changed = mixview.set_channel_field(self._working, channel, label, clamped)
+        self._live_changed(channel, {label: clamped}, changed, label)
+
+    def _live_changed(
+        self,
+        channel: int,
+        expected: dict[str, int],
+        changed: bytes,
+        label: str,
+    ) -> None:
+        """Claim the exchange, then send one edited whole record."""
         refusal = self._gate_refusal()
         if refusal is not None:
             self._say(refusal, refused=True)
@@ -655,9 +704,7 @@ class MixScreen(ModalScreen[bytes | None]):
         if not app._exchange.acquire(blocking=False):
             self._say("busy", refused=True)
             return
-        clamped = param.clamp(value)
-        changed = mixview.set_channel_field(self._working, channel, label, clamped)
-        self._live_worker(channel, label, clamped, changed)
+        self._live_worker(channel, expected, changed, label)
 
     def _target_device(self) -> Any:
         if self._device is not None:
@@ -666,7 +713,11 @@ class MixScreen(ModalScreen[bytes | None]):
 
     @work(thread=True)
     def _live_worker(
-        self, channel: int, label: str, value: int, changed: bytes
+        self,
+        channel: int,
+        expected: dict[str, int],
+        changed: bytes,
+        label: str,
     ) -> None:
         """**MIDI only.** Load the edited whole mix into buffer 100.
 
@@ -678,14 +729,17 @@ class MixScreen(ModalScreen[bytes | None]):
         app: Any = self.app
         device = self._target_device()
         failure: str | None = None
-        seen: int | None = None
+        seen: dict[str, int] = {}
         live: bytes | None = None
         try:
             with app._busy_gate, app._lock:
                 device.write_mix(100, changed)
                 time.sleep(0.05)
                 live = device.read_mix(100)
-                seen = mixview.get_channel_field(live, channel, label)
+                for field in expected:
+                    value = mixview.get_channel_field(live, channel, field)
+                    if value is not None:
+                        seen[field] = value
         except _BRIDGE_ERRORS as exc:
             failure = str(exc)
         finally:
@@ -693,25 +747,32 @@ class MixScreen(ModalScreen[bytes | None]):
         if failure is not None:
             app.call_from_thread(self._live_failed, channel, label, failure)
             return
-        if seen is None or live is None:
+        if live is None or len(seen) != len(expected):
             app.call_from_thread(
                 self._live_failed, channel, label, "read-back returned no value"
             )
             return
-        if seen != value:
-            app.call_from_thread(
-                self._live_failed,
-                channel,
-                label,
-                f"unit reads {seen}, not {value}",
-            )
+        wrong = [
+            f"{field} reads {seen.get(field)}, not {value}"
+            for field, value in expected.items()
+            if seen.get(field) != value
+        ]
+        if wrong:
+            app.call_from_thread(self._live_failed, channel, label, "; ".join(wrong))
             return
-        app.call_from_thread(self._live_done, channel, label, value, live)
+        app.call_from_thread(self._live_done, channel, label, live)
 
-    def _live_done(self, channel: int, label: str, value: int, live: bytes) -> None:
+    def _live_done(self, channel: int, label: str, live: bytes) -> None:
         self._working = bytes(live[: rec.MIX_BYTES])
         self._fill(keep=f"field:{channel}:{label}")
-        self._say(f"channel {channel + 1} {label}: {value} (live; not stored)")
+        if label == "program":
+            self._say(
+                f"channel {channel + 1} program: "
+                f"{literal(self._program_text(channel))} (live; not stored)"
+            )
+        else:
+            value = mixview.get_channel_field(self._working, channel, label)
+            self._say(f"channel {channel + 1} {label}: {value} (live; not stored)")
 
     def _live_failed(self, channel: int, label: str, sentence: str) -> None:
         self._say(

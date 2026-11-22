@@ -49,21 +49,46 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from nano import params
+from nano import banks, params
 from nano import records as rec
 from nano.params import Param
 
 __all__ = [
+    "BANK_NAMES",
     "FIELDS",
     "FIELD_ADDRESSES",
     "SWITCHES",
     "MixChannel",
+    "bank_id",
+    "bank_label",
     "channels",
     "get_channel_field",
     "mix_name",
     "param_for",
     "set_channel_field",
 ]
+
+#: The QS program-bank codes carried by the mix channel's ``program type``
+#: field, keyed by Bank Select value. Cards occupy 5-15.
+BANK_NAMES: dict[int, str] = {bank.select: bank.label for bank in banks.BANKS}
+
+
+def bank_label(code: int | None) -> str:
+    """A mix channel bank code as a person reads it."""
+    if code is None:
+        return "?"
+    return BANK_NAMES.get(code, f"Card bank {code}")
+
+
+def bank_id(code: int | None) -> str | None:
+    """The catalog bank id for a mix bank code, or ``None`` for a card."""
+    if code is None:
+        return None
+    for bank in banks.BANKS:
+        if bank.select == code:
+            return bank.id
+    return None
+
 
 #: Every field of the mix-channel template this module names, with the
 #: spec's ``(function, page, pot)``. The label is this module's short name;
@@ -136,8 +161,9 @@ class MixChannel:
     """One of a mix's sixteen channels, in the values the unit displays.
 
     ``program`` is 0-127 and is the **program change** the channel plays;
-    the four banks are chosen elsewhere, and a mix does not carry a bank
-    select. The eight one-bit switches -- ``enable``, the MIDI and keyboard
+    ``program_type`` is the QS **program bank** code (0=GM, 1=User,
+    2-4=Preset 1-3, 5-15=cards). The eight one-bit switches -- ``enable``,
+    the MIDI and keyboard
     gates, and the controllers -- are ``bool`` here, not a 0/1 the reader
     has to interpret; every other field is the number the panel would show,
     with the table's offset already applied for a bipolar row. A field the

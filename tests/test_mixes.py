@@ -56,11 +56,11 @@ class TestMixesPane:
             app.query_one("#slot-table").move_cursor(row=5)
             app.action_select()
             await _until(pilot, lambda: bool(app.device.mix_selects))
+            await _until(pilot, lambda: app._selected_mix == 5)
             assert app.device.mode_selects == [True]
             assert app.device.mix_selects[-1][0] == 5
             assert app.device.read_mix(100) == app.device.read_mix(5)
             assert app._unit_mode == "mix"
-            assert app._selected_mix == 5
 
     async def test_a_program_selected_from_mix_mode_sends_program_mode_first(self):
         app = NanosynedApp(DemoDevice(), catalog=cat.empty())
