@@ -1708,6 +1708,44 @@ class NanosynedApp(App):
         self.device.write_program(edit.number, edit.previous)
         return self.device.read_program(edit.number)
 
+    def _reload_selected_mix(self, edit: MixEditRecord) -> None:
+        """Put a restored selected mix back into the live edit buffer.
+
+        A mix store changes the slot, not the buffer the unit plays. This
+        runs on the undo worker, inside the same busy gate and lock as the
+        slot write, so the restored sound is what the user hears as soon
+        as the undo is reported.
+        """
+        if edit.number == self._selected_mix:
+            self.device.write_mix(100, edit.previous)
+
+    def _rewrite_and_reload(
+        self,
+        edit: EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord,
+    ) -> tuple[bool, str]:
+        """Re-send one previous record, verify it, and reload a selected mix.
+
+        Returns ``(agreed, sentence)``. A restored mix that is the one in
+        the live buffer is also written to buffer 100, because a slot write
+        does not load the unit's edit buffer.
+        """
+        try:
+            read_back = self._rewrite(edit)
+        except _BRIDGE_ERRORS as exc:
+            return False, f"{edit.label}: {exc}"
+        if verify.mismatches(edit.previous, read_back):
+            return False, verify.describe(
+                edit.previous,
+                read_back,
+                what=edit.label,
+            )
+        if isinstance(edit, MixEditRecord):
+            try:
+                self._reload_selected_mix(edit)
+            except _BRIDGE_ERRORS as exc:
+                return False, f"{edit.label}: reloading the live mix failed: {exc}"
+        return True, ""
+
     @work(thread=True)
     def _undo_worker(self, records: list[Record]) -> None:
         """**MIDI only.** Re-send each previous record and read it back.
@@ -1718,6 +1756,9 @@ class NanosynedApp(App):
         """
         results: list[bool] = []
         sentences: list[str] = []
+        restored: list[
+            EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord
+        ] = []
         try:
             with self._busy_gate, self._lock:
                 for i in range(len(records)):
@@ -1727,21 +1768,12 @@ class NanosynedApp(App):
                         failed_edits: list = []
                         detail_sentences: list[str] = []
                         for item in reversed(edit.edits):
-                            try:
-                                read_back = self._rewrite(item)
-                            except _BRIDGE_ERRORS as exc:
+                            agreed, sentence = self._rewrite_and_reload(item)
+                            if agreed:
+                                restored.append(item)
+                            else:
                                 failed_edits.append(item)
-                                detail_sentences.append(f"{item.label}: {exc}")
-                                continue
-                            if verify.mismatches(item.previous, read_back):
-                                failed_edits.append(item)
-                                detail_sentences.append(
-                                    verify.describe(
-                                        item.previous,
-                                        read_back,
-                                        what=item.label,
-                                    )
-                                )
+                                detail_sentences.append(sentence)
                         if failed_edits:
                             reduced = type(edit)(edits=tuple(failed_edits))
                             records[i] = Record(edit.label, reduced)
@@ -1763,58 +1795,104 @@ class NanosynedApp(App):
                         results.append(False)
                         sentences.append(f"{record.label}: not an edit record")
                         continue
-                    try:
-                        read_back = self._rewrite(edit)
-                    except _BRIDGE_ERRORS as exc:
-                        results.append(False)
-                        sentences.append(f"{edit.label}: {exc}")
-                        continue
-                    agreed = not verify.mismatches(edit.previous, read_back)
+                    agreed, sentence = self._rewrite_and_reload(edit)
                     results.append(agreed)
-                    if not agreed:
-                        sentences.append(
-                            verify.describe(
-                                edit.previous,
-                                read_back,
-                                what=edit.label,
-                            )
-                        )
+                    if agreed:
+                        restored.append(edit)
+                    if sentence:
+                        sentences.append(sentence)
         finally:
             self._exchange.release()
-        self.call_from_thread(self._undo_done, records, results, sentences)
+        self.call_from_thread(self._undo_done, records, results, sentences, restored)
 
     def _undo_done(
         self,
         records: list[Record],
         results: list[bool],
         sentences: list[str],
+        restored: (
+            list[EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord]
+            | None
+        ) = None,
     ) -> None:
-        """Report the batch on the main thread, and keep what did not land."""
+        """Report the batch on the main thread, and keep what did not land.
+
+        ``restored`` names the leaf records the worker did restore, even
+        when another leaf in the same batch failed. The successful ones
+        must still refresh their names and caches; only the failed records
+        go back on the log. Tests and any synchronous caller that did not
+        pass the list get it derived from ``records``/``results``.
+        """
         summary = self._undo_log.settle(results)
         failed = [record for record, ok in zip(records, results, strict=True) if not ok]
         # Oldest first again, so the log still describes the order the
         # changes happened in -- not the newest-first order they were tried.
         for record in reversed(failed):
             self._undo_log.push(record)
+        if restored is None:
+            restored = [
+                leaf
+                for record, ok in zip(records, results, strict=True)
+                if ok
+                for leaf in self._undo_leaves(record.payload)
+            ]
+        for edit in restored:
+            self._refresh_undo_names(edit)
+        if self._current_bank in ("USER", MIXES_BANK):
+            self._refill_keeping_place()
         if failed:
             detail = (
                 "; ".join(sentence for sentence in sentences if sentence)
                 or "the unit refused it"
             )
             self.notify_status(f"{summary}; {detail}", refused=True)
-            return
-        for record in records:
-            edit = record.payload
-            if isinstance(edit, EditRecord):
-                self.catalog.set_live_name("USER", edit.number, edit.name)
-                self._bind_memory_slot(edit.number, edit.previous)
-            elif isinstance(edit, (ImportRecord, RestoreRecord)):
-                for item in edit.edits:
-                    if isinstance(item, EditRecord):
-                        self.catalog.set_live_name("USER", item.number, item.name)
-                        self._bind_memory_slot(item.number, item.previous)
-        if self._current_bank == "USER":
-            self._refill_keeping_place()
+
+    @staticmethod
+    def _undo_leaves(
+        edit: (
+            EditRecord
+            | MixEditRecord
+            | EffectsEditRecord
+            | GlobalEditRecord
+            | ImportRecord
+            | RestoreRecord
+        ),
+    ) -> list[EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord]:
+        """Flatten a batch payload into the leaf records an undo touched."""
+        if isinstance(edit, (ImportRecord, RestoreRecord)):
+            leaves: list[
+                EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord
+            ] = []
+            for item in edit.edits:
+                leaves.extend(NanosynedApp._undo_leaves(item))
+            return leaves
+        return [edit]
+
+    def _refresh_undo_names(
+        self,
+        edit: (
+            EditRecord
+            | MixEditRecord
+            | EffectsEditRecord
+            | GlobalEditRecord
+            | ImportRecord
+            | RestoreRecord
+        ),
+    ) -> None:
+        """Reconcile the name caches with one record an undo restored.
+
+        Only successful leaf records reach here. A partial batch still
+        refreshes the leaves that landed; the failed leaves stay on the log
+        and are not presented as restored.
+        """
+        if isinstance(edit, EditRecord):
+            self.catalog.set_live_name("USER", edit.number, edit.name)
+            self._bind_memory_slot(edit.number, edit.previous)
+        elif isinstance(edit, MixEditRecord):
+            self._mix_names[edit.number] = rec.mix_name(edit.previous).rstrip()
+        elif isinstance(edit, (ImportRecord, RestoreRecord)):
+            for item in edit.edits:
+                self._refresh_undo_names(item)
 
     def action_edit_program(self) -> None:  # noqa: PLR0911
         """Read the User program under the cursor, then open the editor.
