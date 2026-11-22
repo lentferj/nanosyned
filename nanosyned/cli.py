@@ -28,6 +28,7 @@ back up. ``dump`` writes only to this computer.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -314,13 +315,17 @@ def _cmd_dump(device, args) -> None:
         if number is None:
             raise SystemExit(f"error: `dump {kind}` needs a slot number")
         _check_number(kind, number)
+    force = getattr(args, "force", False)
+    if not force and os.path.exists(args.file):
+        raise SystemExit(f"error: {args.file} already exists; pass --force")
     record = truncate(
         kind, read_record(device, kind, number), f"the {RECORD_NAMES[kind]} dump"
     )
     message = frame(kind, number, record)
     try:
-        with open(args.file, "wb") as handle:
-            handle.write(message)
+        fullbackup.write_syx(args.file, ((kind, number, record),), overwrite=force)
+    except FileExistsError:
+        raise SystemExit(f"error: {args.file} already exists; pass --force") from None
     except OSError as exc:
         raise SystemExit(f"error: cannot write {args.file}: {exc}") from None
     name = record_name(kind, record)
@@ -1755,8 +1760,20 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one per comma
         )
         dp.add_argument("number", type=int)
         dp.add_argument("--file", required=True, metavar="PATH")
+        dp.add_argument(
+            "--force",
+            action="store_true",
+            default=False,
+            help="overwrite existing file",
+        )
     dp = dsub.add_parser("global", help="read the global settings as .syx")
     dp.add_argument("--file", required=True, metavar="PATH")
+    dp.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="overwrite existing file",
+    )
     dp = dsub.add_parser(
         "favourites",
         help="export user favourites as .syx file",
