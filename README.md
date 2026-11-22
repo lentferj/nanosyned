@@ -235,8 +235,8 @@ beside a session that is driving the hardware.
 | `z` / `Z` | undo / undo all — put back what a store replaced |
 | `i` / `?` / `q` | device identity / help / quit |
 
-Known limitations in what `z` restores are recorded, with an implementation
-plan, in [`docs/UNDO_AUDIT.md`](docs/UNDO_AUDIT.md).
+Undo coverage and the remaining deliberately deferred limitations are
+recorded in [`docs/UNDO_AUDIT.md`](docs/UNDO_AUDIT.md).
 
 The cursor is silent until `a` turns auto-load on; after that, moving the slot
 cursor sends the focused preset's PC/LSB/MSB. `⏎` is always the explicit
@@ -365,8 +365,14 @@ Names read off the unit are kept in a sidecar beside the catalog —
 they survive a restart. The browser loads them at startup, so it shows the
 right names *before* anything has talked to the unit; the next read confirms
 them and saves them back, so the following start is right again without one.
+Verified stores, imports, init and undo also update the sidecar immediately,
+so a name changed in the app does not revert on the next launch.
 Point the browser at another catalog (`--catalog`) and the sidecar travels
 with it, because the names were read against that catalog's bank layout.
+
+If the unit was changed outside the app, the cached name can be stale. Press
+`r` in the main browser to re-read the User bank's names; both the main
+browser and the mix editor use the refreshed name. `S` scans the same bank.
 
 The sidecar is deliberately **not** inside the catalog file. The catalog is
 a transcription of the manual; the sidecar is one instrument's current
@@ -533,11 +539,13 @@ records in the file are ignored. The CLI equivalents are
 `N` initialises the User bank: it replaces User programs `000`-`126` with the
 unit's Init program. User `127` (`Off`) is hardwired silent and is never
 written. Every replaced slot is read, backed up, stored and read back through
-the normal fence, and one `z` restores the whole batch. Favourite marks on the
-replaced slots are hidden; the old content and its annotations stay in the
-preset memory and return if those bytes are loaded again. The Init template
-is the unit's own hardwired `Off` record from slot `127` with only its name
-changed to `Init`; no parameter byte is invented. The template candidate passed a data
+the normal fence, and one `z` restores the whole batch, including each slot's
+previous favourite mark and annotations. The old content and its annotations
+also stay in preset memory, so loading those bytes again brings them back.
+The Init template is the unit's own hardwired `Off` record from slot `127`
+with only its name changed to `Init`; no parameter byte is invented.
+Because it is the Off program under another name, any mix part assigned to
+Init is silent until you choose a real program. The template candidate passed a data
 write/read-back check on the bench and was confirmed silent; the scratch
 slot was then restored byte-for-byte. The CLI equivalent is
 `nanocli init-bank --allow-write --yes`
