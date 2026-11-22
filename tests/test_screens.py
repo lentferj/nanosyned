@@ -93,6 +93,19 @@ class TestMixScreen:
             assert screen.expanded == frozenset()
             assert table.row_count == rec.MIX_CHANNELS
 
+    async def test_the_editor_width_follows_the_terminal_width(self) -> None:
+        widths: list[int] = []
+        for columns, minimum in ((100, 80), (160, 130)):
+            app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+            async with app.run_test(size=(columns, 40)) as pilot:
+                await pilot.pause()
+                screen = await _open_mix(pilot, bytes(rec.MIX_BYTES), [])
+                width = screen.query_one("Vertical").size.width
+                assert width >= minimum
+                assert width < columns
+                widths.append(width)
+        assert widths[1] > widths[0]
+
     async def test_enter_edits_one_channel_and_arm_fire_returns_it(self) -> None:
         record = bytes(rec.MIX_BYTES)
         seen: list[bytes | None] = []

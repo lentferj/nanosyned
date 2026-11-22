@@ -338,10 +338,10 @@ class MixScreen(ModalScreen[bytes | None]):
     DEFAULT_CSS = """
     MixScreen { align: center middle; }
     MixScreen > Vertical {
-        width: 84; height: 90%; border: thick $primary;
+        width: 92%; height: 90%; border: thick $primary;
         background: $surface; padding: 1 2;
     }
-    MixScreen DataTable { height: 1fr; }
+    MixScreen DataTable { width: 1fr; height: 1fr; }
     MixScreen .note { height: auto; color: $text-muted; padding-top: 1; }
     MixScreen #mix-status { height: auto; color: $text; padding-top: 1; }
     MixScreen .armed {
