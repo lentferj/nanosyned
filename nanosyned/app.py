@@ -424,6 +424,9 @@ class NanosynedApp(App):
         #: config path was injected; it is used by the editor's own state,
         #: not as an input prompt.
         self._mix_number = 0
+        #: The mix this app last loaded into the unit's edit buffer, if any.
+        #: Used to reload the live mix after storing that same slot.
+        self._selected_mix: int | None = None
         #: The mode the last Mode Select asked for, or ``None`` before one
         #: has been sent. **Not a reading of the unit**: this protocol has
         #: no request that reports the current mode, so this only
@@ -1233,7 +1236,7 @@ class NanosynedApp(App):
             name = literal(self._mix_names.get(entry.number, f"Mix {entry.number:03d}"))
             detail.update(
                 f"[b]{entry.display}[/b]  {name}   "
-                f"[dim]Mix mode · Program Change {entry.program_change}[/dim]"
+                f"[dim]Mix mode · edit buffer 100[/dim]"
             )
             return
         name = literal(self.catalog.display_name(entry.bank_id, entry.program_change))
@@ -1451,7 +1454,10 @@ class NanosynedApp(App):
     def _start_selection(self, row: int) -> None:
         """Send one selection, changing mode first when the track says so."""
         if self._current_bank == MIXES_BANK:
-            self._select_mix_worker(row, self._unit_mode != "mix")
+            # Always ask for Mix mode before loading a mix. The app's mode
+            # track is best-effort, and loading a mix while the unit is in
+            # Program mode would not do what the user asked.
+            self._select_mix_worker(row, True)
             return
         self._select_worker(self._current[row], self._unit_mode != "program")
 
@@ -1459,6 +1465,10 @@ class NanosynedApp(App):
         """Remember the mode this app last sent; the unit cannot report it."""
         self._unit_mode = mode
         self._last_mode_sent = mode == "mix"
+
+    def _remember_selected_mix(self, number: int) -> None:
+        """Remember which stored mix is now in the live edit buffer."""
+        self._selected_mix = number
 
     @work(thread=True)
     def _select_worker(self, entry: banks.Slot, mode_change: bool = False) -> None:
@@ -1492,7 +1502,7 @@ class NanosynedApp(App):
 
     @work(thread=True)
     def _select_mix_worker(self, number: int, mode_change: bool = False) -> None:
-        """**MIDI only.** Mix mode first if needed, then Program Change."""
+        """**MIDI only.** Mix mode first, then load the stored mix into 100."""
         failure: BaseException | None = None
         mode_sent = False
         try:
@@ -1512,11 +1522,11 @@ class NanosynedApp(App):
                 self.notify_status, f"select mix: {failure}", refused=True
             )
             return
+        self.call_from_thread(self._remember_selected_mix, number)
         prefix = "selected Mix mode, then " if mode_sent else ""
         self.call_from_thread(
             self.notify_status,
-            f"{prefix}selected Mixes {number:03d} — Program Change {number} "
-            f"on channel {self.device.channel + 1}",
+            f"{prefix}loaded mix {number:03d} into the edit buffer",
         )
 
     def action_read_names(self) -> None:
@@ -2283,6 +2293,12 @@ class NanosynedApp(App):
                 self.device.write_mix(number, record)
                 stage = "read back"
                 read_back = self.device.read_mix(number)
+                if self._selected_mix == number:
+                    # The store updates the slot; the unit keeps playing
+                    # whatever was already in its edit buffer. Reload the
+                    # selected mix so an edit is audible immediately.
+                    stage = "reload"
+                    self.device.write_mix(100, record)
         except _BRIDGE_ERRORS as exc:
             failure = exc
         finally:
@@ -2314,6 +2330,12 @@ class NanosynedApp(App):
             if stage in ("read", "backup"):
                 self.notify_status(
                     f"{stage}: {failure} — nothing was written", refused=True
+                )
+            elif stage == "reload":
+                self.notify_status(
+                    f"stored mix {number:03d}, but reloading the live mix "
+                    f"failed: {failure}",
+                    refused=True,
                 )
             else:
                 self.notify_status(f"store: {failure}", refused=True)
