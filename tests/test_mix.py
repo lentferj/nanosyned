@@ -396,7 +396,9 @@ class TestMixStore(_AppCase):
             await self._wait(
                 pilot,
                 lambda: (
-                    mixview.get_channel_field(app.device.read_mix(100), 0, "volume")
+                    isinstance(app.screen, MixScreen)
+                    and mixview.get_channel_field(app.screen.record, 0, "volume") == 44
+                    and mixview.get_channel_field(app.device.read_mix(100), 0, "volume")
                     == 44
                 ),
             )
