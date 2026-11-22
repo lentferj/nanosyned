@@ -96,7 +96,6 @@ FIELD_ADDRESSES: dict[str, tuple[int, int, int]] = {
 #: leading fields are still here, now among the rest).
 FIELDS: tuple[str, ...] = (
     "program",
-    "program_type",
     "enable",
     "volume",
     "pan",

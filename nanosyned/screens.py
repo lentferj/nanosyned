@@ -37,14 +37,17 @@ thing it replaces is a program somebody made.
 
 from __future__ import annotations
 
+import time
 from typing import Any, ClassVar
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Label, Static
 
+from nano import records as rec
 from nanosyned import mix as mixview
 from nanosyned.editor import (
     EditGate,
@@ -54,12 +57,24 @@ from nanosyned.editor import (
     ProgramEditor,
     choice_text,
 )
+from nanosyned.programpicker import ProgramPickerScreen
 from nanosyned.text import literal
 from vinsynlib.ui.confirm import ConfirmScreen
 from vinsynlib.ui.hints import KeyHints as _LibraryKeyHints
 from vinsynlib.ui.modals import ChoiceScreen
 from vinsynlib.ui.prompt import PromptScreen
 from vinsynlib.ui.report import ReportScreen as _Frame
+from vinsynlib.ui.work import QUIET_BRIDGE_ERRORS
+
+#: The app's quiet-error set, rebuilt rather than imported from the app:
+#: the app imports this module, so naming it would be a cycle.
+_BRIDGE_ERRORS: tuple[type[BaseException], ...] = (
+    *tuple(QUIET_BRIDGE_ERRORS),
+    ValueError,
+    LookupError,
+    RuntimeError,
+    SystemError,
+)
 
 __all__ = [
     "ConfirmScreen",
@@ -295,27 +310,27 @@ class MixScreen(ModalScreen[bytes | None]):
     """One mix's sixteen parts, expandable into every channel field.
 
     Returns the new 138-byte mix record when the user fires, ``None`` when
-    they close without storing. **It sends nothing itself** -- there is no
-    device and no clock in this screen -- so the app can claim its exchange
-    on the main thread, back the mix up, write it and read it back in the
-    one worker every other MIDI action uses. The store is the whole record,
-    never one field, so the fence stays the app's single write path.
+    they close without storing. Each field change is **live**: the screen
+    loads the edited whole record into the unit's mix edit buffer (100) and
+    reads it back. Storing remains the app's single write path, with its
+    backup and undo fence.
 
     The browser's banks are programs, not mixes, so this screen is reached
-    by pressing `e` on a focused row in the Mixes pane. This screen only
-    ever edits the record it was handed.
+    by pressing `e` on a focused row in the Mixes pane. The app has already
+    loaded that stored mix into buffer 100 when the screen opens.
 
     A part is one row, collapsed to ``prog N · vol N · pan N``. Enter
     expands it into all :data:`nanosyned.mix.FIELDS`; Enter on the part
-    again collapses it, and Enter on a field opens the value prompt. `e`
-    is an alias for editing a field and, on a collapsed part, still offers
-    the old choice of fields.
+    again collapses it. Enter on a switch toggles it, Enter on the program
+    opens the User-bank program picker, and the other fields ask for a
+    number. Space toggles a switch from anywhere on its row. `e` is an
+    alias for editing a field and, on a collapsed part, still offers the
+    old choice of fields.
 
-    Editing is staged: a value lands in a working copy. Nothing reaches the
-    unit until ``w`` arms the shared write gate, ``a`` arms this store and
-    ``s`` -- a different key -- fires it. Anything that moves the cursor or
-    opens a dialog disarms, because the thing being replaced is a mix
-    somebody made.
+    Live edits are audible immediately but are not kept until ``w`` arms
+    the shared write gate, ``a`` arms this store and ``s`` -- a different
+    key -- fires it. Anything that moves the cursor or opens a dialog
+    disarms, because the thing being replaced is a mix somebody made.
     """
 
     DEFAULT_CSS = """
@@ -337,6 +352,7 @@ class MixScreen(ModalScreen[bytes | None]):
         Binding("escape", "close", "Cancel"),
         Binding("q", "close", "Cancel"),
         Binding("e", "edit_field", "Edit field"),
+        Binding("space", "toggle_field", "Toggle"),
         Binding("w", "toggle_gate", "Write gate"),
         Binding("a", "arm", "Arm"),
         # Deliberately not Enter: the fire key should not be the one a finger
@@ -352,10 +368,14 @@ class MixScreen(ModalScreen[bytes | None]):
         number: int,
         replaced: str,
         gate: EditGate | None = None,
+        device: Any = None,
     ) -> None:
         super().__init__()
         self._original = bytes(record)
         self._working = bytes(record)
+        #: The app's device, used for the live mix-buffer load behind each
+        #: change. A screen built without one falls back to ``app.device``.
+        self._device = device
         #: Which of the 100 user mixes this is.
         self._number = number
         #: The name the mix held when it was read -- what firing destroys.
@@ -390,8 +410,8 @@ class MixScreen(ModalScreen[bytes | None]):
             yield DataTable(id="mix-table", cursor_type="row")
             yield Static("", id="mix-status")
             yield Static(
-                "[dim]↑↓ pick · enter expand/edit · w gate · a arm · "
-                "s store · r revert · esc cancel[/dim]",
+                "[dim]↑↓ pick · enter expand/edit · space toggle · "
+                "w gate · a arm · s store · r revert · esc cancel[/dim]",
                 id="mix-note",
                 classes="note",
             )
@@ -484,7 +504,10 @@ class MixScreen(ModalScreen[bytes | None]):
                 f"[b]s[/b] stores it and reads it back; its current contents "
                 f"are saved to a backup file first. Any other key disarms."
             )
-        return "[dim]nothing is sent until w arms the gate and a arms the store[/dim]"
+        return (
+            "[dim]edits load live into the mix buffer; a then s stores the "
+            "mix. r reverts the form, not the live buffer.[/dim]"
+        )
 
     def _say(self, sentence: str, *, refused: bool = False) -> None:
         """Put one sentence in the screen's own status row."""
@@ -499,7 +522,7 @@ class MixScreen(ModalScreen[bytes | None]):
         return self._gate.check()
 
     def _edit(self, channel: int, label: str) -> None:
-        """Open the value prompt for one field of one part."""
+        """Edit one field: toggle, pick a program, or ask for a number."""
         self._disarm()
         self._notice = ""
         param = mixview.param_for(channel, label)
@@ -507,6 +530,19 @@ class MixScreen(ModalScreen[bytes | None]):
             self._say(
                 f"the parameter table has no {label} row for channel {channel + 1}",
                 refused=True,
+            )
+            return
+        if label in mixview.SWITCHES:
+            self._toggle(channel, label)
+            return
+        if label == "program":
+            current = mixview.get_channel_field(self._working, channel, label)
+            self.app.push_screen(
+                ProgramPickerScreen(
+                    getattr(self.app, "catalog", None),
+                    current=current,
+                ),
+                lambda number: self._program_picked(channel, number),
             )
             return
         current = mixview.get_channel_field(self._working, channel, label)
@@ -517,6 +553,31 @@ class MixScreen(ModalScreen[bytes | None]):
             ),
             lambda text: self._typed(channel, label, text),
         )
+
+    def _program_picked(self, channel: int, number: int | None) -> None:
+        if number is None:
+            self._refresh()
+            return
+        self._apply_live(channel, "program", number)
+
+    def _toggle(self, channel: int, label: str) -> None:
+        """Flip a one-bit field with no value prompt."""
+        current = mixview.get_channel_field(self._working, channel, label)
+        self._apply_live(channel, label, 0 if current else 1)
+
+    def action_toggle_field(self) -> None:
+        """Space: flip the switch under the cursor, or say why it cannot."""
+        key = self._cursor_key()
+        if key is None or not key.startswith("field:"):
+            self._say("space toggles a channel switch; move to a field first")
+            return
+        _, channel, label = key.split(":", 2)
+        if label not in mixview.SWITCHES:
+            self._say(f"{label} is not a switch; enter opens its value")
+            return
+        self._disarm()
+        self._notice = ""
+        self._toggle(int(channel), label)
 
     def action_edit_field(self) -> None:
         """Edit the row under the cursor, or choose a field of a part."""
@@ -533,7 +594,7 @@ class MixScreen(ModalScreen[bytes | None]):
                 f"Channel {row + 1}: which field?",
                 list(mixview.FIELDS),
                 0,
-                status_message="the change is staged; nothing is sent yet",
+                status_message="the change is sent live, then stored with a and s",
             ),
             lambda choice: self._field_chosen(row, choice),
         )
@@ -568,12 +629,95 @@ class MixScreen(ModalScreen[bytes | None]):
         if value is None:
             self._say(f"{text!r} is not a number or a choice", refused=True)
             return
+        self._apply_live(channel, label, value)
+
+    def _apply_live(self, channel: int, label: str, value: int) -> None:
+        """Load the edited record into the live buffer, then read it back.
+
+        The change is audible before it is stored. The app owns the one
+        exchange, exactly as it does for the parameter editor.
+        """
+        param = mixview.param_for(channel, label)
+        if param is None:
+            self._say(
+                f"the parameter table has no {label} row for channel {channel + 1}",
+                refused=True,
+            )
+            return
+        refusal = self._gate_refusal()
+        if refusal is not None:
+            self._say(refusal, refused=True)
+            return
+        app: Any = self.app
+        if app._busy:
+            self._say("busy", refused=True)
+            return
+        if not app._exchange.acquire(blocking=False):
+            self._say("busy", refused=True)
+            return
         clamped = param.clamp(value)
-        self._notice = ""
-        self._working = mixview.set_channel_field(self._working, channel, label, value)
+        changed = mixview.set_channel_field(self._working, channel, label, clamped)
+        self._live_worker(channel, label, clamped, changed)
+
+    def _target_device(self) -> Any:
+        if self._device is not None:
+            return self._device
+        return getattr(self.app, "device", None)
+
+    @work(thread=True)
+    def _live_worker(
+        self, channel: int, label: str, value: int, changed: bytes
+    ) -> None:
+        """**MIDI only.** Load the edited whole mix into buffer 100.
+
+        A load carries fields that the direct Mix edit does not reliably
+        apply -- the program number is the one measured on the bench --
+        and leaves the program/effects edit buffers untouched, as the
+        specification says.
+        """
+        app: Any = self.app
+        device = self._target_device()
+        failure: str | None = None
+        seen: int | None = None
+        live: bytes | None = None
+        try:
+            with app._busy_gate, app._lock:
+                device.write_mix(100, changed)
+                time.sleep(0.05)
+                live = device.read_mix(100)
+                seen = mixview.get_channel_field(live, channel, label)
+        except _BRIDGE_ERRORS as exc:
+            failure = str(exc)
+        finally:
+            app._exchange.release()
+        if failure is not None:
+            app.call_from_thread(self._live_failed, channel, label, failure)
+            return
+        if seen is None or live is None:
+            app.call_from_thread(
+                self._live_failed, channel, label, "read-back returned no value"
+            )
+            return
+        if seen != value:
+            app.call_from_thread(
+                self._live_failed,
+                channel,
+                label,
+                f"unit reads {seen}, not {value}",
+            )
+            return
+        app.call_from_thread(self._live_done, channel, label, value, live)
+
+    def _live_done(self, channel: int, label: str, value: int, live: bytes) -> None:
+        self._working = bytes(live[: rec.MIX_BYTES])
         self._fill(keep=f"field:{channel}:{label}")
-        note = " (clamped)" if clamped != value else ""
-        self._say(f"channel {channel + 1} {label}: {clamped}{note} — not stored yet")
+        self._say(f"channel {channel + 1} {label}: {value} (live; not stored)")
+
+    def _live_failed(self, channel: int, label: str, sentence: str) -> None:
+        self._say(
+            f"channel {channel + 1} {label}: {sentence}",
+            refused=True,
+        )
 
     def on_data_table_row_selected(self, event) -> None:
         """Enter expands or collapses a part, or edits the field it is on."""

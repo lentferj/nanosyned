@@ -53,8 +53,10 @@ def _mix(name: str = "Test Mix") -> bytes:
 
 class TestDecoding:
     def test_every_named_field_is_a_row_of_the_table(self):
-        """All nineteen controls are named, and every control row is named."""
-        assert len(mixview.FIELDS) == len(mixview.FIELD_ADDRESSES) == 19
+        """Every editable control is named, and every named address exists."""
+        assert len(mixview.FIELDS) == 18
+        assert len(mixview.FIELD_ADDRESSES) == 19
+        assert "program_type" not in mixview.FIELDS
         for label in mixview.FIELDS:
             param = mixview.param_for(0, label)
             assert param is not None, label
@@ -379,9 +381,16 @@ class TestMixStore(_AppCase):
             app.screen.query_one(Input).value = "44"
             await pilot.press("enter")
             await self._wait(pilot, lambda: isinstance(app.screen, MixScreen))
+            await self._wait(
+                pilot,
+                lambda: (
+                    mixview.get_channel_field(app.device.read_mix(100), 0, "volume")
+                    == 44
+                ),
+            )
             assert (
                 mixview.get_channel_field(app.device.read_mix(7), 0, "volume") == 0
-            ), "a staged edit must not have been sent"
+            ), "the live edit must not have stored the slot"
 
             await pilot.press("a")
             await pilot.pause()
@@ -400,9 +409,12 @@ class TestMixStore(_AppCase):
             await pilot.pause()
             await pilot.press("s")
             await self._wait(pilot, lambda: len(app._undo_log) == 1)
-            assert len(app.device.mix_writes) == 1
-            assert app.device.mix_writes[0][0] == 7
+            stored = [write for write in app.device.mix_writes if write[0] == 7]
+            assert len(stored) == 1
             assert mixview.get_channel_field(app.device.read_mix(7), 0, "volume") == 44
+            assert (
+                mixview.get_channel_field(app.device.read_mix(100), 0, "volume") == 44
+            )
 
     async def test_z_puts_the_mix_back(self, monkeypatch, tmp_path):
         saved = []

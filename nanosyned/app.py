@@ -2214,6 +2214,8 @@ class NanosynedApp(App):
         try:
             with self._busy_gate, self._lock:
                 record = self.device.read_mix(number)
+                self.device.mode_select(True)
+                self.device.write_mix(100, record)
         except _BRIDGE_ERRORS as exc:
             failure = exc
         finally:
@@ -2226,13 +2228,16 @@ class NanosynedApp(App):
         self.call_from_thread(self._open_mix, number, record)
 
     def _open_mix(self, number: int, record: bytes) -> None:
-        """Show the mix modal. Main thread; sends nothing."""
+        """Show the mix modal, now loaded into the live edit buffer."""
+        self._record_unit_mode("mix")
+        self._remember_selected_mix(number)
         self.push_screen(
             MixScreen(
                 record,
                 number=number,
                 replaced=rec.mix_name(record).rstrip(),
                 gate=self._write_gate,
+                device=self.device,
             ),
             lambda new: self._mix_edited(number, new),
         )

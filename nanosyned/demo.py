@@ -34,7 +34,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from nano import banks
+from nano import banks, params
 from nano import messages as m
 from nano import records as rec
 
@@ -384,11 +384,22 @@ class DemoDevice:
 
         The encoder is called for its range checks only -- nothing is
         built or sent -- so the demo refuses exactly the fields the
-        bridge's message builder refuses.
+        bridge's message builder refuses. A Mix edit is also applied to
+        the live buffer, which is what makes the editor's read-back and
+        the next ``read_mix(100)`` agree with the unit.
         """
         self._tick()
         m.midi_edit(mode, function, page, pot, value, sound=sound, channel=channel)
         self.midi_edits.append((mode, function, page, pot, value, sound, channel))
+        if mode != m.MIDI_EDIT_MIX:
+            return
+        param = params.at("mix", function, page, pot, channel=channel)
+        if param is None:
+            return
+        record = bytearray(self._mixes[100])
+        stored = params.stored_for(param, param.clamp(value))
+        rec.encode_bit_field(record, param, stored)
+        self._mixes[100] = bytes(record)
 
     def mode_select(self, mix_mode: bool) -> None:
         """Put the unit in Program or Mix mode. **This changes what plays.**"""

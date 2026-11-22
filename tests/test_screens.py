@@ -23,7 +23,7 @@ does not offer is a row the screen must not show.
 
 from __future__ import annotations
 
-from textual.widgets import DataTable, Input
+from textual.widgets import DataTable
 
 from nano import catalog as cat
 from nano import records as rec
@@ -31,8 +31,8 @@ from nanosyned import mix as mixview
 from nanosyned.app import NanosynedApp
 from nanosyned.demo import DemoDevice
 from nanosyned.editor import EditGate, EffectsEditor
+from nanosyned.programpicker import ProgramPickerScreen
 from nanosyned.screens import EffectsScreen, GlobalScreen, MixScreen
-from vinsynlib.ui.prompt import PromptScreen
 
 
 async def _until(pilot, ready, attempts: int = 200) -> bool:
@@ -107,12 +107,19 @@ class TestMixScreen:
             table.move_cursor(row=1)
             await pilot.pause()
             await pilot.press("enter")
-            await _until(pilot, lambda: isinstance(app.screen, PromptScreen))
-            app.screen.query_one(Input).value = "42"
+            await _until(pilot, lambda: isinstance(app.screen, ProgramPickerScreen))
+            picker = app.screen
+            picker.query_one("#program-table", DataTable).move_cursor(row=42)
             await pilot.press("enter")
             await _until(pilot, lambda: isinstance(app.screen, MixScreen))
-            assert mixview.get_channel_field(screen.record, 0, "program") == 42
+            await _until(
+                pilot,
+                lambda: mixview.get_channel_field(screen.record, 0, "program") == 42,
+            )
             assert mixview.get_channel_field(screen.record, 1, "program") == 0
+            assert (
+                mixview.get_channel_field(app.device.read_mix(100), 0, "program") == 42
+            )
 
             # Part 2 is its own block: expand it and give it another program.
             second_part = 1 + len(mixview.FIELDS)
@@ -123,12 +130,16 @@ class TestMixScreen:
             table.move_cursor(row=second_part + 1)
             await pilot.pause()
             await pilot.press("enter")
-            await _until(pilot, lambda: isinstance(app.screen, PromptScreen))
-            app.screen.query_one(Input).value = "9"
+            await _until(pilot, lambda: isinstance(app.screen, ProgramPickerScreen))
+            picker = app.screen
+            picker.query_one("#program-table", DataTable).move_cursor(row=9)
             await pilot.press("enter")
             await _until(pilot, lambda: isinstance(app.screen, MixScreen))
+            await _until(
+                pilot,
+                lambda: mixview.get_channel_field(screen.record, 1, "program") == 9,
+            )
             assert mixview.get_channel_field(screen.record, 0, "program") == 42
-            assert mixview.get_channel_field(screen.record, 1, "program") == 9
 
             await pilot.press("a")
             await pilot.pause()
@@ -139,22 +150,80 @@ class TestMixScreen:
             assert mixview.get_channel_field(seen[0], 0, "program") == 42
             assert mixview.get_channel_field(seen[0], 1, "program") == 9
 
-    async def test_r_reverts_the_staged_edit(self) -> None:
+    async def test_program_field_opens_a_named_program_browser(self, tmp_path) -> None:
         record = bytes(rec.MIX_BYTES)
-        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        app = NanosynedApp(
+            DemoDevice(),
+            catalog=cat.Catalog([cat.Entry("USER", 42, "Invented Program")]),
+            catalog_path=str(tmp_path / "catalog.json"),
+            allow_write=True,
+        )
         async with app.run_test(size=(160, 50)) as pilot:
             await pilot.pause()
-            screen = await _open_mix(pilot, record, [])
+            screen = await _open_mix(pilot, record, [], EditGate(armed=True))
             table = screen.query_one("#mix-table", DataTable)
             await pilot.press("enter")
             await pilot.pause()
             table.move_cursor(row=1)
             await pilot.pause()
             await pilot.press("enter")
-            await _until(pilot, lambda: isinstance(app.screen, PromptScreen))
-            app.screen.query_one(Input).value = "42"
+            await _until(pilot, lambda: isinstance(app.screen, ProgramPickerScreen))
+            picker = app.screen
+            picker_table = picker.query_one("#program-table", DataTable)
+            assert "Invented Program" in str(picker_table.get_row_at(42)[1])
+            picker_table.move_cursor(row=42)
             await pilot.press("enter")
             await _until(pilot, lambda: isinstance(app.screen, MixScreen))
+            await _until(
+                pilot,
+                lambda: mixview.get_channel_field(screen.record, 0, "program") == 42,
+            )
+
+    async def test_switches_toggle_with_space_and_enter(self) -> None:
+        record = bytes(rec.MIX_BYTES)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            screen = await _open_mix(pilot, record, [], EditGate(armed=True))
+            table = screen.query_one("#mix-table", DataTable)
+            await pilot.press("enter")
+            await pilot.pause()
+            table.move_cursor(row=1 + mixview.FIELDS.index("enable"))
+            await pilot.pause()
+
+            await pilot.press("space")
+            await _until(
+                pilot,
+                lambda: mixview.get_channel_field(screen.record, 0, "enable") == 1,
+            )
+            assert mixview.get_channel_field(app.device.read_mix(100), 0, "enable")
+            await pilot.press("enter")
+            await _until(
+                pilot,
+                lambda: mixview.get_channel_field(screen.record, 0, "enable") == 0,
+            )
+
+    async def test_r_reverts_the_staged_edit(self) -> None:
+        record = bytes(rec.MIX_BYTES)
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            screen = await _open_mix(pilot, record, [], EditGate(armed=True))
+            table = screen.query_one("#mix-table", DataTable)
+            await pilot.press("enter")
+            await pilot.pause()
+            table.move_cursor(row=1)
+            await pilot.pause()
+            await pilot.press("enter")
+            await _until(pilot, lambda: isinstance(app.screen, ProgramPickerScreen))
+            picker = app.screen
+            picker.query_one("#program-table", DataTable).move_cursor(row=42)
+            await pilot.press("enter")
+            await _until(pilot, lambda: isinstance(app.screen, MixScreen))
+            await _until(
+                pilot,
+                lambda: mixview.get_channel_field(screen.record, 0, "program") == 42,
+            )
             assert screen.record != record
 
             await pilot.press("r")
@@ -162,17 +231,22 @@ class TestMixScreen:
             assert screen.record == record
             assert mixview.get_channel_field(screen.record, 0, "program") == 0
 
-    async def _stage_program(self, pilot, app, screen, table, value: str) -> None:
-        """Expand part 1 and set its program through the two dialogs."""
+    async def _stage_program(self, pilot, app, screen, table, value: int) -> None:
+        """Expand part 1 and pick its program through the browser."""
         await pilot.press("enter")
         await pilot.pause()
         table.move_cursor(row=1)
         await pilot.pause()
         await pilot.press("enter")
-        await _until(pilot, lambda: isinstance(app.screen, PromptScreen))
-        app.screen.query_one(Input).value = value
+        await _until(pilot, lambda: isinstance(app.screen, ProgramPickerScreen))
+        picker = app.screen
+        picker.query_one("#program-table", DataTable).move_cursor(row=value)
         await pilot.press("enter")
         await _until(pilot, lambda: isinstance(app.screen, MixScreen))
+        await _until(
+            pilot,
+            lambda: mixview.get_channel_field(screen.record, 0, "program") == value,
+        )
 
     async def test_w_toggles_the_gate_and_the_status_and_stores_nothing(
         self,
@@ -204,7 +278,7 @@ class TestMixScreen:
         self,
     ) -> None:
         record = bytes(rec.MIX_BYTES)
-        gate = EditGate()
+        gate = EditGate(armed=True)
         seen: list[bytes | None] = []
         app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
         async with app.run_test(size=(160, 50)) as pilot:
@@ -212,9 +286,10 @@ class TestMixScreen:
             screen = await _open_mix(pilot, record, seen, gate)
             table = screen.query_one("#mix-table", DataTable)
             status = screen.query_one("#mix-status")
-            await self._stage_program(pilot, app, screen, table, "5")
+            await self._stage_program(pilot, app, screen, table, 5)
 
-            # The gate is locked: `a` refuses by name and does not arm.
+            # Lock the gate after the live edit: `a` refuses by name.
+            gate.toggle()
             await pilot.press("a")
             await pilot.pause()
             assert screen.armed is False
@@ -230,7 +305,7 @@ class TestMixScreen:
         self,
     ) -> None:
         record = bytes(rec.MIX_BYTES)
-        gate = EditGate()
+        gate = EditGate(armed=True)
         seen: list[bytes | None] = []
         app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
         async with app.run_test(size=(160, 50)) as pilot:
@@ -238,10 +313,9 @@ class TestMixScreen:
             screen = await _open_mix(pilot, record, seen, gate)
             table = screen.query_one("#mix-table", DataTable)
             status = screen.query_one("#mix-status")
-            await self._stage_program(pilot, app, screen, table, "5")
+            await self._stage_program(pilot, app, screen, table, 5)
 
-            # Arm the gate, then arm the store.
-            gate.toggle()
+            # Arm the store while the live-edit gate is already armed.
             await pilot.press("a")
             await pilot.pause()
             assert screen.armed is True

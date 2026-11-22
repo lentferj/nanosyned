@@ -48,7 +48,8 @@ from nanosyned import scan as scan_module
 from nanosyned import screens
 from nanosyned.app import NanosynedApp
 from nanosyned.demo import DemoDevice
-from nanosyned.editor import ProgramEditor
+from nanosyned.editor import EditGate, ProgramEditor
+from nanosyned.programpicker import ProgramPickerScreen
 from nanosyned.scan import ScanOfferScreen, ScanScreen
 from nanosyned.screens import (
     ConfirmScreen,
@@ -376,18 +377,29 @@ class TestTheMixScreen:
         async with app.run_test(size=(160, 50)) as pilot:
             await pilot.pause()
             app.push_screen(
-                mix_screen(record, number=0, replaced="Invented"), seen.append
+                mix_screen(
+                    record,
+                    number=0,
+                    replaced="Invented",
+                    gate=EditGate(armed=True),
+                ),
+                seen.append,
             )
             await _until(pilot, lambda: isinstance(app.screen, mix_screen))
             await pilot.press("e")
             await _until(pilot, lambda: isinstance(app.screen, ChoiceScreen))
             await pilot.press("enter")
-            await _until(pilot, lambda: isinstance(app.screen, PromptScreen))
-            app.screen.query_one(Input).value = str(wanted)
+            await _until(pilot, lambda: isinstance(app.screen, ProgramPickerScreen))
+            app.screen.query_one("#program-table", DataTable).move_cursor(row=wanted)
             await pilot.press("enter")
-            await _until(pilot, lambda: isinstance(app.screen, mix_screen))
-            await pilot.press("w")
-            await pilot.pause()
+            await _until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, mix_screen)
+                    and mixview.get_channel_field(app.screen.record, 0, "program")
+                    == wanted
+                ),
+            )
             await pilot.press("a")
             await pilot.pause()
             await pilot.press("s")
