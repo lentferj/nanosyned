@@ -151,7 +151,11 @@ The unit has no request that reports its current mode, so the mode is tracked
 best-effort from what this app sent; it is not a reading. The currently
 playing mix is likewise not readable, so the picker does not claim to show
 one. `e` on a focused mix opens its editor; `M` still sends a manual Mode
-Select.
+Select. Mix edits are **live**: each change loads the edited mix into buffer
+`100`, so it is audible before it is stored. `⏎`/`space` toggle switches, the
+program field opens a User-bank program browser by name, and `a` then `s`
+stores the result. The QS record's undocumented `program_type` field is not
+shown; this unit reads it outside the specification's stated 0-1 range.
 
 ![The Mixes pane: the sixth bank row, its 100 mixes, and the mix detail line](docs/screenshots/mixes.png)
 

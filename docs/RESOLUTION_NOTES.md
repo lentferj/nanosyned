@@ -630,8 +630,24 @@ not what the unit is necessarily doing. A manual `M` Mode Select updates it
 on success. The direct mix selection does not use the write gate because it
 is a selection, like Enter on a program; `M` remains the gated manual mode
 change. `e` on the focused mix opens its editor; the old `m` prompt is gone.
-When the edited mix is the one loaded in the buffer, storing it also reloads
-the new bytes into buffer `100`, so the change is audible immediately.
+Opening the editor also puts the unit in Mix mode and loads that stored mix
+into buffer `100`.
+
+The mix editor edits the live buffer, not a private staging area: changing a
+field builds the whole record and loads it back into buffer `100`, then reads
+it back. A whole-buffer load is used rather than the per-field Mix MIDI Edit
+because the program-number field did not change through the direct edit on
+the bench, while the load carries it correctly. Enter and Space toggle the
+one-bit fields; the program field opens the User-bank program picker by name;
+other fields still ask for a number. `a` then `s` stores the result, and
+storing the loaded mix reloads buffer `100` again so the stored and audible
+states agree.
+
+The QS `program_type` field is deliberately not exposed. The specification
+names it a four-bit field but gives its range as 0-1 and does not say what
+the two values mean; every channel of this unit's stored mixes reads 8,
+outside that range. It stays in the decoder, where it is reported as data,
+but it is not offered as a control.
 
 ## 28. A full backup is a normal `.syx`, not another envelope
 
