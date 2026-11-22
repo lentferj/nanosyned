@@ -32,10 +32,11 @@ from nano import records as rec
 from nanosyned import mix as mixview
 from nanosyned.app import MIXES_BANK, NanosynedApp
 from nanosyned.demo import DemoDevice
-from nanosyned.editor import GlobalEditor
+from nanosyned.editor import GlobalEditor, MixEditRecord, RestoreRecord
 from nanosyned.screens import GlobalScreen, MixScreen
 from vinsynlib.ui.modals import ChoiceScreen
 from vinsynlib.ui.prompt import PromptScreen
+from vinsynlib.undo import Record
 
 
 def _mix(name: str = "Test Mix") -> bytes:
@@ -434,17 +435,143 @@ class TestMixStore(_AppCase):
         async with app.run_test() as pilot:
             await pilot.pause()
             original = app.device.read_mix(0)
+            original_name = rec.mix_name(original).rstrip()
             changed = mixview.set_channel_field(original, 5, "program", 12)
+            renamed = bytearray(changed)
+            m.encode_name(renamed, "Undo Mix", rec.MIX_NAME_BIT_OFFSET)
+            changed = bytes(renamed)
+            app._selected_mix = 0
             app._mix_edited(0, changed)
             await self._wait(pilot, lambda: len(app._undo_log) == 1)
             assert app.device.read_mix(0) != original
+            assert app._mix_names[0] == "Undo Mix"
+            assert app.device.read_mix(100) == changed
 
             await pilot.press("z")
-            await self._wait(pilot, lambda: len(app.device.mix_writes) == 2)
-            for _ in range(10):
-                await pilot.pause()
-            assert app.device.mix_writes[-1] == (0, original)
-            assert app.device.read_mix(0) == original
+            await self._wait(
+                pilot,
+                lambda: (
+                    app.device.read_mix(0) == original
+                    and app.device.read_mix(100) == original
+                    and app._mix_names[0] == original_name
+                ),
+            )
+            assert app.device.mix_writes[-1] == (100, original)
+
+    async def test_undoing_a_restore_batch_restores_the_mix_name_and_live_mix(self):
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            previous = app.device.read_mix(3)
+            previous_name = rec.mix_name(previous).rstrip()
+            changed = mixview.set_channel_field(previous, 2, "volume", 99)
+            renamed = bytearray(changed)
+            m.encode_name(renamed, "Restored", rec.MIX_NAME_BIT_OFFSET)
+            changed = bytes(renamed)
+            app.device.write_mix(3, changed)
+            app._mix_names[3] = rec.mix_name(changed).rstrip()
+            app._selected_mix = 3
+            app.device.write_mix(100, changed)
+            app._undo_log.push(
+                Record(
+                    "restore",
+                    RestoreRecord(
+                        edits=(
+                            MixEditRecord(
+                                number=3,
+                                previous=previous,
+                                name=previous_name,
+                            ),
+                        )
+                    ),
+                )
+            )
+
+            await pilot.press("z")
+            await self._wait(
+                pilot,
+                lambda: (
+                    app.device.read_mix(3) == previous
+                    and app.device.read_mix(100) == previous
+                    and app._mix_names[3] == previous_name
+                    and len(app._undo_log) == 0
+                ),
+            )
+
+    async def test_a_partial_undo_still_refreshes_the_mix_that_landed(self):
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            previous = app.device.read_mix(4)
+            previous_name = rec.mix_name(previous).rstrip()
+            app._mix_names[4] = "Not Restored"
+            edit = MixEditRecord(
+                number=4,
+                previous=previous,
+                name=previous_name,
+            )
+            record = Record("restore", RestoreRecord(edits=(edit,)))
+
+            app._undo_done(
+                [record],
+                [False],
+                ["another record failed"],
+                [edit],
+            )
+            await pilot.pause()
+            assert app._mix_names[4] == previous_name
+            assert len(app._undo_log) == 1
+            assert "another record failed" in str(app.query_one("#status").content)
+
+    async def test_a_failed_mix_undo_keeps_the_entry_and_leaves_the_name_alone(self):
+        class RefusingUndoDevice(DemoDevice):
+            """The demo, except it can refuse the slot write an undo sends."""
+
+            def __init__(self):
+                super().__init__()
+                self.refuse_mix_writes = False
+                self.undo_attempts = 0
+
+            def write_mix(self, number, record, *, timeout=None):
+                if self.refuse_mix_writes:
+                    self.undo_attempts += 1
+                    raise RuntimeError("the unit refused the undo")
+                super().write_mix(number, record, timeout=timeout)
+
+        device = RefusingUndoDevice()
+        app = NanosynedApp(device, catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            previous = app.device.read_mix(4)
+            changed = mixview.set_channel_field(previous, 2, "volume", 33)
+            renamed = bytearray(changed)
+            m.encode_name(renamed, "Not Undone", rec.MIX_NAME_BIT_OFFSET)
+            changed = bytes(renamed)
+            app.device.write_mix(4, changed)
+            app._mix_names[4] = rec.mix_name(changed).rstrip()
+            app._undo_log.push(
+                Record(
+                    "mix 004",
+                    MixEditRecord(
+                        number=4,
+                        previous=previous,
+                        name=rec.mix_name(previous).rstrip(),
+                    ),
+                )
+            )
+            device.refuse_mix_writes = True
+
+            await pilot.press("z")
+            await self._wait(
+                pilot,
+                lambda: (
+                    device.undo_attempts == 1
+                    and len(app._undo_log) == 1
+                    and "undo failed" in str(app.query_one("#status").content)
+                ),
+            )
+            assert app.device.read_mix(4) == changed
+            assert app._mix_names[4] == "Not Undone"
 
 
 class TestGlobalStore(_AppCase):

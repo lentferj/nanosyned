@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from textual.widgets import DataTable, Input
+from textual.widgets import DataTable, Input, Static
 
 from nano import banks
 from nano import catalog as cat
@@ -114,3 +114,54 @@ class TestMixesPane:
             assert app._mix_names[7] == rec.mix_name(source).rstrip()
             assert app._selected_mix != 7
             assert len(app._undo_log) == 1
+
+    async def test_undoing_a_copy_restores_the_slot_name_and_live_mix(self):
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            app._fill(MIXES_BANK)
+            await _until(pilot, lambda: app._mix_names_loaded)
+            table = app.query_one("#slot-table", DataTable)
+            table.focus()
+            table.move_cursor(row=0)
+            source = app.device.read_mix(0)
+            previous = app.device.read_mix(7)
+            previous_name = rec.mix_name(previous).rstrip()
+            assert previous != source
+
+            await pilot.press("C")
+            await _until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, PromptScreen)
+                    and len(app.screen.query(Input)) == 1
+                ),
+            )
+            app.screen.query_one(Input).value = "007"
+            await pilot.press("enter")
+            await _until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConfirmScreen)
+                    and len(app.screen.query("#confirm-prompt")) == 1
+                ),
+            )
+            await pilot.press("y")
+            await _until(pilot, lambda: app.device.read_mix(7) == source)
+            await _until(pilot, lambda: len(app._undo_log) == 1)
+
+            # Select the copy, so buffer 100 holds it before the undo.
+            table.move_cursor(row=7)
+            app.action_select()
+            await _until(pilot, lambda: app._selected_mix == 7)
+            await _until(pilot, lambda: app.device.read_mix(100) == source)
+
+            await pilot.press("z")
+            await _until(pilot, lambda: app.device.read_mix(7) == previous)
+            await _until(pilot, lambda: app.device.read_mix(100) == previous)
+            await _until(pilot, lambda: app._mix_names[7] == previous_name)
+
+            table = app.query_one("#slot-table", DataTable)
+            assert str(table.get_row_at(7)[2]).rstrip() == previous_name
+            assert len(app._undo_log) == 0
+            assert "undid 1" in str(app.query_one("#status", Static).content)
