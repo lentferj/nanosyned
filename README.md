@@ -156,8 +156,20 @@ Select. Mix edits are **live**: each change loads the edited mix into buffer
 program field opens the five-bank program browser, and the field shows the
 bank, program number and program name together. `a` then `s` stores the
 result. The QS record's `program_type` field is the program bank code
-(0=GM, 1=User, 2-4=Preset 1-3, 5-15=cards), despite the specification
-printing its range as 0-1.
+(0=GM, 1=User, 2-4=Preset 1-3), despite the specification printing its
+range as 0-1. Codes 5-15 are card banks on a full QS; this unit has no
+card slots, and they resolve to GM, shown as “GM (fallback)”.
+
+`C` copies the focused mix to another slot. It copies the whole 138-byte
+record, so the name, all sixteen parts and the common settings move
+together. The destination is asked for by number and then confirmed because
+the copy overwrites it; the old destination is backed up and the write is
+logged for `z`, exactly as an editor store is. The source is not changed.
+
+In the mix program browser, `F` cycles the same three views as the main
+browser (all programs, the current bank's favourites, every favourite).
+Pressing a letter jumps to the first name starting with it; pressing the
+same letter again moves to the next match and wraps to the top.
 
 ![The Mixes pane: the sixth bank row, its 100 mixes, and the mix detail line](docs/screenshots/mixes.png)
 
@@ -209,6 +221,7 @@ beside a session that is driving the hardware.
 | `t` / `n` / `*` | tags / note / rating, 0–5 stars (on a favourite) |
 | `V` | filter by rating — exactly that many, or that many and up |
 | `e` | edit the focused program, or the focused mix in Mixes — **only while the gate is armed** |
+| `C` | copy the focused mix to another slot — gate, destination prompt and overwrite confirmation |
 | `x` | edit effects patch 000 |
 | `p` | verified parameter editor: Global / Mix / Program rows |
 | `M` | set the sound mode, Program or Mix — **a write, and it changes what plays** |

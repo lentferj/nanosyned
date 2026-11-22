@@ -445,8 +445,9 @@ MIX_CHANNEL_PARAMS: tuple[Param, ...] = (
     Param("mix", 0, 0, 0, "Channel 1 program number", 0, 127, 7, 80),
     # The specification prints 0..1 here, but the field is the QS program
     # **bank** code: 0=GM, 1=User, 2-4=Preset 1-3, 5-15=card banks. The
-    # unit answers bank select values 0-4, and a stored factory mix carries
-    # 8. The wider limit is what lets the editor carry a bank at all.
+    # NanoSynth has no card slots and resolves 5-15 to GM, while a stored
+    # factory mix carries 8. The wider limit is what lets the editor carry a
+    # bank at all.
     Param("mix", 0, 0, 2, "Channel 1 program type", 0, 15, 4, 87),
     Param(
         "mix",

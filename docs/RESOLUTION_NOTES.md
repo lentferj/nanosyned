@@ -643,13 +643,30 @@ and shows the bank, number and name together; other fields still ask for a
 number. `a` then `s` stores the result, and storing the loaded mix reloads
 buffer `100` again so the stored and audible states agree.
 
+`C` in the Mixes pane copies the focused mix to another slot. It is a
+whole-record copy, not a field-by-field reconstruction: source and target
+are both read, the target is backed up once per session, the source bytes
+are written to the target, and the target is read back byte for byte before
+the edit enters the undo history. The name travels with the setup. The
+destination prompt is followed by an overwrite confirmation because every
+slot from `000` to `099` already holds a mix.
+
+The program browser's letter jump is stateful: repeating the same letter
+continues from the previous hit and wraps at the end, while any other letter
+starts again at the top. `F` cycles the browser's three favourite views;
+“this bank's favourites” uses the bank under the cursor when the cycle
+starts.
+
 The QS `program_type` field is the program **bank** code, not a 0-1 switch.
 The specification prints its range as 0-1, but the unit reads and writes
 0-4 for the five internal banks (GM, User, Preset 1-3) and 5-15 for card
-banks. A stored factory mix reads 8 for a card bank. The parameter table's
-limit was widened to 15; the editor keeps the bank in the combined program
-field rather than showing a separate `program_type` row. Hardware check:
-codes 0-4 loaded GM, User and Preset 1-3 program 000 respectively.
+banks. A stored factory mix reads 8 for a card bank; the NanoSynth has no
+card slots, and the unit resolves 5-15 to General MIDI, so the editor calls
+those “GM (fallback)” rather than the misleading “Card bank 8”. The
+parameter table's limit was widened to 15; the editor keeps the bank in the
+combined program field rather than showing a separate `program_type` row.
+Hardware check: codes 0-4 loaded GM, User and Preset 1-3 program 000
+respectively; codes 5-15 all loaded GM program 000.
 
 ## 28. A full backup is a normal `.syx`, not another envelope
 

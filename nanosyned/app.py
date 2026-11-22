@@ -202,6 +202,7 @@ WRITE_HINTS: tuple[str, ...] = (
     "B backup",
     "R restore",
     "N init bank",
+    "C copy mix",
     "z undo",
     "Z undo all",
 )
@@ -320,6 +321,7 @@ class NanosynedApp(App):
         Binding("E", "export_favourites", "Export favourites"),
         Binding("B", "backup", "Backup"),
         Binding("R", "restore", "Restore backup"),
+        Binding("C", "copy_mix", "Copy mix"),
         Binding("N", "init_bank", "Init bank"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
@@ -2183,6 +2185,143 @@ class NanosynedApp(App):
         """
         return f"mix:{number:03d}"
 
+    def action_copy_mix(self) -> None:
+        """Copy the mix under the cursor to another slot after confirmation."""
+        # `C` is an app binding, so it would otherwise fire underneath a
+        # prompt or confirmation that happens not to consume the key. Only
+        # the main browser starts a copy.
+        if len(self.screen_stack) > 1:
+            return
+        if self._current_bank != MIXES_BANK:
+            self.notify_status(
+                "copy mix is available in the Mixes bank; press M or choose "
+                "Mixes first",
+                refused=True,
+            )
+            return
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        table = self.query_one("#slot-table", DataTable)
+        source = table.cursor_row
+        if not 0 <= source < banks.MIXES:
+            return
+        default = (source + 1) % banks.MIXES
+        source_name = self._mix_names.get(source, f"Mix {source:03d}")
+        self.push_screen(
+            PromptScreen(
+                f"Copy mix {source:03d} {literal(source_name)} to slot (000-099):",
+                f"{default:03d}",
+            ),
+            lambda text: self._copy_destination(source, text),
+        )
+
+    def _copy_destination(self, source: int, text: str | None) -> None:
+        if text is None:
+            return
+        try:
+            target = int(text.strip(), 10)
+        except ValueError:
+            self.notify_status(f"{text!r} is not a mix number", refused=True)
+            return
+        if not 0 <= target < banks.MIXES:
+            self.notify_status(
+                f"mix {target} is outside 000-{banks.MIXES - 1:03d}",
+                refused=True,
+            )
+            return
+        if target == source:
+            self.notify_status("source and destination are the same mix", refused=True)
+            return
+        source_name = self._mix_names.get(source, f"Mix {source:03d}")
+        target_name = self._mix_names.get(target, f"Mix {target:03d}")
+        self.push_screen(
+            ConfirmScreen(
+                f"Copy mix {source:03d} {literal(source_name)} to slot "
+                f"{target:03d}, replacing {literal(target_name)}?",
+                confirm="Copy",
+                danger=True,
+            ),
+            lambda confirmed: self._copy_confirmed(source, target, confirmed),
+        )
+
+    def _copy_confirmed(self, source: int, target: int, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        refusal = self._write_gate.check()
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        if not self._exchange.acquire(blocking=False):
+            self.notify_status("busy", refused=True)
+            return
+        self._copy_mix_worker(source, target)
+
+    @work(thread=True)
+    def _copy_mix_worker(self, source: int, target: int) -> None:
+        """**MIDI only**, plus one backup file. Copy source into target.
+
+        The source is read whole, so the copy is the complete mix -- name,
+        all sixteen parts and the common bytes -- not the fields the editor
+        happened to show. The target is read and backed up before the write,
+        and the copy is logged for undo only when the read-back agrees.
+        """
+        from nano import backup as bk
+
+        key = self._mix_key(target)
+        source_record: bytes | None = None
+        previous: bytes | None = None
+        read_back: bytes | None = None
+        path: str | None = None
+        failure: BaseException | None = None
+        stage = "read source"
+        try:
+            with self._busy_gate, self._lock:
+                source_record = self.device.read_mix(source)
+                stage = "read target"
+                previous = self.device.read_mix(target)
+                if key not in self._backed_up:
+                    stage = "backup"
+                    name = rec.mix_name(previous).rstrip()
+                    path = bk.save(
+                        key,
+                        kind="mix",
+                        name=name,
+                        blocks={"mix": previous},
+                    )
+                    self._backed_up.add(key)
+                stage = "write target"
+                self.device.write_mix(target, source_record)
+                stage = "read back"
+                read_back = self.device.read_mix(target)
+                if self._selected_mix == target:
+                    # The slot changed, but the unit keeps playing whatever
+                    # was in its edit buffer. Reload it so the copy is audible.
+                    stage = "reload"
+                    self.device.write_mix(100, source_record)
+        except _BRIDGE_ERRORS as exc:
+            failure = exc
+        finally:
+            self._exchange.release()
+        self.call_from_thread(
+            self._mix_store_done,
+            target,
+            source_record if source_record is not None else b"",
+            previous,
+            path,
+            read_back,
+            failure,
+            stage,
+            source,
+        )
+
     def _open_mix_focused(self) -> None:
         """Read and edit the mix under the cursor in the Mixes pane."""
         refusal = self._write_gate.check()
@@ -2328,25 +2467,30 @@ class NanosynedApp(App):
         read_back: bytes | None,
         failure: BaseException | None,
         stage: str,
+        source: int | None = None,
     ) -> None:
         """Main thread: report what happened, and log only what read back."""
         key = self._mix_key(number)
+        action = "copy" if source is not None else "store"
+        done = "copied" if source is not None else "stored"
         if failure is not None:
-            if stage in ("read", "backup"):
+            if stage in ("read", "read source", "read target", "backup"):
                 self.notify_status(
                     f"{stage}: {failure} — nothing was written", refused=True
                 )
             elif stage == "reload":
                 self.notify_status(
-                    f"stored mix {number:03d}, but reloading the live mix "
+                    f"{done} mix {number:03d}, but reloading the live mix "
                     f"failed: {failure}",
                     refused=True,
                 )
             else:
-                self.notify_status(f"store: {failure}", refused=True)
+                self.notify_status(f"{action}: {failure}", refused=True)
             return
         if previous is None or read_back is None:  # pragma: no cover
-            self.notify_status("store: no read-back; nothing was logged", refused=True)
+            self.notify_status(
+                f"{action}: no read-back; nothing was logged", refused=True
+            )
             return
         where = f"; what was there is in {literal(path)}" if path else ""
         sentence = verify.describe(record, read_back, what=f"mix {number:03d}")
@@ -2361,10 +2505,17 @@ class NanosynedApp(App):
             )
         )
         new_name = rec.mix_name(record).rstrip()
-        self.notify_status(
-            f"stored mix {number:03d} as {literal(new_name) or '(blank)'}; "
-            f"{sentence}{where}"
-        )
+        self._mix_names[number] = new_name
+        if self._current_bank == MIXES_BANK:
+            self._refill_keeping_place()
+        if source is None:
+            message = f"stored mix {number:03d} as {literal(new_name) or '(blank)'}"
+        else:
+            message = (
+                f"copied mix {source:03d} to {number:03d} as "
+                f"{literal(new_name) or '(blank)'}"
+            )
+        self.notify_status(f"{message}; {sentence}{where}")
 
     def action_mode_select(self) -> None:
         """Put the unit in Program or Mix mode. **Changes what plays.**

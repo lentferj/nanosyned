@@ -23,16 +23,17 @@ does not offer is a row the screen must not show.
 
 from __future__ import annotations
 
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input
 
 from nano import catalog as cat
 from nano import records as rec
+from nano.favorites import Favorites
 from nanosyned import mix as mixview
 from nanosyned.app import NanosynedApp
 from nanosyned.demo import DemoDevice
 from nanosyned.editor import EditGate, EffectsEditor
 from nanosyned.programpicker import ProgramPickerScreen
-from nanosyned.screens import EffectsScreen, GlobalScreen, MixScreen
+from nanosyned.screens import EffectsScreen, GlobalScreen, MixScreen, PromptScreen
 
 
 async def _until(pilot, ready, attempts: int = 200) -> bool:
@@ -207,6 +208,30 @@ class TestMixScreen:
                 pilot,
                 lambda: mixview.get_channel_field(screen.record, 0, "enable") == 0,
             )
+
+    async def test_n_renames_the_mix_live_and_returns_the_new_record(self) -> None:
+        record = bytes(rec.MIX_BYTES)
+        seen: list[bytes | None] = []
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            screen = await _open_mix(pilot, record, seen, EditGate(armed=True))
+            await pilot.press("n")
+            await _until(pilot, lambda: isinstance(app.screen, PromptScreen))
+            app.screen.query_one(Input).value = "Renamed"
+            await pilot.press("enter")
+            await _until(
+                pilot,
+                lambda: rec.mix_name(screen.record).rstrip() == "Renamed",
+            )
+            assert rec.mix_name(app.device.read_mix(100)).rstrip() == "Renamed"
+
+            await pilot.press("a")
+            await pilot.pause()
+            await pilot.press("s")
+            await _until(pilot, lambda: bool(seen))
+            assert seen[0] is not None
+            assert rec.mix_name(seen[0]).rstrip() == "Renamed"
 
     async def test_r_reverts_the_staged_edit(self) -> None:
         record = bytes(rec.MIX_BYTES)
@@ -453,3 +478,103 @@ class TestEffectsScreen:
             await pilot.press("s")
             await _until(pilot, lambda: bool(seen))
             assert seen[0] == editor.record()
+
+
+class TestProgramPicker:
+    @staticmethod
+    async def _open(app, pilot, catalog, *, bank=0, program=0):
+        screen = ProgramPickerScreen(
+            catalog,
+            current_bank=bank,
+            current_program=program,
+            favorites=getattr(app, "favorites", None),
+        )
+        app.push_screen(screen)
+        await _until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, ProgramPickerScreen)
+                and len(app.screen.query("#program-table")) == 1
+            ),
+        )
+        await pilot.pause()
+        return screen
+
+    async def test_repeating_a_letter_moves_to_the_next_match_and_wraps(
+        self,
+    ) -> None:
+        catalog = cat.Catalog(
+            [
+                cat.Entry("GM", 16, "Xylophone 1"),
+                cat.Entry("GM", 17, "Xylophone 2"),
+            ]
+        )
+        app = NanosynedApp(DemoDevice(), catalog=catalog, allow_write=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            screen = await self._open(app, pilot, catalog)
+            table = screen.query_one("#program-table", DataTable)
+            await pilot.press("x")
+            await pilot.pause()
+            assert table.cursor_row == 16
+            await pilot.press("x")
+            await pilot.pause()
+            assert table.cursor_row == 17
+            await pilot.press("x")
+            await pilot.pause()
+            assert table.cursor_row == 16
+
+    async def test_F_cycles_all_bank_favourites_and_every_favourite(self) -> None:
+        catalog = cat.Catalog(
+            [
+                cat.Entry("GM", 16, "Organ 1"),
+                cat.Entry("USER", 42, "Invented Program"),
+                cat.Entry("P1", 0, "Solo Piano"),
+            ]
+        )
+        favorites = Favorites(":memory:")
+        favorites.add("GM", 16, name="Organ 1")
+        favorites.add("USER", 42, name="Invented Program")
+        favorites.add("P1", 0, name="Solo Piano")
+        app = NanosynedApp(
+            DemoDevice(),
+            catalog=catalog,
+            favorites=favorites,
+            allow_write=True,
+        )
+        try:
+            async with app.run_test(size=(160, 50)) as pilot:
+                await pilot.pause()
+                screen = await self._open(
+                    app,
+                    pilot,
+                    catalog,
+                    bank=1,
+                    program=42,
+                )
+                table = screen.query_one("#program-table", DataTable)
+                assert table.row_count == 5 * 128
+
+                await pilot.press("F")
+                await pilot.pause()
+                assert table.row_count == 1
+                assert table.cursor_row == 0
+                assert "USER" in str(table.get_row_at(0)[0])
+                assert "Favourites in User" in str(
+                    screen.query_one("#program-view").content
+                )
+
+                await pilot.press("F")
+                await pilot.pause()
+                assert table.row_count == 3
+                assert table.cursor_row == 1
+                assert "every favourite" in str(
+                    screen.query_one("#program-view").content
+                )
+
+                await pilot.press("F")
+                await pilot.pause()
+                assert table.row_count == 5 * 128
+                assert table.cursor_row == 128 + 42
+        finally:
+            favorites.close()

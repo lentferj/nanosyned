@@ -74,20 +74,31 @@ BANK_NAMES: dict[int, str] = {bank.select: bank.label for bank in banks.BANKS}
 
 
 def bank_label(code: int | None) -> str:
-    """A mix channel bank code as a person reads it."""
+    """A mix channel bank code as a person reads it.
+
+    Codes 0-4 are the five internal banks. Codes 5-15 are card banks on a
+    full QS; this unit has no card slots and resolves them to General MIDI,
+    so calling them "Card bank 8" would be a lie about what is playing.
+    """
     if code is None:
         return "?"
-    return BANK_NAMES.get(code, f"Card bank {code}")
+    if code in BANK_NAMES:
+        return BANK_NAMES[code]
+    return "GM (fallback)"
 
 
 def bank_id(code: int | None) -> str | None:
-    """The catalog bank id for a mix bank code, or ``None`` for a card."""
+    """The catalog bank id for a mix bank code, or ``None`` without a catalog.
+
+    A card-bank code falls back to General MIDI, which is what this unit
+    actually plays when no card is fitted.
+    """
     if code is None:
         return None
     for bank in banks.BANKS:
         if bank.select == code:
             return bank.id
-    return None
+    return "GM"
 
 
 #: Every field of the mix-channel template this module names, with the

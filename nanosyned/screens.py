@@ -48,6 +48,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Label, Static
 
 from nano import catalog as cat
+from nano import messages as m
 from nano import records as rec
 from nanosyned import mix as mixview
 from nanosyned.editor import (
@@ -354,6 +355,7 @@ class MixScreen(ModalScreen[bytes | None]):
         Binding("q", "close", "Cancel"),
         Binding("e", "edit_field", "Edit field"),
         Binding("space", "toggle_field", "Toggle"),
+        Binding("n", "rename", "Rename"),
         Binding("w", "toggle_gate", "Write gate"),
         Binding("a", "arm", "Arm"),
         # Deliberately not Enter: the fire key should not be the one a finger
@@ -411,7 +413,7 @@ class MixScreen(ModalScreen[bytes | None]):
             yield DataTable(id="mix-table", cursor_type="row")
             yield Static("", id="mix-status")
             yield Static(
-                "[dim]↑↓ pick · enter expand/edit · space toggle · "
+                "[dim]↑↓ pick · enter expand/edit · space toggle · n rename · "
                 "w gate · a arm · s store · r revert · esc cancel[/dim]",
                 id="mix-note",
                 classes="note",
@@ -568,6 +570,7 @@ class MixScreen(ModalScreen[bytes | None]):
                     getattr(self.app, "catalog", None),
                     current_bank=current_bank,
                     current_program=current_program,
+                    favorites=getattr(self.app, "favorites", None),
                 ),
                 lambda choice: self._program_picked(channel, choice),
             )
@@ -601,6 +604,81 @@ class MixScreen(ModalScreen[bytes | None]):
         """Flip a one-bit field with no value prompt."""
         current = mixview.get_channel_field(self._working, channel, label)
         self._apply_live(channel, label, 0 if current else 1)
+
+    def action_rename(self) -> None:
+        """Ask for a new mix name and apply it live."""
+        self._disarm()
+        self._notice = ""
+        current = mixview.mix_name(self._working).rstrip()
+        self.app.push_screen(
+            PromptScreen(f"Mix {self._number:03d} name:", current),
+            self._renamed,
+        )
+
+    def _renamed(self, text: str | None) -> None:
+        if text is None:
+            self._refresh()
+            return
+        changed = bytearray(self._working)
+        try:
+            m.encode_name(changed, text, rec.MIX_NAME_BIT_OFFSET)
+        except m.ProtocolError as exc:
+            self._say(str(exc), refused=True)
+            return
+        self._apply_live_name(bytes(changed), f"{text:<10}"[:10])
+
+    def _apply_live_name(self, changed: bytes, name: str) -> None:
+        refusal = self._gate_refusal()
+        if refusal is not None:
+            self._say(refusal, refused=True)
+            return
+        app: Any = self.app
+        if app._busy:
+            self._say("busy", refused=True)
+            return
+        if not app._exchange.acquire(blocking=False):
+            self._say("busy", refused=True)
+            return
+        self._name_worker(changed, name)
+
+    @work(thread=True)
+    def _name_worker(self, changed: bytes, name: str) -> None:
+        """**MIDI only.** Load the renamed record and read its name back."""
+        app: Any = self.app
+        device = self._target_device()
+        failure: str | None = None
+        live: bytes | None = None
+        try:
+            with app._busy_gate, app._lock:
+                device.write_mix(100, changed)
+                time.sleep(0.05)
+                live = device.read_mix(100)
+                seen = mixview.mix_name(live).rstrip()
+                if seen != name.rstrip():
+                    failure = f"unit reads {seen!r}, not {name.rstrip()!r}"
+        except _BRIDGE_ERRORS as exc:
+            failure = str(exc)
+        finally:
+            app._exchange.release()
+        if failure is not None:
+            app.call_from_thread(self._name_failed, failure)
+            return
+        if live is None:  # pragma: no cover -- the exception path caught it
+            app.call_from_thread(self._name_failed, "read-back returned no mix")
+            return
+        app.call_from_thread(self._name_done, live)
+
+    def _name_done(self, live: bytes) -> None:
+        self._working = bytes(live[: rec.MIX_BYTES])
+        self._fill()
+        self._say(
+            f"mix {self._number:03d} name: "
+            f"{literal(mixview.mix_name(self._working).rstrip())} "
+            "(live; not stored)"
+        )
+
+    def _name_failed(self, sentence: str) -> None:
+        self._say(sentence, refused=True)
 
     def action_toggle_field(self) -> None:
         """Space: flip the switch under the cursor, or say why it cannot."""

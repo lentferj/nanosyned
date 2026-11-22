@@ -68,6 +68,17 @@ class TestDecoding:
         }
         assert set(mixview.FIELD_ADDRESSES.values()) == rows
 
+    def test_internal_banks_are_named_and_absent_cards_fall_back_to_gm(self):
+        assert [mixview.bank_label(code) for code in range(5)] == [
+            "General MIDI",
+            "User",
+            "Preset 1",
+            "Preset 2",
+            "Preset 3",
+        ]
+        assert mixview.bank_label(8) == "GM (fallback)"
+        assert mixview.bank_id(8) == "GM"
+
     def test_a_synthetic_mix_decodes_channel_by_channel(self):
         record = _mix()
         for label, value in (

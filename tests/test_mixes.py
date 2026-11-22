@@ -17,12 +17,14 @@
 
 from __future__ import annotations
 
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input
 
 from nano import banks
 from nano import catalog as cat
+from nano import records as rec
 from nanosyned.app import MIXES_BANK, NanosynedApp
 from nanosyned.demo import DemoDevice
+from nanosyned.screens import ConfirmScreen, PromptScreen
 
 
 async def _until(pilot, ready, attempts=1500):
@@ -75,3 +77,40 @@ class TestMixesPane:
             assert app.device.mode_selects == [False]
             assert app.device.selected_log[-1][0].program_change == 3
             assert app._unit_mode == "program"
+
+    async def test_copy_copies_the_whole_mix_and_backs_up_the_target(self):
+        app = NanosynedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            app._fill(MIXES_BANK)
+            await _until(pilot, lambda: app._mix_names_loaded)
+            assert app._write_gate.armed
+            table = app.query_one("#slot-table", DataTable)
+            table.focus()
+            table.move_cursor(row=0)
+            source = app.device.read_mix(0)
+
+            await pilot.press("C")
+            await _until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, PromptScreen)
+                    and len(app.screen.query(Input)) == 1
+                ),
+            )
+            app.screen.query_one(Input).value = "007"
+            await pilot.press("enter")
+            await _until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConfirmScreen)
+                    and len(app.screen.query("#confirm-prompt")) == 1
+                ),
+            )
+            await pilot.press("y")
+            await _until(pilot, lambda: app.device.read_mix(7) == source)
+
+            assert app.device.read_mix(7) == source
+            assert app._mix_names[7] == rec.mix_name(source).rstrip()
+            assert app._selected_mix != 7
+            assert len(app._undo_log) == 1
