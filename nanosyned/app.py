@@ -82,7 +82,7 @@ from nano import (
 from nano import config as cfg
 from nano import records as rec
 from nano.config import UNSET
-from nano.favorites import rating_cell
+from nano.favorites import Favorite, rating_cell
 from nanosyned.appendbank import MANUAL, AppendBankScreen
 from nanosyned.editor import (
     EditGate,
@@ -429,6 +429,13 @@ class NanosynedApp(App):
         #: The mix this app last loaded into the unit's edit buffer, if any.
         #: Used to reload the live mix after storing that same slot.
         self._selected_mix: int | None = None
+        #: Program favourite snapshots for the import/restore/init session
+        #: currently running, keyed by ``("program", number)``. Captured on
+        #: the main thread before the first write, because the store itself
+        #: can change the slot mark before the undo entry is built.
+        self._import_favourites: dict[
+            tuple[str, int], tuple[bool, Favorite | None]
+        ] = {}
         #: The mode the last Mode Select asked for, or ``None`` before one
         #: has been sent. **Not a reading of the unit**: this protocol has
         #: no request that reports the current mode, so this only
@@ -1838,6 +1845,8 @@ class NanosynedApp(App):
             ]
         for edit in restored:
             self._refresh_undo_names(edit)
+        if any(isinstance(edit, EditRecord) for edit in restored):
+            self._refresh_bank_fav_count("USER")
         if self._current_bank in ("USER", MIXES_BANK):
             self._refill_keeping_place()
         if failed:
@@ -1888,11 +1897,35 @@ class NanosynedApp(App):
         if isinstance(edit, EditRecord):
             self.catalog.set_live_name("USER", edit.number, edit.name)
             self._bind_memory_slot(edit.number, edit.previous)
+            self._restore_undo_favourite(edit)
         elif isinstance(edit, MixEditRecord):
             self._mix_names[edit.number] = rec.mix_name(edit.previous).rstrip()
         elif isinstance(edit, (ImportRecord, RestoreRecord)):
             for item in edit.edits:
                 self._refresh_undo_names(item)
+
+    def _restore_undo_favourite(self, edit: EditRecord) -> None:
+        """Put a program slot's pre-write favourite state back.
+
+        ``favourite_known`` is false for older/test-built records, which
+        must not silently clear a mark they never captured. A known ``None``
+        means the slot was not an active favourite; ``remove`` clears the
+        active flag but keeps any dormant annotations, as ``f`` does.
+        """
+        if not edit.favourite_known or self.favorites is None:
+            return
+        favourite = edit.favourite
+        if favourite is None:
+            self.favorites.remove("USER", edit.number)
+            return
+        self.favorites.add(
+            "USER",
+            edit.number,
+            name=favourite.name,
+            rating=favourite.rating,
+            tags=favourite.tags,
+            note=favourite.note,
+        )
 
     def action_edit_program(self) -> None:  # noqa: PLR0911
         """Read the User program under the cursor, then open the editor.
@@ -2158,6 +2191,44 @@ class NanosynedApp(App):
                 self.favorites.remove("USER", number)
         return entry
 
+    def _capture_plan_favourites(self, plan: Any) -> None:
+        """Snapshot program marks before an import/restore writes them.
+
+        ``plan.steps`` is built and checked before this runs, so a target is
+        a real User slot by construction. Reading here, on the main thread
+        and before the worker exists, keeps the snapshot independent of any
+        store-side reconciliation.
+        """
+        self._import_favourites = {}
+        if self.favorites is None:
+            return
+        for step in plan.steps:
+            if step.kind != "program" or step.target is None:
+                continue
+            self._import_favourites[("program", step.target)] = (
+                True,
+                self.favorites.get("USER", step.target),
+            )
+
+    def _capture_init_favourites(self) -> None:
+        """Snapshot every writable User slot before the init worker runs."""
+        self._import_favourites = {}
+        if self.favorites is None:
+            return
+        for number in range(banks.PROGRAMS_PER_BANK - 1):
+            self._import_favourites[("program", number)] = (
+                True,
+                self.favorites.get("USER", number),
+            )
+
+    def _favourite_for_result(
+        self, result: writing.Result
+    ) -> tuple[bool, Favorite | None]:
+        """The pre-write mark for a verified program result, if captured."""
+        if result.kind != "program" or result.number is None:
+            return False, None
+        return self._import_favourites.get(("program", result.number), (False, None))
+
     def _store_done(  # noqa: PLR0913, PLR0917 -- one argument per worker fact
         self,
         entry: banks.Slot,
@@ -2191,19 +2262,26 @@ class NanosynedApp(App):
         # a real undo entry rather than a guess about a write that "probably"
         # landed. The log lives on the main thread; this is that thread.
         old_name = rec.program_name(previous).rstrip()
+        favourite_known = self.favorites is not None and entry.bank_id == "USER"
+        old_favourite = (
+            self.favorites.get("USER", entry.number)
+            if self.favorites is not None and entry.bank_id == "USER"
+            else None
+        )
         self._undo_log.push(
             Record(
                 f"{entry.key}: {old_name}",
-                EditRecord(number=entry.number, previous=previous, name=old_name),
+                EditRecord(
+                    number=entry.number,
+                    previous=previous,
+                    name=old_name,
+                    favourite=old_favourite,
+                    favourite_known=favourite_known,
+                ),
             )
         )
         new_name = rec.program_name(record).rstrip()
         if self.memory is not None and entry.bank_id == "USER":
-            old_favourite = (
-                self.favorites.get("USER", entry.number)
-                if self.favorites is not None
-                else None
-            )
             if old_favourite is not None:
                 # The user edited a favourite. Both the old and the new bytes
                 # stay remembered as favourite content; the slot occurrence
@@ -3638,6 +3716,7 @@ class NanosynedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
+        self._capture_plan_favourites(plan)
         if not self._exchange.acquire(blocking=False):
             self.notify_status("busy", refused=True)
             return
@@ -3706,6 +3785,7 @@ class NanosynedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
+        self._capture_init_favourites()
         if not self._exchange.acquire(blocking=False):
             self.notify_status("busy", refused=True)
             return
@@ -3843,24 +3923,30 @@ class NanosynedApp(App):
             if batch:
                 self._undo_log.push(Record("restore", RestoreRecord(edits=batch)))
         else:
-            edits = tuple(
-                EditRecord(
-                    number=r.number,
-                    previous=r.previous,
-                    name=writing.record_name(r.kind, r.previous),
+            program_edits: list[EditRecord] = []
+            for result in agreed:
+                if result.kind != "program" or result.number is None:
+                    continue
+                favourite_known, favourite = self._favourite_for_result(result)
+                program_edits.append(
+                    EditRecord(
+                        number=result.number,
+                        previous=result.previous,
+                        name=writing.record_name(result.kind, result.previous),
+                        favourite=favourite,
+                        favourite_known=favourite_known,
+                    )
                 )
-                for r in agreed
-                if r.kind == "program" and r.number is not None
-            )
-            if edits:
-                self._undo_log.push(Record("import", ImportRecord(edits=edits)))
+            if program_edits:
+                self._undo_log.push(
+                    Record("import", ImportRecord(edits=tuple(program_edits)))
+                )
+        self._import_favourites.clear()
         memory_note = (
             f"; remembered {remembered}, re-marked {remarked}"
             if self.memory is not None
             else ""
         )
-        if label == "init":
-            memory_note += "; favourite marks hidden; z restores programs, not marks"
         if failed:
             first = failed[0]
             self.notify_status(
@@ -3882,17 +3968,20 @@ class NanosynedApp(App):
             return rec.mix_name(result.record).rstrip()
         return ""
 
-    @staticmethod
     def _batch_edit(
+        self,
         result: writing.Result,
     ) -> EditRecord | MixEditRecord | EffectsEditRecord | GlobalEditRecord:
         """The undo record for one verified full-restore step."""
         name = writing.record_name(result.kind, result.previous)
         if result.kind == "program":
+            favourite_known, favourite = self._favourite_for_result(result)
             return EditRecord(
                 number=cast(int, result.number),
                 previous=result.previous,
                 name=name,
+                favourite=favourite,
+                favourite_known=favourite_known,
             )
         if result.kind == "mix":
             return MixEditRecord(

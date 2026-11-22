@@ -45,6 +45,7 @@ from typing import Final
 from nano import messages as m
 from nano import params as p
 from nano import records as rec
+from nano.favorites import Favorite
 
 __all__ = [
     "EditGate",
@@ -186,11 +187,17 @@ class EditRecord:
     slot number, the bytes that were there immediately before the write, and
     the name those bytes spell. ``z`` re-sends :attr:`previous`; nothing here
     reaches the wire itself.
+
+    ``favourite`` is the slot's mark and annotations immediately before the
+    write. ``favourite_known`` says whether that snapshot was taken, so an
+    older or hand-built record cannot clear a mark it never recorded.
     """
 
     number: int
     previous: bytes
     name: str = ""
+    favourite: Favorite | None = None
+    favourite_known: bool = False
 
     @property
     def label(self) -> str:

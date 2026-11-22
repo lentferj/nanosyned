@@ -228,6 +228,72 @@ class TestUndo:
             memory.close()
             store.close()
 
+    async def test_undo_restores_the_slot_favourite_snapshot(self, tmp_path):
+        store = fav.Favorites(str(tmp_path / "favorites.db"))
+        store.add("USER", 4, name="Old", rating=3, tags="bass", note="keep")
+        app = _app(tmp_path, store)
+        old = _record("Old", 1)
+        new = _record("New", 2)
+        try:
+            async with app.run_test(size=(160, 50)) as pilot:
+                await pilot.pause()
+                app._store_done(
+                    banks.slot("USER", 4),
+                    new,
+                    old,
+                    None,
+                    new,
+                    None,
+                    "verified",
+                )
+                # A later metadata edit must not survive the undo of the
+                # program store: the snapshot is what the slot held first.
+                store.set_rating("USER", 4, 1)
+                store.set_tags("USER", 4, "changed")
+                records = app._undo_log.plan(1)
+                app._undo_done(records, [True], [""])
+                await pilot.pause()
+                marked = store.get("USER", 4)
+                assert marked is not None
+                assert marked.rating == 3
+                assert marked.tags == "bass"
+                assert marked.note == "keep"
+        finally:
+            if app.memory is not None:
+                app.memory.close()
+            store.close()
+
+    async def test_undo_restores_the_favourite_snapshot_from_an_import(self, tmp_path):
+        store = fav.Favorites(str(tmp_path / "favorites.db"))
+        store.add("USER", 3, name="Old", rating=5, tags="lead", note="keep")
+        app = _app(tmp_path, store)
+        memory = app.memory
+        assert memory is not None
+        old = _record("Old", 1)
+        new = _record("New", 2)
+        try:
+            async with app.run_test(size=(160, 50)) as pilot:
+                await pilot.pause()
+                app._import_favourites = {("program", 3): (True, store.get("USER", 3))}
+                app._import_done(
+                    None,
+                    [_result(3, new, old)],
+                    None,
+                )
+                await pilot.pause()
+                store.remove("USER", 3)
+                records = app._undo_log.plan(1)
+                app._undo_done(records, [True], [""])
+                await pilot.pause()
+                marked = store.get("USER", 3)
+                assert marked is not None
+                assert marked.rating == 5
+                assert marked.tags == "lead"
+                assert marked.note == "keep"
+        finally:
+            memory.close()
+            store.close()
+
 
 class TestManualStore:
     async def test_editing_a_favourite_carries_the_annotations(self, tmp_path):
